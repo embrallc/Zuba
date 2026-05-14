@@ -15,15 +15,18 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { initializeDatabase } from "../db/index";
 import { getAllInspections } from "../db/inspections";
 import { logError } from "../db/logs";
+import { getSmsTemplates } from "../db/smsTemplates";
 import { getOrCreateUser } from "../db/users";
 import { useInspectionStore } from "../stores/useInspectionStore";
 import { useSettingsStore } from "../stores/useSettingsStore";
+import { useSmsStore } from "../stores/useSmsStore";
 
 export default function RootLayout() {
   const [ready, setReady] = useState(false);
   const loadInspections = useInspectionStore((s) => s.load);
   const loadSettings = useSettingsStore((s) => s.loadSettings);
   const setUserSk = useSettingsStore((s) => s.setUserSk);
+  const loadSmsTemplates = useSmsStore((s) => s.load);
 
   useEffect(() => {
     async function init() {
@@ -34,6 +37,12 @@ export default function RootLayout() {
         await loadSettings();
         const inspections = await getAllInspections();
         loadInspections(inspections);
+        try {
+          const smsTemplates = await getSmsTemplates(userSk);
+          loadSmsTemplates(smsTemplates);
+        } catch (smsErr) {
+          logError(smsErr, "RootLayout.init.sms");
+        }
       } catch (e) {
         logError(e, "RootLayout.init");
       } finally {
@@ -98,6 +107,10 @@ export default function RootLayout() {
         />
         <Stack.Screen
           name="sectiontemplates"
+          options={{ headerShown: false, animation: "slide_from_right" }}
+        />
+        <Stack.Screen
+          name="smstemplates"
           options={{ headerShown: false, animation: "slide_from_right" }}
         />
         <Stack.Screen

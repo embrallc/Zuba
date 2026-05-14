@@ -17,7 +17,7 @@ import { logError } from "../../db/logs";
 import { useDebouncedPress } from "../../hooks/useDebouncedPress";
 import { useInspectionStore } from "../../stores/useInspectionStore";
 
-const FAB_SIZE = theme.layout.iconSize.l * 2;
+const FAB_SIZE = (theme?.layout?.iconSize?.l ?? 28) * 2;
 
 function getTodayPrefix() {
   const d = new Date();
@@ -94,9 +94,7 @@ export default function MyDayScreen() {
             color={theme.colors.textSubtle}
           />
           <Text style={styles.listSectionTitle}>Today's Inspections</Text>
-          <Text style={styles.listSectionCount}>
-            {todayInspections.length}
-          </Text>
+          <Text style={styles.listSectionCount}>{todayInspections.length}</Text>
         </View>
 
         <FlatList
@@ -123,7 +121,9 @@ export default function MyDayScreen() {
                 size={theme.layout.iconSize.l}
                 color={theme.colors.textFine}
               />
-              <Text style={styles.emptyText}>No inspections scheduled for today.</Text>
+              <Text style={styles.emptyText}>
+                No inspections scheduled for today.
+              </Text>
             </View>
           }
         />

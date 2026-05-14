@@ -29,7 +29,7 @@ const SEARCH_FIELDS = [
   "ZipCode",
 ];
 
-const FAB_SIZE = theme.layout.iconSize.l * 2;
+const FAB_SIZE = (theme?.layout?.iconSize?.l ?? 28) * 2;
 
 export default function InspectionsScreen() {
   const [query, setQuery] = useState("");

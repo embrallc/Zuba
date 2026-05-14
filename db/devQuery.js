@@ -28,5 +28,5 @@ export async function devQuery(sql, params = []) {
 // then long-press the menu icon in the top-right of the list screen.
 // ─────────────────────────────────────────────────────────────────────────────
 export async function runDevQuery() {
-  await devQuery("SELECT * FROM InspectionDetail");
+  await devQuery(`Select * from SmsTemplate`);
 }

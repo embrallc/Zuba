@@ -70,9 +70,9 @@ export default function SettingsScreen() {
         />
 
         {/* Appointment length picker */}
-        <View style={styles.apptLengthCard}>
-          <Text style={styles.apptLengthLabel}>Default Appointment Length</Text>
-          <Text style={styles.apptLengthDescription}>
+        <View style={styles.optionCard}>
+          <Text style={styles.optionCardLabel}>Default Appointment Length</Text>
+          <Text style={styles.optionCardDescription}>
             Controls card height in Week View and overlap detection
           </Text>
           <ScrollView
@@ -106,9 +106,9 @@ export default function SettingsScreen() {
         </View>
 
         {/* Calendar start hour picker */}
-        <View style={styles.apptLengthCard}>
-          <Text style={styles.apptLengthLabel}>Week View Start Time</Text>
-          <Text style={styles.apptLengthDescription}>
+        <View style={styles.optionCard}>
+          <Text style={styles.optionCardLabel}>Week View Start Time</Text>
+          <Text style={styles.optionCardDescription}>
             The hour the calendar scrolls to when you open the Week View
           </Text>
           <ScrollView
@@ -149,6 +149,14 @@ export default function SettingsScreen() {
           onPress={() => router.push("/sectiontemplates")}
         />
 
+        <Text style={styles.sectionLabel}>MESSAGING</Text>
+
+        <NavRow
+          label="SMS Templates"
+          description="Create up to 5 pre-written messages for client follow-ups"
+          onPress={() => router.push("/smstemplates")}
+        />
+
         <Text style={styles.sectionLabel}>STORAGE</Text>
 
         <SettingRow
@@ -164,7 +172,11 @@ export default function SettingsScreen() {
 
 function NavRow({ label, description, onPress }) {
   return (
-    <TouchableOpacity style={rowStyles.container} onPress={onPress} activeOpacity={0.7}>
+    <TouchableOpacity
+      style={rowStyles.container}
+      onPress={onPress}
+      activeOpacity={0.7}
+    >
       <View style={rowStyles.text}>
         <Text style={rowStyles.label}>{label}</Text>
         {description ? (
@@ -244,13 +256,14 @@ const styles = StyleSheet.create({
   },
   content: {
     padding: theme.spacing.m,
+    paddingBottom: theme.spacing.xxl,
   },
   sectionLabel: {
     ...theme.typography.overline,
     marginTop: theme.spacing.m,
     marginBottom: theme.spacing.s,
   },
-  apptLengthCard: {
+  optionCard: {
     backgroundColor: theme.colors.cardBackground,
     borderRadius: theme.layout.borderRadius.m,
     paddingHorizontal: theme.spacing.m,
@@ -259,10 +272,10 @@ const styles = StyleSheet.create({
     marginBottom: theme.spacing.s,
     ...theme.shadows.light,
   },
-  apptLengthLabel: {
+  optionCardLabel: {
     ...theme.typography.bodyBold,
   },
-  apptLengthDescription: {
+  optionCardDescription: {
     ...theme.typography.label,
     marginTop: 2,
     marginBottom: theme.spacing.s,

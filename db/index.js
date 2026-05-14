@@ -89,6 +89,30 @@ export function initializeDatabase() {
       ExpiresAt INTEGER NOT NULL,
       CreatedAt INTEGER NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS SmsTemplate (
+      SmsTemplateSk TEXT PRIMARY KEY NOT NULL,
+      UserSk        TEXT NOT NULL,
+      Name          TEXT NOT NULL DEFAULT '',
+      Body          TEXT NOT NULL DEFAULT '',
+      Position      INTEGER NOT NULL DEFAULT 0,
+      CreatedAt     TEXT NOT NULL,
+      UpdatedAt     TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS SmsStatus (
+      SmsStatusSk   TEXT PRIMARY KEY NOT NULL,
+      UserSk        TEXT NOT NULL,
+      InspectionSk  TEXT NOT NULL,
+      SmsTemplateSk TEXT NOT NULL,
+      Sent          INTEGER NOT NULL DEFAULT 0,
+      SentAt        INTEGER,
+      _version      INTEGER DEFAULT 1,
+      _lastChangedAt INTEGER,
+      _deleted      BOOLEAN DEFAULT 0,
+      UNIQUE(InspectionSk, SmsTemplateSk),
+      FOREIGN KEY (InspectionSk) REFERENCES Inspections (InspectionSk)
+    );
   `);
 
   // Patch existing databases — CREATE TABLE IF NOT EXISTS won't modify them
@@ -115,6 +139,33 @@ export function initializeDatabase() {
       UpdatedAt TEXT NOT NULL
     )`);
   } catch (_) {}
+  try {
+    db.execSync(`CREATE TABLE IF NOT EXISTS SmsTemplate (
+      SmsTemplateSk TEXT PRIMARY KEY NOT NULL,
+      UserSk        TEXT NOT NULL,
+      Name          TEXT NOT NULL DEFAULT '',
+      Body          TEXT NOT NULL DEFAULT '',
+      Position      INTEGER NOT NULL DEFAULT 0,
+      CreatedAt     TEXT NOT NULL,
+      UpdatedAt     TEXT NOT NULL
+    )`);
+  } catch (_) {}
+  try {
+    db.execSync(`CREATE TABLE IF NOT EXISTS SmsStatus (
+      SmsStatusSk   TEXT PRIMARY KEY NOT NULL,
+      UserSk        TEXT NOT NULL,
+      InspectionSk  TEXT NOT NULL,
+      SmsTemplateSk TEXT NOT NULL,
+      Sent          INTEGER NOT NULL DEFAULT 0,
+      SentAt        INTEGER,
+      _version      INTEGER DEFAULT 1,
+      _lastChangedAt INTEGER,
+      _deleted      BOOLEAN DEFAULT 0,
+      UNIQUE(InspectionSk, SmsTemplateSk),
+      FOREIGN KEY (InspectionSk) REFERENCES Inspections (InspectionSk)
+    )`);
+  } catch (_) {}
 }
 
 export { db };
+
