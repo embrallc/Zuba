@@ -2,23 +2,32 @@ import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { theme } from "@theme";
 import dayjs from "dayjs";
 import { useRouter } from "expo-router";
+import { useEffect, useRef, useState } from "react";
 import {
   Alert,
   Linking,
+  Modal,
   Platform,
   StyleSheet,
   Text,
   TouchableOpacity,
+  TouchableWithoutFeedback,
   View,
+  useWindowDimensions,
 } from "react-native";
 import Animated, {
+  Easing,
+  interpolate,
+  runOnJS,
   useAnimatedStyle,
   useSharedValue,
   withSpring,
+  withTiming,
 } from "react-native-reanimated";
 import { logError } from "../db/logs";
 import { useDebouncedPress } from "../hooks/useDebouncedPress";
 import { useMapStore } from "../stores/useMapStore";
+import { useSmsStore } from "../stores/useSmsStore";
 
 const COMPLETE_FIELDS = [
   "FullName",
@@ -45,14 +54,6 @@ function formatAddress(inspection) {
     inspection.ZipCode,
   ];
   return parts.filter(Boolean).join(", ");
-}
-
-async function openSms(phone) {
-  if (!phone) {
-    Alert.alert("No phone number on this inspection.");
-    return;
-  }
-  await Linking.openURL(`sms:${phone}`);
 }
 
 async function openCall(phone) {
@@ -83,14 +84,127 @@ async function openNavigation(inspection) {
   await Linking.openURL(url);
 }
 
+// ─── SMS Bubble ───────────────────────────────────────────────────────────────
+
+const TAIL_SIZE = 13;
+const BUBBLE_MAX_WIDTH = 268;
+const TAIL_FROM_LEFT = 22;
+
+function SmsBubble({ anchor, templates, onClose }) {
+  const { height: windowHeight, width: windowWidth } = useWindowDimensions();
+  const progress = useSharedValue(0);
+
+  useEffect(() => {
+    progress.value = withTiming(1, {
+      duration: 210,
+      easing: Easing.out(Easing.cubic),
+    });
+  }, []);
+
+  function handleClose() {
+    progress.value = withTiming(0, { duration: 130 }, (finished) => {
+      if (finished) runOnJS(onClose)();
+    });
+  }
+
+  const bubbleAnim = useAnimatedStyle(() => {
+    const s = progress.value;
+    return {
+      opacity: s,
+      transform: [
+        { scale: interpolate(s, [0, 1], [0.12, 1]) },
+        { translateY: interpolate(s, [0, 1], [16, 0]) },
+      ],
+    };
+  });
+
+  // Position bubble above the tapped button
+  const buttonCenterX = anchor.x + anchor.w / 2;
+  const bubbleLeft = Math.max(
+    8,
+    Math.min(
+      buttonCenterX - TAIL_FROM_LEFT - TAIL_SIZE,
+      windowWidth - BUBBLE_MAX_WIDTH - 8,
+    ),
+  );
+  // bottom of bubble sits just above the button with a gap for the tail
+  const bubbleBottom = windowHeight - anchor.y + TAIL_SIZE + 2;
+
+  // Where the tail triangle sits within the bubble
+  const tailLeft = Math.max(10, buttonCenterX - bubbleLeft - TAIL_SIZE);
+
+  return (
+    <Modal
+      visible
+      transparent
+      animationType="none"
+      onRequestClose={handleClose}
+      statusBarTranslucent
+    >
+      <View style={StyleSheet.absoluteFill}>
+        {/* Backdrop */}
+        <TouchableWithoutFeedback onPress={handleClose}>
+          <View style={[StyleSheet.absoluteFill, bubbleStyles.backdrop]} />
+        </TouchableWithoutFeedback>
+
+        {/* Bubble */}
+        <Animated.View
+          style={[
+            bubbleStyles.bubble,
+            { bottom: bubbleBottom, left: bubbleLeft },
+            bubbleAnim,
+          ]}
+        >
+          {templates.length === 0 ? (
+            <View style={bubbleStyles.empty}>
+              <MaterialCommunityIcons
+                name="message-text-outline"
+                size={20}
+                color={theme.colors.textFine}
+              />
+              <Text style={bubbleStyles.emptyText}>
+                No templates yet.{"\n"}Add some in Settings → Messaging.
+              </Text>
+            </View>
+          ) : (
+            <View style={bubbleStyles.pillsRow}>
+              {templates.map((t) => (
+                <TouchableOpacity
+                  key={t.SmsTemplateSk}
+                  style={bubbleStyles.pill}
+                  activeOpacity={0.7}
+                >
+                  <Text style={bubbleStyles.pillText} numberOfLines={1}>
+                    {t.Name || "Unnamed"}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+
+          {/* Tail triangle */}
+          <View style={[bubbleStyles.tail, { left: tailLeft }]} />
+        </Animated.View>
+      </View>
+    </Modal>
+  );
+}
+
+// ─── InspectionCard ───────────────────────────────────────────────────────────
+
 export default function InspectionCard({ inspection, onPress }) {
   const openForInspection = useMapStore((s) => s.openForInspection);
   const router = useRouter();
+  const templates = useSmsStore((s) => s.templates);
 
   const scale = useSharedValue(1);
   const cardStyle = useAnimatedStyle(() => ({
     transform: [{ scale: scale.value }],
   }));
+
+  const [smsOpen, setSmsOpen] = useState(false);
+  const [anchor, setAnchor] = useState(null);
+  const smsRef = useRef(null);
 
   const complete = isComplete(inspection);
   const address = formatAddress(inspection);
@@ -101,12 +215,15 @@ export default function InspectionCard({ inspection, onPress }) {
     ? dayjs(inspection.ScheduledAt).format("h:mm A")
     : "";
 
-  const handleSms = useDebouncedPress(async () => {
-    try {
-      await openSms(inspection.Phone);
-    } catch (e) {
-      logError(e, `InspectionCard.handleSms sk=${inspection.InspectionSk}`);
+  const handleSmsPress = useDebouncedPress(() => {
+    if (!inspection.Phone) {
+      Alert.alert("No phone number on this inspection.");
+      return;
     }
+    smsRef.current?.measureInWindow((x, y, w, h) => {
+      setAnchor({ x, y, w, h });
+      setSmsOpen(true);
+    });
   });
 
   const handleCall = useDebouncedPress(async () => {
@@ -152,7 +269,10 @@ export default function InspectionCard({ inspection, onPress }) {
         params: { inspectionSk: inspection.InspectionSk },
       });
     } catch (e) {
-      logError(e, `InspectionCard.handleOpenForm sk=${inspection.InspectionSk}`);
+      logError(
+        e,
+        `InspectionCard.handleOpenForm sk=${inspection.InspectionSk}`,
+      );
     }
   });
 
@@ -202,7 +322,8 @@ export default function InspectionCard({ inspection, onPress }) {
           <View style={styles.actions}>
             {!!inspection.Phone && (
               <TouchableOpacity
-                onPress={handleSms}
+                ref={smsRef}
+                onPress={handleSmsPress}
                 hitSlop={theme.layout.hitSlop.medium}
                 style={styles.actionBtn}
               >
@@ -284,9 +405,79 @@ export default function InspectionCard({ inspection, onPress }) {
           </View>
         </View>
       </TouchableOpacity>
+
+      {smsOpen && anchor && (
+        <SmsBubble
+          anchor={anchor}
+          templates={templates}
+          onClose={() => setSmsOpen(false)}
+        />
+      )}
     </Animated.View>
   );
 }
+
+const bubbleStyles = StyleSheet.create({
+  backdrop: {
+    backgroundColor: "rgba(0,0,0,0.18)",
+  },
+  bubble: {
+    position: "absolute",
+    maxWidth: BUBBLE_MAX_WIDTH,
+    minWidth: 160,
+    backgroundColor: theme.colors.cardBackground,
+    borderRadius: theme.layout.borderRadius.l,
+    paddingHorizontal: theme.spacing.m,
+    paddingTop: theme.spacing.m,
+    paddingBottom: theme.spacing.s,
+    ...theme.shadows.medium,
+    // ensure shadow renders above backdrop
+    elevation: 8,
+  },
+  tail: {
+    position: "absolute",
+    bottom: -TAIL_SIZE,
+    width: 0,
+    height: 0,
+    borderLeftWidth: TAIL_SIZE,
+    borderRightWidth: TAIL_SIZE,
+    borderTopWidth: TAIL_SIZE,
+    borderLeftColor: "transparent",
+    borderRightColor: "transparent",
+    borderTopColor: theme.colors.cardBackground,
+  },
+  pillsRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: theme.spacing.s,
+    paddingBottom: theme.spacing.xs,
+  },
+  pill: {
+    backgroundColor: theme.colors.primaryGhost,
+    borderRadius: theme.layout.borderRadius.full,
+    paddingHorizontal: theme.spacing.m,
+    paddingVertical: 6,
+    borderWidth: theme.layout.borderWidth.base,
+    borderColor: "rgba(92,92,232,0.18)",
+  },
+  pillText: {
+    ...theme.typography.label,
+    color: theme.colors.primary,
+    fontWeight: "600",
+  },
+  empty: {
+    alignItems: "center",
+    gap: theme.spacing.s,
+    paddingVertical: theme.spacing.s,
+    paddingBottom: theme.spacing.m,
+  },
+  emptyText: {
+    ...theme.typography.label,
+    color: theme.colors.textFine,
+    textAlign: "center",
+    lineHeight: 18,
+  },
+});
 
 const styles = StyleSheet.create({
   container: {
