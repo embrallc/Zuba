@@ -8,14 +8,17 @@ import {
   SafeAreaView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
 import Animated, { FadeInDown } from "react-native-reanimated";
 import InspectionCard from "../../components/InspectionCard";
+import { runDevQuery } from "../../db/devQuery";
 import { logError } from "../../db/logs";
 import { useDebouncedPress } from "../../hooks/useDebouncedPress";
 import { useInspectionStore } from "../../stores/useInspectionStore";
+import { useMapStore } from "../../stores/useMapStore";
 
 const FAB_SIZE = (theme?.layout?.iconSize?.l ?? 28) * 2;
 
@@ -27,8 +30,11 @@ function getTodayPrefix() {
   return `${yyyy}-${mm}-${dd}`;
 }
 
+const SEARCH_FIELDS = ["FullName", "AddressLine1", "AddressLine2", "City", "State", "ZipCode"];
+
 export default function MyDayScreen() {
   const [pulseKey, setPulseKey] = useState(0);
+  const [query, setQuery] = useState("");
 
   useFocusEffect(
     useCallback(() => {
@@ -39,6 +45,7 @@ export default function MyDayScreen() {
   const router = useRouter();
   const sortedIds = useInspectionStore((s) => s.sortedIds);
   const inspections = useInspectionStore((s) => s.inspections);
+  const openGlobal = useMapStore((s) => s.openGlobal);
 
   const todayInspections = useMemo(() => {
     const today = getTodayPrefix();
@@ -46,6 +53,31 @@ export default function MyDayScreen() {
       .map((id) => inspections[id])
       .filter((i) => i && i.ScheduledAt?.startsWith(today));
   }, [sortedIds, inspections]);
+
+  const filtered = useMemo(() => {
+    if (!query.trim()) return todayInspections;
+    const lower = query.toLowerCase();
+    return todayInspections.filter((i) =>
+      SEARCH_FIELDS.some((f) => i[f]?.toLowerCase().includes(lower)),
+    );
+  }, [todayInspections, query]);
+
+  const handleOpenMap = useDebouncedPress(() => {
+    try {
+      openGlobal();
+      router.push("/map");
+    } catch (e) {
+      logError(e, "MyDayScreen.handleOpenMap");
+    }
+  });
+
+  const handleSettings = useDebouncedPress(() => {
+    try {
+      router.push("/settings");
+    } catch (e) {
+      logError(e, "MyDayScreen.handleSettings");
+    }
+  });
 
   const handleAdd = useDebouncedPress(() => {
     try {
@@ -68,6 +100,54 @@ export default function MyDayScreen() {
 
   return (
     <SafeAreaView style={styles.safe}>
+      {/* Header */}
+      <View style={styles.header}>
+        <View style={styles.searchRow}>
+          <View style={styles.searchContainer}>
+            <MaterialCommunityIcons
+              name="magnify"
+              size={theme.layout.iconSize.m}
+              color={theme.colors.icon}
+              style={styles.searchIcon}
+            />
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Search today's inspections..."
+              placeholderTextColor={theme.colors.textFine}
+              value={query}
+              onChangeText={setQuery}
+              clearButtonMode="while-editing"
+              returnKeyType="search"
+            />
+          </View>
+
+          <TouchableOpacity
+            onPress={handleOpenMap}
+            hitSlop={theme.layout.hitSlop.medium}
+            style={styles.headerBtn}
+          >
+            <MaterialCommunityIcons
+              name="map-outline"
+              size={theme.layout.iconSize.l}
+              color={theme.colors.primary}
+            />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            onPress={handleSettings}
+            onLongPress={runDevQuery}
+            hitSlop={theme.layout.hitSlop.medium}
+            style={styles.headerBtn}
+          >
+            <MaterialCommunityIcons
+              name="menu"
+              size={theme.layout.iconSize.l}
+              color={theme.colors.icon}
+            />
+          </TouchableOpacity>
+        </View>
+      </View>
+
       {/* Dashboard — top 3/5 */}
       <View style={styles.dashboardSection}>
         <View style={styles.dashboardCard}>
@@ -94,11 +174,11 @@ export default function MyDayScreen() {
             color={theme.colors.textSubtle}
           />
           <Text style={styles.listSectionTitle}>Today's Inspections</Text>
-          <Text style={styles.listSectionCount}>{todayInspections.length}</Text>
+          <Text style={styles.listSectionCount}>{filtered.length}</Text>
         </View>
 
         <FlatList
-          data={todayInspections}
+          data={filtered}
           keyExtractor={(item) => item.InspectionSk}
           renderItem={({ item, index }) => (
             <Animated.View
@@ -122,7 +202,9 @@ export default function MyDayScreen() {
                 color={theme.colors.textFine}
               />
               <Text style={styles.emptyText}>
-                No inspections scheduled for today.
+                {query
+                  ? "No inspections match your search."
+                  : "No inspections scheduled for today."}
               </Text>
             </View>
           }
@@ -169,6 +251,38 @@ const styles = StyleSheet.create({
   safe: {
     flex: 1,
     backgroundColor: theme.colors.mainBackground,
+  },
+
+  header: {
+    backgroundColor: theme.colors.cardBackground,
+    paddingHorizontal: theme.spacing.m,
+    paddingVertical: theme.spacing.s,
+    ...theme.shadows.light,
+  },
+  searchRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing.s,
+  },
+  searchContainer: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: theme.colors.input,
+    borderRadius: theme.layout.borderRadius.full,
+    paddingHorizontal: theme.spacing.s,
+    height: 38,
+  },
+  searchIcon: {
+    marginRight: theme.spacing.xs,
+  },
+  searchInput: {
+    flex: 1,
+    ...theme.typography.body,
+    paddingVertical: 0,
+  },
+  headerBtn: {
+    padding: theme.spacing.xs,
   },
 
   // Dashboard section — top 3/5
