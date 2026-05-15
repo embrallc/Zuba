@@ -11,6 +11,11 @@ import {
   View,
 } from "react-native";
 import { useSettingsStore } from "../stores/useSettingsStore";
+import { supabase } from "../utils/supabase";
+// ── RevenueCat (pending Apple Developer approval) ─────────────────────────────
+// import { useSubscriptionStore } from "../stores/useSubscriptionStore";
+// import { presentCustomerCenter, presentPaywall } from "../utils/purchases";
+// ─────────────────────────────────────────────────────────────────────────────
 
 const APPT_LENGTH_OPTIONS = [15, 30, 45, 60, 75, 90, 105, 120];
 const START_HOUR_OPTIONS = [5, 6, 7, 8, 9, 10, 11];
@@ -40,6 +45,14 @@ export default function SettingsScreen() {
   );
   const setApptLengthMinutes = useSettingsStore((s) => s.setApptLengthMinutes);
   const setCalendarStartHour = useSettingsStore((s) => s.setCalendarStartHour);
+  // ── RevenueCat (pending Apple Developer approval) ───────────────────────────
+  // const isPro = useSubscriptionStore((s) => s.isPro);
+  // ───────────────────────────────────────────────────────────────────────────
+
+  async function handleSignOut() {
+    await supabase.auth.signOut();
+    router.replace("/login");
+  }
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -157,6 +170,29 @@ export default function SettingsScreen() {
           onPress={() => router.push("/smstemplates")}
         />
 
+
+        {/* ── RevenueCat subscription section (pending Apple Developer approval) ──
+        <Text style={styles.sectionLabel}>SUBSCRIPTION</Text>
+        <View style={rowStyles.container}>
+          <View style={rowStyles.text}>
+            <Text style={rowStyles.label}>{isPro ? "Embra LLC Pro" : "Free Plan"}</Text>
+            <Text style={rowStyles.description}>
+              {isPro ? "Cloud sync and premium features active" : "Upgrade to unlock cloud sync and more"}
+            </Text>
+          </View>
+          <View style={[styles.badge, { backgroundColor: isPro ? theme.colors.success : theme.colors.input }]}>
+            <Text style={[styles.badgeText, { color: isPro ? "#fff" : theme.colors.textSubtle }]}>
+              {isPro ? "PRO" : "FREE"}
+            </Text>
+          </View>
+        </View>
+        {isPro ? (
+          <NavRow label="Manage Subscription" description="Cancel, restore purchases, or get support" onPress={presentCustomerCenter} />
+        ) : (
+          <NavRow label="Upgrade to Pro — $5.99/mo" description="Cloud sync, priority support, and future premium features" onPress={presentPaywall} />
+        )}
+        ── end RevenueCat section ── */}
+
         <Text style={styles.sectionLabel}>STORAGE</Text>
 
         <SettingRow
@@ -165,6 +201,21 @@ export default function SettingsScreen() {
           value={cloudStorageEnabled}
           onValueChange={setCloudStorageEnabled}
         />
+
+        <Text style={styles.sectionLabel}>ACCOUNT</Text>
+
+        <TouchableOpacity
+          style={styles.signOutBtn}
+          onPress={handleSignOut}
+          activeOpacity={0.7}
+        >
+          <MaterialCommunityIcons
+            name="logout"
+            size={18}
+            color={theme.colors.error}
+          />
+          <Text style={styles.signOutText}>Sign Out</Text>
+        </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>
   );
@@ -263,6 +314,16 @@ const styles = StyleSheet.create({
     marginTop: theme.spacing.m,
     marginBottom: theme.spacing.s,
   },
+  badge: {
+    paddingHorizontal: theme.spacing.s,
+    paddingVertical: 3,
+    borderRadius: theme.layout.borderRadius.full,
+  },
+  badgeText: {
+    ...theme.typography.caption,
+    fontWeight: "700",
+    fontSize: 11,
+  },
   optionCard: {
     backgroundColor: theme.colors.cardBackground,
     borderRadius: theme.layout.borderRadius.m,
@@ -304,5 +365,20 @@ const styles = StyleSheet.create({
   optionTextSelected: {
     color: "#fff",
     fontWeight: "600",
+  },
+  signOutBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing.s,
+    backgroundColor: theme.colors.cardBackground,
+    paddingHorizontal: theme.spacing.m,
+    paddingVertical: theme.spacing.m,
+    borderRadius: theme.layout.borderRadius.m,
+    marginBottom: theme.spacing.s,
+    ...theme.shadows.light,
+  },
+  signOutText: {
+    ...theme.typography.bodyBold,
+    color: theme.colors.error,
   },
 });

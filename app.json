@@ -57,7 +57,8 @@
       "expo-location",
       "expo-image-picker",
       "expo-camera",
-      "expo-media-library"
+      "expo-media-library",
+      "expo-secure-store"
     ],
     "experiments": {
       "typedRoutes": true

@@ -20,37 +20,91 @@ import { getOrCreateUser } from "../db/users";
 import { useInspectionStore } from "../stores/useInspectionStore";
 import { useSettingsStore } from "../stores/useSettingsStore";
 import { useSmsStore } from "../stores/useSmsStore";
+import { supabase } from "../utils/supabase";
+
+// ── RevenueCat (pending Apple Developer approval) ─────────────────────────────
+// import { useSubscriptionStore } from "../stores/useSubscriptionStore";
+// import {
+//   addCustomerInfoListener,
+//   configurePurchases,
+//   fetchCustomerInfo,
+// } from "../utils/purchases";
+// ─────────────────────────────────────────────────────────────────────────────
 
 export default function RootLayout() {
   const [ready, setReady] = useState(false);
+  const [isAuthed, setIsAuthed] = useState(false);
   const loadInspections = useInspectionStore((s) => s.load);
   const loadSettings = useSettingsStore((s) => s.loadSettings);
   const setUserSk = useSettingsStore((s) => s.setUserSk);
   const loadSmsTemplates = useSmsStore((s) => s.load);
 
+  // ── RevenueCat (pending Apple Developer approval) ───────────────────────────
+  // const setCustomerInfo = useSubscriptionStore((s) => s.setCustomerInfo);
+  // ───────────────────────────────────────────────────────────────────────────
+
   useEffect(() => {
+    // ── RevenueCat (pending Apple Developer approval) ─────────────────────────
+    // configurePurchases();
+    // const purchasesListener = addCustomerInfoListener((info) => {
+    //   setCustomerInfo(info);
+    // });
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // Sign-out listener — navigates to login if session expires or user signs out
+    const { data: { subscription: authSubscription } } = supabase.auth.onAuthStateChange(
+      (event, session) => {
+        setIsAuthed(!!session);
+      },
+    );
+
     async function init() {
       try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+
+        setIsAuthed(!!session);
+
         initializeDatabase();
-        const userSk = await getOrCreateUser();
-        setUserSk(userSk);
-        await loadSettings();
-        const inspections = await getAllInspections();
-        loadInspections(inspections);
-        try {
-          const smsTemplates = await getSmsTemplates(userSk);
-          loadSmsTemplates(smsTemplates);
-        } catch (smsErr) {
-          logError(smsErr, "RootLayout.init.sms");
+
+        if (session) {
+          const userSk = await getOrCreateUser();
+          setUserSk(userSk);
+          await loadSettings();
+          const inspections = await getAllInspections();
+          loadInspections(inspections);
+
+          try {
+            const smsTemplates = await getSmsTemplates(userSk);
+            loadSmsTemplates(smsTemplates);
+          } catch (smsErr) {
+            logError(smsErr, "RootLayout.init.sms");
+          }
+
+          // ── RevenueCat (pending Apple Developer approval) ─────────────────
+          // try {
+          //   const customerInfo = await fetchCustomerInfo();
+          //   setCustomerInfo(customerInfo);
+          // } catch (purchasesErr) {
+          //   logError(purchasesErr, "RootLayout.init.purchases");
+          // }
+          // ──────────────────────────────────────────────────────────────────
         }
       } catch (e) {
         logError(e, "RootLayout.init");
       } finally {
-        // Always mark ready so the app renders instead of hanging on the spinner
         setReady(true);
       }
     }
     init();
+
+    return () => {
+      authSubscription.unsubscribe();
+      // ── RevenueCat (pending Apple Developer approval) ─────────────────────
+      // purchasesListener.remove();
+      // ─────────────────────────────────────────────────────────────────────
+    };
   }, []);
 
   if (!ready) {
@@ -75,7 +129,8 @@ export default function RootLayout() {
         translucent={false}
         backgroundColor="transparent"
       />
-      <Stack>
+      <Stack initialRouteName={isAuthed ? "(tabs)" : "login"}>
+        <Stack.Screen name="login" options={{ headerShown: false, animation: "none" }} />
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen
           name="addinspection"
