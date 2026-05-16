@@ -16,32 +16,47 @@ export async function getSmsTemplates(userSk) {
 }
 
 export async function insertSmsTemplate(userSk, name, body, position) {
-  const sk = randomUUID();
-  const now = dayjs().toISOString();
-  await db.runAsync(
-    `INSERT INTO SmsTemplate (SmsTemplateSk, UserSk, Name, Body, Position, CreatedAt, UpdatedAt)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [sk, userSk, name, body, position, now, now],
-  );
-  return {
-    SmsTemplateSk: sk,
-    UserSk: userSk,
-    Name: name,
-    Body: body,
-    Position: position,
-    CreatedAt: now,
-    UpdatedAt: now,
-  };
+  try {
+    const sk = randomUUID();
+    const now = dayjs().toISOString();
+    await db.runAsync(
+      `INSERT INTO SmsTemplate (SmsTemplateSk, UserSk, Name, Body, Position, CreatedAt, UpdatedAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [sk, userSk, name, body, position, now, now],
+    );
+    return {
+      SmsTemplateSk: sk,
+      UserSk: userSk,
+      Name: name,
+      Body: body,
+      Position: position,
+      CreatedAt: now,
+      UpdatedAt: now,
+    };
+  } catch (e) {
+    logError(e, `db/smsTemplates.insertSmsTemplate userSk=${userSk}`);
+    throw e;
+  }
 }
 
 export async function updateSmsTemplate(sk, name, body) {
-  const now = dayjs().toISOString();
-  await db.runAsync(
-    "UPDATE SmsTemplate SET Name = ?, Body = ?, UpdatedAt = ? WHERE SmsTemplateSk = ?",
-    [name, body, now, sk],
-  );
+  try {
+    const now = dayjs().toISOString();
+    await db.runAsync(
+      "UPDATE SmsTemplate SET Name = ?, Body = ?, UpdatedAt = ? WHERE SmsTemplateSk = ?",
+      [name, body, now, sk],
+    );
+  } catch (e) {
+    logError(e, `db/smsTemplates.updateSmsTemplate sk=${sk}`);
+    throw e;
+  }
 }
 
 export async function deleteSmsTemplate(sk) {
-  await db.runAsync("DELETE FROM SmsTemplate WHERE SmsTemplateSk = ?", [sk]);
+  try {
+    await db.runAsync("DELETE FROM SmsTemplate WHERE SmsTemplateSk = ?", [sk]);
+  } catch (e) {
+    logError(e, `db/smsTemplates.deleteSmsTemplate sk=${sk}`);
+    throw e;
+  }
 }

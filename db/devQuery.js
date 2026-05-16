@@ -1,3 +1,4 @@
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { db } from "./index";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -23,10 +24,32 @@ export async function devQuery(sql, params = []) {
   }
 }
 
+export async function wipeDatabase() {
+  try {
+    console.log("\n── wipeDatabase ──────────────────────");
+    db.execSync(`
+      DELETE FROM SmsStatus;
+      DELETE FROM SmsTemplate;
+      DELETE FROM InspectionDetail;
+      DELETE FROM InspectionDescription;
+      DELETE FROM Inspections;
+      DELETE FROM SectionTemplate;
+      DELETE FROM Users;
+      DELETE FROM AppLogs;
+      DELETE FROM DayCache;
+    `);
+    await AsyncStorage.removeItem("user_sk");
+    console.log("All tables cleared and user_sk removed.");
+    console.log("──────────────────────────────────────\n");
+  } catch (e) {
+    console.error("── wipeDatabase ERROR ────────────────", e.message);
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Edit this function with whatever query you want to run,
 // then long-press the menu icon in the top-right of the list screen.
 // ─────────────────────────────────────────────────────────────────────────────
 export async function runDevQuery() {
-  await devQuery(`Select * from SmsTemplate`);
+  await devQuery("SELECT * FROM users");
 }

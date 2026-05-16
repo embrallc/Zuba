@@ -14,6 +14,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { wipeDatabase } from "../db/devQuery";
 import { supabase } from "../utils/supabase";
 
 export default function LoginScreen() {
@@ -33,10 +34,16 @@ export default function LoginScreen() {
     setLoading(true);
     try {
       if (mode === "signin") {
-        const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+        const { error } = await supabase.auth.signInWithPassword({
+          email: email.trim(),
+          password,
+        });
         if (error) throw error;
       } else {
-        const { error } = await supabase.auth.signUp({ email: email.trim(), password });
+        const { error } = await supabase.auth.signUp({
+          email: email.trim(),
+          password,
+        });
         if (error) throw error;
       }
 
@@ -147,6 +154,7 @@ export default function LoginScreen() {
             <TouchableOpacity
               style={styles.toggleBtn}
               onPress={toggleMode}
+              onLongPress={() => wipeDatabase()} //TESTING ONLY REMOVE AFTER DB ALL SET
               disabled={loading}
             >
               <Text style={styles.toggleText}>

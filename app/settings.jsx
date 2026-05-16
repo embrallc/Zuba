@@ -11,7 +11,7 @@ import {
   View,
 } from "react-native";
 import { useSettingsStore } from "../stores/useSettingsStore";
-import { supabase } from "../utils/supabase";
+import { signOutAndClear } from "../utils/supabase";
 // ── RevenueCat (pending Apple Developer approval) ─────────────────────────────
 // import { useSubscriptionStore } from "../stores/useSubscriptionStore";
 // import { presentCustomerCenter, presentPaywall } from "../utils/purchases";
@@ -50,7 +50,7 @@ export default function SettingsScreen() {
   // ───────────────────────────────────────────────────────────────────────────
 
   async function handleSignOut() {
-    await supabase.auth.signOut();
+    await signOutAndClear();
     router.replace("/login");
   }
 

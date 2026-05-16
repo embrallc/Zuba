@@ -1,5 +1,5 @@
 import { theme } from "@theme";
-import { Stack } from "expo-router";
+import { router, Stack } from "expo-router";
 import {
   configureReanimatedLogger,
   ReanimatedLogLevel,
@@ -43,6 +43,28 @@ export default function RootLayout() {
   // const setCustomerInfo = useSubscriptionStore((s) => s.setCustomerInfo);
   // ───────────────────────────────────────────────────────────────────────────
 
+  async function loadUserData(supabaseUid) {
+    const userSk = await getOrCreateUser(supabaseUid);
+    setUserSk(userSk);
+    await loadSettings();
+    const inspections = await getAllInspections();
+    loadInspections(inspections);
+    try {
+      const smsTemplates = await getSmsTemplates(userSk);
+      loadSmsTemplates(smsTemplates);
+    } catch (smsErr) {
+      logError(smsErr, "RootLayout.loadUserData.sms");
+    }
+    // ── RevenueCat (pending Apple Developer approval) ───────────────────────
+    // try {
+    //   const customerInfo = await fetchCustomerInfo();
+    //   setCustomerInfo(customerInfo);
+    // } catch (purchasesErr) {
+    //   logError(purchasesErr, "RootLayout.loadUserData.purchases");
+    // }
+    // ────────────────────────────────────────────────────────────────────────
+  }
+
   useEffect(() => {
     // ── RevenueCat (pending Apple Developer approval) ─────────────────────────
     // configurePurchases();
@@ -51,45 +73,28 @@ export default function RootLayout() {
     // });
     // ─────────────────────────────────────────────────────────────────────────
 
-    // Sign-out listener — navigates to login if session expires or user signs out
+    initializeDatabase();
+
     const { data: { subscription: authSubscription } } = supabase.auth.onAuthStateChange(
-      (event, session) => {
+      async (event, session) => {
         setIsAuthed(!!session);
+        if (event === "SIGNED_IN") {
+          try {
+            await loadUserData(session.user.id);
+          } catch (e) {
+            logError(e, "RootLayout.onAuthStateChange.loadUserData");
+          }
+        }
       },
     );
 
     async function init() {
       try {
-        const {
-          data: { session },
-        } = await supabase.auth.getSession();
-
+        const { data: { session } } = await supabase.auth.getSession();
+        console.log("[init] getSession result:", session ? `uid=${session.user?.id} expires_at=${session.expires_at}` : "null");
         setIsAuthed(!!session);
-
-        initializeDatabase();
-
         if (session) {
-          const userSk = await getOrCreateUser();
-          setUserSk(userSk);
-          await loadSettings();
-          const inspections = await getAllInspections();
-          loadInspections(inspections);
-
-          try {
-            const smsTemplates = await getSmsTemplates(userSk);
-            loadSmsTemplates(smsTemplates);
-          } catch (smsErr) {
-            logError(smsErr, "RootLayout.init.sms");
-          }
-
-          // ── RevenueCat (pending Apple Developer approval) ─────────────────
-          // try {
-          //   const customerInfo = await fetchCustomerInfo();
-          //   setCustomerInfo(customerInfo);
-          // } catch (purchasesErr) {
-          //   logError(purchasesErr, "RootLayout.init.purchases");
-          // }
-          // ──────────────────────────────────────────────────────────────────
+          await loadUserData(session.user.id);
         }
       } catch (e) {
         logError(e, "RootLayout.init");
@@ -106,6 +111,14 @@ export default function RootLayout() {
       // ─────────────────────────────────────────────────────────────────────
     };
   }, []);
+
+  // Guard: once we know the auth state, force the correct screen.
+  // expo-router persists navigation state in dev, so initialRouteName alone
+  // isn't enough — an unauthenticated reload would restore the tabs screen.
+  useEffect(() => {
+    if (!ready) return;
+    if (!isAuthed) router.replace("/login");
+  }, [ready, isAuthed]);
 
   if (!ready) {
     return (
