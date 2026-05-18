@@ -25,13 +25,21 @@ export function initializeDatabase() {
         UpdatedAt TEXT NOT NULL
       );
 
+    CREATE TABLE IF NOT EXISTS Organizations (
+      OrgSk     TEXT PRIMARY KEY NOT NULL,
+      OrgName   TEXT,
+      UserId    TEXT NOT NULL,
+      CreatedAt INTEGER NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS Users (
-      UserSk TEXT PRIMARY KEY NOT NULL,
-      UserId TEXT UNIQUE,
-      fname TEXT,
-      lname TEXT,
-      OrgSk TEXT NOT NULL,
-      Role TEXT CHECK(Role IN ('admin', 'user')),
+      UserSk      TEXT PRIMARY KEY NOT NULL,
+      UserId      TEXT UNIQUE,
+      fname       TEXT,
+      lname       TEXT,
+      OrgSk       TEXT NOT NULL,
+      Role        TEXT CHECK(Role IN ('admin', 'user')),
+      UserProfile TEXT CHECK(UserProfile IN ('owner', 'member')),
       _version INTEGER DEFAULT 1,
       _lastChangedAt INTEGER,
       _deleted BOOLEAN DEFAULT 0
@@ -52,6 +60,7 @@ export function initializeDatabase() {
       Email TEXT,
       Longitude REAL,
       Latitude REAL,
+      Status TEXT DEFAULT 'OPEN',
       _version INTEGER DEFAULT 1,
       _lastChangedAt INTEGER,
       _deleted BOOLEAN DEFAULT 0,
@@ -149,6 +158,20 @@ export function initializeDatabase() {
       CreatedAt     TEXT NOT NULL,
       UpdatedAt     TEXT NOT NULL
     )`);
+  } catch (_) {}
+  try {
+    db.execSync(`CREATE TABLE IF NOT EXISTS Organizations (
+      OrgSk     TEXT PRIMARY KEY NOT NULL,
+      OrgName   TEXT,
+      UserId    TEXT NOT NULL,
+      CreatedAt INTEGER NOT NULL
+    )`);
+  } catch (_) {}
+  try {
+    db.execSync(`ALTER TABLE Users ADD COLUMN UserProfile TEXT CHECK(UserProfile IN ('owner', 'member'))`);
+  } catch (_) {}
+  try {
+    db.execSync(`ALTER TABLE Inspections ADD COLUMN Status TEXT DEFAULT 'OPEN'`);
   } catch (_) {}
   try {
     db.execSync(`CREATE TABLE IF NOT EXISTS SmsStatus (

@@ -35,6 +35,7 @@ export async function wipeDatabase() {
       DELETE FROM Inspections;
       DELETE FROM SectionTemplate;
       DELETE FROM Users;
+      DELETE FROM Organizations;
       DELETE FROM AppLogs;
       DELETE FROM DayCache;
     `);
