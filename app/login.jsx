@@ -1,6 +1,5 @@
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { theme } from "@theme";
-import { randomUUID } from "expo-crypto";
 import { useRouter } from "expo-router";
 import { useState } from "react";
 import {
@@ -65,16 +64,16 @@ export default function LoginScreen() {
         const uid = data.user.id;
 
         if (orgMode === "create") {
-          const newOrgSk = randomUUID();
-
-          const { error: orgErr } = await supabase
+          const { data: newOrg, error: orgErr } = await supabase
             .from("organizations")
-            .insert({ org_sk: newOrgSk, org_name: orgName.trim(), user_id: uid });
+            .insert({ org_name: orgName.trim(), user_id: uid })
+            .select("org_sk")
+            .single();
           if (orgErr) throw orgErr;
 
           const { error: userErr } = await supabase
             .from("users")
-            .insert({ id: uid, user_sk: uid, org_sk: newOrgSk, user_profile: "owner" });
+            .insert({ id: uid, user_sk: uid, org_sk: newOrg.org_sk, user_profile: "owner" });
           if (userErr) throw userErr;
 
         } else {
