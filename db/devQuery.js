@@ -52,5 +52,5 @@ export async function wipeDatabase() {
 // then long-press the menu icon in the top-right of the list screen.
 // ─────────────────────────────────────────────────────────────────────────────
 export async function runDevQuery() {
-  await devQuery("SELECT * FROM users");
+  await devQuery("SELECT * FROM Organizations");
 }

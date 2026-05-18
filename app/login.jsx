@@ -55,42 +55,16 @@ export default function LoginScreen() {
         if (error) throw error;
 
       } else {
-        const { data, error: signUpError } = await supabase.auth.signUp({
+        const metadata = orgMode === "create"
+          ? { company_name: orgName.trim() }
+          : { org_sk: orgId.trim() };
+
+        const { error: signUpError } = await supabase.auth.signUp({
           email: email.trim(),
           password,
+          options: { data: metadata },
         });
         if (signUpError) throw signUpError;
-
-        const uid = data.user.id;
-
-        if (orgMode === "create") {
-          const { data: newOrg, error: orgErr } = await supabase
-            .from("organizations")
-            .insert({ org_name: orgName.trim(), user_id: uid })
-            .select("org_sk")
-            .single();
-          if (orgErr) throw orgErr;
-
-          const { error: userErr } = await supabase
-            .from("users")
-            .insert({ id: uid, user_sk: uid, org_sk: newOrg.org_sk, user_profile: "owner" });
-          if (userErr) throw userErr;
-
-        } else {
-          const { data: org, error: lookupErr } = await supabase
-            .from("organizations")
-            .select("org_sk")
-            .eq("org_sk", orgId.trim())
-            .single();
-          if (lookupErr || !org) {
-            throw new Error("Organization not found. Double-check the ID and try again.");
-          }
-
-          const { error: userErr } = await supabase
-            .from("users")
-            .insert({ id: uid, user_sk: uid, org_sk: org.org_sk, user_profile: "member" });
-          if (userErr) throw userErr;
-        }
       }
 
       router.replace("/(tabs)");

@@ -44,7 +44,10 @@ export default function RootLayout() {
   // ───────────────────────────────────────────────────────────────────────────
 
   async function loadUserData(supabaseUid) {
-    const userSk = await getOrCreateUser(supabaseUid);
+    const { data: { user } } = await supabase.auth.getUser();
+    const orgSk = user?.user_metadata?.org_sk ?? null;
+    const userProfile = user?.user_metadata?.user_profile ?? null;
+    const userSk = await getOrCreateUser(supabaseUid, orgSk, userProfile);
     setUserSk(userSk);
     await loadSettings();
     const inspections = await getAllInspections();
