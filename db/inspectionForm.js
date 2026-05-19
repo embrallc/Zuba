@@ -52,7 +52,7 @@ export async function updateSectionPositions(updates) {
     const now = Date.now();
     for (const { sk, position } of updates) {
       await db.runAsync(
-        `UPDATE InspectionDescription SET Position = ?, _lastChangedAt = ? WHERE InspectionDescriptionSk = ?`,
+        `UPDATE InspectionDescription SET Position = ?, _lastChangedAt = ?, Synced = 0 WHERE InspectionDescriptionSk = ?`,
         [position, now, sk],
       );
     }
@@ -65,7 +65,7 @@ export async function updateSectionPositions(updates) {
 export async function updateSectionNotes(sk, notes) {
   try {
     await db.runAsync(
-      `UPDATE InspectionDescription SET Notes = ?, _lastChangedAt = ? WHERE InspectionDescriptionSk = ?`,
+      `UPDATE InspectionDescription SET Notes = ?, _lastChangedAt = ?, Synced = 0 WHERE InspectionDescriptionSk = ?`,
       [notes, Date.now(), sk],
     );
   } catch (e) {
@@ -77,7 +77,7 @@ export async function updateSectionNotes(sk, notes) {
 export async function updateSeverityLevel(sk, level) {
   try {
     await db.runAsync(
-      `UPDATE InspectionDescription SET SeverityLevel = ?, _lastChangedAt = ? WHERE InspectionDescriptionSk = ?`,
+      `UPDATE InspectionDescription SET SeverityLevel = ?, _lastChangedAt = ?, Synced = 0 WHERE InspectionDescriptionSk = ?`,
       [level, Date.now(), sk],
     );
   } catch (e) {
@@ -90,7 +90,7 @@ export async function updateDescription(sk, description) {
   try {
     await db.runAsync(
       `UPDATE InspectionDescription
-       SET Description = ?, _lastChangedAt = ?
+       SET Description = ?, _lastChangedAt = ?, Synced = 0
        WHERE InspectionDescriptionSk = ?`,
       [description, Date.now(), sk],
     );
@@ -105,9 +105,9 @@ export async function deleteDescription(sk) {
     const now = Date.now();
     // Soft-delete section and all its pictures in one transaction
     await db.execAsync(`
-      UPDATE InspectionDescription SET _deleted = 1, _lastChangedAt = ${now}
+      UPDATE InspectionDescription SET _deleted = 1, Synced = 0, _lastChangedAt = ${now}
         WHERE InspectionDescriptionSk = '${sk}';
-      UPDATE InspectionDetail SET _deleted = 1, _lastChangedAt = ${now}
+      UPDATE InspectionDetail SET _deleted = 1, Synced = 0, _lastChangedAt = ${now}
         WHERE InspectionDescriptionSk = '${sk}';
     `);
   } catch (e) {
@@ -162,7 +162,7 @@ export async function updateDetail(sk, { pictureNote, pictureMarkup }) {
   try {
     await db.runAsync(
       `UPDATE InspectionDetail
-       SET PictureNote = ?, PictureMarkup = ?, _lastChangedAt = ?
+       SET PictureNote = ?, PictureMarkup = ?, _lastChangedAt = ?, Synced = 0
        WHERE InspectionDetailSk = ?`,
       [pictureNote ?? null, pictureMarkup ?? null, Date.now(), sk],
     );
@@ -175,7 +175,7 @@ export async function updateDetail(sk, { pictureNote, pictureMarkup }) {
 export async function deleteDetail(sk) {
   try {
     await db.runAsync(
-      `UPDATE InspectionDetail SET _deleted = 1, _lastChangedAt = ? WHERE InspectionDetailSk = ?`,
+      `UPDATE InspectionDetail SET _deleted = 1, _lastChangedAt = ?, Synced = 0 WHERE InspectionDetailSk = ?`,
       [Date.now(), sk],
     );
   } catch (e) {

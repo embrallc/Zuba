@@ -21,6 +21,7 @@ import { useInspectionStore } from "../stores/useInspectionStore";
 import { useSettingsStore } from "../stores/useSettingsStore";
 import { useSmsStore } from "../stores/useSmsStore";
 import { supabase } from "../utils/supabase";
+import { syncAll } from "../utils/sync";
 
 // ── RevenueCat (pending Apple Developer approval) ─────────────────────────────
 // import { useSubscriptionStore } from "../stores/useSubscriptionStore";
@@ -84,6 +85,7 @@ export default function RootLayout() {
         if (event === "SIGNED_IN") {
           try {
             await loadUserData(session.user.id);
+            syncAll();
           } catch (e) {
             logError(e, "RootLayout.onAuthStateChange.loadUserData");
           }
@@ -98,6 +100,7 @@ export default function RootLayout() {
         setIsAuthed(!!session);
         if (session) {
           await loadUserData(session.user.id);
+          syncAll();
         }
       } catch (e) {
         logError(e, "RootLayout.init");

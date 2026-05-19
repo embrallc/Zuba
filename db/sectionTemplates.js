@@ -33,7 +33,7 @@ export async function insertSectionTemplate(userSk, name, position) {
 export async function updateSectionTemplateName(sk, name) {
   try {
     await db.runAsync(
-      `UPDATE SectionTemplate SET Name = ?, UpdatedAt = ? WHERE SectionTemplateSk = ?`,
+      `UPDATE SectionTemplate SET Name = ?, UpdatedAt = ?, Synced = 0 WHERE SectionTemplateSk = ?`,
       [name, new Date().toISOString(), sk],
     );
   } catch (e) {
@@ -59,7 +59,7 @@ export async function reorderSectionTemplates(updates) {
     const now = new Date().toISOString();
     for (const { sk, position } of updates) {
       await db.runAsync(
-        `UPDATE SectionTemplate SET Position = ?, UpdatedAt = ? WHERE SectionTemplateSk = ?`,
+        `UPDATE SectionTemplate SET Position = ?, UpdatedAt = ?, Synced = 0 WHERE SectionTemplateSk = ?`,
         [position, now, sk],
       );
     }

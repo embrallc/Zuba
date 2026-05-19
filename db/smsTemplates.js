@@ -43,7 +43,7 @@ export async function updateSmsTemplate(sk, name, body) {
   try {
     const now = dayjs().toISOString();
     await db.runAsync(
-      "UPDATE SmsTemplate SET Name = ?, Body = ?, UpdatedAt = ? WHERE SmsTemplateSk = ?",
+      "UPDATE SmsTemplate SET Name = ?, Body = ?, UpdatedAt = ?, Synced = 0 WHERE SmsTemplateSk = ?",
       [name, body, now, sk],
     );
   } catch (e) {

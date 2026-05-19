@@ -22,14 +22,16 @@ export function initializeDatabase() {
         Name TEXT NOT NULL,
         Position INTEGER NOT NULL DEFAULT 0,
         CreatedAt TEXT NOT NULL,
-        UpdatedAt TEXT NOT NULL
+        UpdatedAt TEXT NOT NULL,
+        Synced INTEGER NOT NULL DEFAULT 0
       );
 
     CREATE TABLE IF NOT EXISTS Organizations (
       OrgSk     TEXT PRIMARY KEY NOT NULL,
       OrgName   TEXT,
       UserId    TEXT NOT NULL,
-      CreatedAt INTEGER NOT NULL
+      CreatedAt INTEGER NOT NULL,
+      Synced    INTEGER NOT NULL DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS Users (
@@ -42,7 +44,8 @@ export function initializeDatabase() {
       UserProfile TEXT CHECK(UserProfile IN ('owner', 'member')),
       _version INTEGER DEFAULT 1,
       _lastChangedAt INTEGER,
-      _deleted BOOLEAN DEFAULT 0
+      _deleted BOOLEAN DEFAULT 0,
+      Synced INTEGER NOT NULL DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS Inspections (
@@ -64,6 +67,7 @@ export function initializeDatabase() {
       _version INTEGER DEFAULT 1,
       _lastChangedAt INTEGER,
       _deleted BOOLEAN DEFAULT 0,
+      Synced INTEGER NOT NULL DEFAULT 0,
       FOREIGN KEY (UserSk) REFERENCES Users (UserSk)
     );
 
@@ -77,6 +81,7 @@ export function initializeDatabase() {
       _version INTEGER DEFAULT 1,
       _lastChangedAt INTEGER,
       _deleted BOOLEAN DEFAULT 0,
+      Synced INTEGER NOT NULL DEFAULT 0,
       FOREIGN KEY (InspectionSk) REFERENCES Inspections (InspectionSk)
     );
 
@@ -89,6 +94,7 @@ export function initializeDatabase() {
       _version INTEGER DEFAULT 1,
       _lastChangedAt INTEGER,
       _deleted BOOLEAN DEFAULT 0,
+      Synced INTEGER NOT NULL DEFAULT 0,
       FOREIGN KEY (InspectionDescriptionSk) REFERENCES InspectionDescription (InspectionDescriptionSk)
     );
 
@@ -106,7 +112,8 @@ export function initializeDatabase() {
       Body          TEXT NOT NULL DEFAULT '',
       Position      INTEGER NOT NULL DEFAULT 0,
       CreatedAt     TEXT NOT NULL,
-      UpdatedAt     TEXT NOT NULL
+      UpdatedAt     TEXT NOT NULL,
+      Synced        INTEGER NOT NULL DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS SmsStatus (
@@ -119,6 +126,7 @@ export function initializeDatabase() {
       _version      INTEGER DEFAULT 1,
       _lastChangedAt INTEGER,
       _deleted      BOOLEAN DEFAULT 0,
+      Synced        INTEGER NOT NULL DEFAULT 0,
       UNIQUE(InspectionSk, SmsTemplateSk),
       FOREIGN KEY (InspectionSk) REFERENCES Inspections (InspectionSk)
     );
@@ -145,7 +153,8 @@ export function initializeDatabase() {
       Name TEXT NOT NULL,
       Position INTEGER NOT NULL DEFAULT 0,
       CreatedAt TEXT NOT NULL,
-      UpdatedAt TEXT NOT NULL
+      UpdatedAt TEXT NOT NULL,
+      Synced INTEGER NOT NULL DEFAULT 0
     )`);
   } catch (_) {}
   try {
@@ -156,7 +165,8 @@ export function initializeDatabase() {
       Body          TEXT NOT NULL DEFAULT '',
       Position      INTEGER NOT NULL DEFAULT 0,
       CreatedAt     TEXT NOT NULL,
-      UpdatedAt     TEXT NOT NULL
+      UpdatedAt     TEXT NOT NULL,
+      Synced        INTEGER NOT NULL DEFAULT 0
     )`);
   } catch (_) {}
   try {
@@ -164,7 +174,8 @@ export function initializeDatabase() {
       OrgSk     TEXT PRIMARY KEY NOT NULL,
       OrgName   TEXT,
       UserId    TEXT NOT NULL,
-      CreatedAt INTEGER NOT NULL
+      CreatedAt INTEGER NOT NULL,
+      Synced    INTEGER NOT NULL DEFAULT 0
     )`);
   } catch (_) {}
   try {
@@ -184,10 +195,28 @@ export function initializeDatabase() {
       _version      INTEGER DEFAULT 1,
       _lastChangedAt INTEGER,
       _deleted      BOOLEAN DEFAULT 0,
+      Synced        INTEGER NOT NULL DEFAULT 0,
       UNIQUE(InspectionSk, SmsTemplateSk),
       FOREIGN KEY (InspectionSk) REFERENCES Inspections (InspectionSk)
     )`);
   } catch (_) {}
+
+  // Add Synced column to all sync-eligible tables
+  const syncTables = [
+    "Organizations",
+    "Users",
+    "Inspections",
+    "InspectionDescription",
+    "InspectionDetail",
+    "SectionTemplate",
+    "SmsTemplate",
+    "SmsStatus",
+  ];
+  for (const table of syncTables) {
+    try {
+      db.execSync(`ALTER TABLE ${table} ADD COLUMN Synced INTEGER NOT NULL DEFAULT 0`);
+    } catch (_) {}
+  }
 }
 
 export { db };

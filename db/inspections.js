@@ -66,7 +66,7 @@ export async function updateInspection(sk, data) {
         City = ?, State = ?, ZipCode = ?,
         ScheduledAt = ?, Phone = ?, Email = ?,
         Longitude = ?, Latitude = ?,
-        _version = _version + 1, _lastChangedAt = ?
+        _version = _version + 1, _lastChangedAt = ?, Synced = 0
       WHERE InspectionSk = ?`,
       [
         data.FullName ?? null,
@@ -96,7 +96,7 @@ export async function softDeleteInspection(sk) {
   try {
     const now = dayjs().valueOf();
     await db.runAsync(
-      `UPDATE Inspections SET _deleted = 1, _lastChangedAt = ? WHERE InspectionSk = ?`,
+      `UPDATE Inspections SET _deleted = 1, _lastChangedAt = ?, Synced = 0 WHERE InspectionSk = ?`,
       [now, sk],
     );
   } catch (e) {
