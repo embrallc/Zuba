@@ -3,6 +3,7 @@ import { theme } from "@theme";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  ActivityIndicator,
   Alert,
   Dimensions,
   FlatList,
@@ -26,6 +27,8 @@ import {
   updateDetail,
 } from "../db/inspectionForm";
 import { logError } from "../db/logs";
+import { useVoiceField } from "../hooks/useVoiceField";
+import { resolvePhotoUri } from "../utils/inspectionPhotos";
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 const PHOTO_HEIGHT = 200;
@@ -45,6 +48,16 @@ export default function PhotoNoteModal() {
 
   useEffect(() => {
     loadDetails();
+  }, []);
+
+  // Clear any in-flight debounced note saves when the modal closes. Without
+  // this, a pending setTimeout fires against unmounted state and may write a
+  // stale markup snapshot captured in the closure.
+  useEffect(() => {
+    return () => {
+      Object.values(saveTimers.current).forEach((t) => clearTimeout(t));
+      saveTimers.current = {};
+    };
   }, []);
 
   useEffect(() => {
@@ -67,12 +80,17 @@ export default function PhotoNoteModal() {
   async function loadDetails() {
     try {
       const rows = await getDetailsByDescription(sectionSk);
-      const detailList = rows.map((d) => ({
-        sk: d.InspectionDetailSk,
-        uri: d.PictureURI,
-        note: d.PictureNote ?? "",
-        markup: d.PictureMarkup ?? null,
-      }));
+      const detailList = await Promise.all(
+        rows.map(async (d) => ({
+          sk: d.InspectionDetailSk,
+          uri: await resolvePhotoUri({
+            localUri: d.LocalPictureURI,
+            cloudUri: d.CloudPictureURI,
+          }),
+          note: d.PictureNote ?? "",
+          markup: d.PictureMarkup ?? null,
+        })),
+      );
       setDetails(detailList);
 
       const notesMap = {};
@@ -152,6 +170,13 @@ export default function PhotoNoteModal() {
   const currentDetail = details[currentIndex];
   const currentNote = currentDetail ? (notes[currentDetail.sk] ?? "") : "";
 
+  // Voice dictation: the inspectionform owns the recognition session (its
+  // VoiceFab stays mounted while this modal is on top), so we just register
+  // the currently-displayed note as the target field.
+  const noteVoice = useVoiceField(currentNote, (v) =>
+    currentDetail && handleNoteChange(currentDetail.sk, v),
+  );
+
   return (
     <View style={styles.root}>
       {/* Backdrop — tap outside panel to dismiss */}
@@ -195,13 +220,7 @@ export default function PhotoNoteModal() {
               );
               setCurrentIndex(idx);
             }}
-            renderItem={({ item }) => (
-              <Image
-                source={{ uri: item.uri }}
-                style={styles.photo}
-                resizeMode="cover"
-              />
-            )}
+            renderItem={({ item }) => <PhotoSlide uri={item.uri} />}
           />
         )}
 
@@ -232,6 +251,7 @@ export default function PhotoNoteModal() {
           onChangeText={(v) =>
             currentDetail && handleNoteChange(currentDetail.sk, v)
           }
+          onFocus={noteVoice.onFocus}
           placeholder="Describe what this photo shows…"
           placeholderTextColor={theme.colors.textFine}
           multiline
@@ -250,6 +270,28 @@ export default function PhotoNoteModal() {
         canGoPrev={false}
         canGoNext={false}
       />
+    </View>
+  );
+}
+
+function PhotoSlide({ uri }) {
+  const [loading, setLoading] = useState(!!uri);
+  return (
+    <View style={styles.photo}>
+      {!!uri && (
+        <Image
+          source={{ uri }}
+          style={StyleSheet.absoluteFill}
+          resizeMode="cover"
+          onLoad={() => setLoading(false)}
+          onError={() => setLoading(false)}
+        />
+      )}
+      {loading && (
+        <View style={[StyleSheet.absoluteFillObject, styles.photoLoading]}>
+          <ActivityIndicator size="large" color={theme.colors.primary} />
+        </View>
+      )}
     </View>
   );
 }
@@ -280,6 +322,10 @@ const styles = StyleSheet.create({
     width: SCREEN_WIDTH,
     height: PHOTO_HEIGHT,
     backgroundColor: theme.colors.input,
+  },
+  photoLoading: {
+    alignItems: "center",
+    justifyContent: "center",
   },
   controlsRow: {
     flexDirection: "row",

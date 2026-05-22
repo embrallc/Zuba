@@ -1,7 +1,6 @@
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { theme } from "@theme";
 import dayjs from "dayjs";
-import * as FileSystem from "expo-file-system/legacy";
 import * as ImagePicker from "expo-image-picker";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { AnimatePresence, MotiView } from "moti";
@@ -24,13 +23,14 @@ import DraggableFlatList, {
 } from "react-native-draggable-flatlist";
 import { SafeAreaView } from "react-native-safe-area-context";
 import KeyboardToolbar from "../components/KeyboardToolbar";
+import VoiceFab from "../components/VoiceFab";
 import {
+  addInspectionPhoto,
   deleteDescription,
   deleteDetail,
   getDescriptionsByInspection,
   getDetailsByDescription,
   insertDescription,
-  insertDetail,
   updateDescription,
   updateSectionNotes,
   updateSectionPositions,
@@ -39,15 +39,15 @@ import {
 import { updateInspection } from "../db/inspections";
 import { logError } from "../db/logs";
 import { getSectionTemplates } from "../db/sectionTemplates";
+import { useVoiceField } from "../hooks/useVoiceField";
 import { useInspectionStore } from "../stores/useInspectionStore";
 import { useSettingsStore } from "../stores/useSettingsStore";
-
-const PHOTOS_DIR = `${FileSystem.documentDirectory}inspection_photos/`;
+import { resolvePhotoUri } from "../utils/inspectionPhotos";
 
 const SEVERITY = [
-  { key: "ok",       label: "OK",       color: "#16A34A", bg: "#DCFCE7" },
-  { key: "low",      label: "Low",      color: "#CA8A04", bg: "#FEF3C7" },
-  { key: "medium",   label: "Medium",   color: "#EA580C", bg: "#FFEDD5" },
+  { key: "ok", label: "OK", color: "#16A34A", bg: "#DCFCE7" },
+  { key: "low", label: "Low", color: "#CA8A04", bg: "#FEF3C7" },
+  { key: "medium", label: "Medium", color: "#EA580C", bg: "#FFEDD5" },
   { key: "critical", label: "Critical", color: "#DC2626", bg: "#FEE2E2" },
 ];
 
@@ -133,17 +133,23 @@ export default function InspectionFormScreen() {
           const rawDetails = await getDetailsByDescription(
             d.InspectionDescriptionSk,
           );
+          const details = await Promise.all(
+            rawDetails.map(async (det) => ({
+              sk: det.InspectionDetailSk,
+              uri: await resolvePhotoUri({
+                localUri: det.LocalPictureURI,
+                cloudUri: det.CloudPictureURI,
+              }),
+              note: det.PictureNote ?? "",
+              markup: det.PictureMarkup ?? null,
+            })),
+          );
           return {
             sk: d.InspectionDescriptionSk,
             description: d.Description ?? "",
             notes: d.Notes ?? "",
             severity: d.SeverityLevel ?? null,
-            details: rawDetails.map((det) => ({
-              sk: det.InspectionDetailSk,
-              uri: det.PictureURI,
-              note: det.PictureNote ?? "",
-              markup: det.PictureMarkup ?? null,
-            })),
+            details,
           };
         }),
       );
@@ -170,6 +176,15 @@ export default function InspectionFormScreen() {
 
   // ── Auto-save helpers ──────────────────────────────────────────────────
   const saveTimers = useRef({});
+
+  // Cancel any pending debounced saves when the form unmounts so we don't
+  // fire setSaveState on a torn-down component or push a stale snapshot.
+  useEffect(() => {
+    return () => {
+      Object.values(saveTimers.current).forEach((t) => clearTimeout(t));
+      saveTimers.current = {};
+    };
+  }, []);
 
   function flashSave(asyncFn) {
     setSaveState("saving");
@@ -200,6 +215,9 @@ export default function InspectionFormScreen() {
       updateInStore({ ...inspection, ...updated });
     });
   }
+
+  // ── Voice dictation: Summary ────────────────────────────────────────────
+  const summaryVoice = useVoiceField(summary, handleSummaryChange);
 
   // ── Position sync ──────────────────────────────────────────────────────
   async function syncPositions(secs) {
@@ -310,14 +328,21 @@ export default function InspectionFormScreen() {
   }
 
   // ── Photo helpers ──────────────────────────────────────────────────────
-  async function appendPhoto(sectionSk, sourceUri) {
+  // Photo flow: save to Photos library, upload to Storage, insert detail row.
+  // No app-sandbox copy is kept — see db/inspectionForm.addInspectionPhoto.
+  async function appendPhoto(sectionSk, sourceUri, assetId) {
     try {
-      await FileSystem.makeDirectoryAsync(PHOTOS_DIR, { intermediates: true });
-      const dest = `${PHOTOS_DIR}${Date.now()}_${Math.random()
-        .toString(36)
-        .slice(2)}.jpg`;
-      await FileSystem.copyAsync({ from: sourceUri, to: dest });
-      const newDetail = await insertDetail(sectionSk, { pictureURI: dest });
+      if (!sourceUri && !assetId) return;
+      const newDetail = await addInspectionPhoto({
+        descriptionSk: sectionSk,
+        sourceUri,
+        assetId,
+      });
+      if (!newDetail) return;
+      const uri = await resolvePhotoUri({
+        localUri: newDetail.LocalPictureURI,
+        cloudUri: newDetail.CloudPictureURI,
+      });
       setSections((prev) =>
         prev.map((s) =>
           s.sk === sectionSk
@@ -327,7 +352,7 @@ export default function InspectionFormScreen() {
                   ...s.details,
                   {
                     sk: newDetail.InspectionDetailSk,
-                    uri: dest,
+                    uri,
                     note: "",
                     markup: null,
                   },
@@ -359,7 +384,9 @@ export default function InspectionFormScreen() {
       });
       if (result.canceled || !result.assets?.length) return;
       for (const asset of result.assets) {
-        await appendPhoto(sectionSk, asset.uri);
+        // assetId is populated when the user has full Photos access; falls back
+        // to sourceUri so addInspectionPhoto can save into the library itself.
+        await appendPhoto(sectionSk, asset.uri, asset.assetId);
       }
     } catch (e) {
       logError(
@@ -438,9 +465,7 @@ export default function InspectionFormScreen() {
   function renderSeparator({ leadingItem }) {
     if (isDragging) return null;
     const leadingIndex = sections.findIndex((s) => s.sk === leadingItem.sk);
-    return (
-      <InsertSeparator onPress={() => handleInsertAt(leadingIndex + 1)} />
-    );
+    return <InsertSeparator onPress={() => handleInsertAt(leadingIndex + 1)} />;
   }
 
   const summaryHeader = (
@@ -450,7 +475,10 @@ export default function InspectionFormScreen() {
         ref={(r) => {
           inputRefs.current["summary"] = r;
         }}
-        onFocus={() => setFocusedField("summary")}
+        onFocus={() => {
+          setFocusedField("summary");
+          summaryVoice.onFocus();
+        }}
         style={[styles.input, styles.textArea]}
         value={summary}
         onChangeText={handleSummaryChange}
@@ -544,6 +572,11 @@ export default function InspectionFormScreen() {
         keyboardShouldPersistTaps="handled"
       />
 
+      <VoiceFab
+        keyboardVisible={keyboardVisible}
+        keyboardHeight={keyboardHeight}
+      />
+
       <KeyboardToolbar
         visible={keyboardVisible}
         keyboardHeight={keyboardHeight}
@@ -596,12 +629,22 @@ function SectionCard({
 }) {
   const severityColor = SEVERITY.find((s) => s.key === section.severity)?.color;
 
+  const descriptionVoice = useVoiceField(section.description, (v) =>
+    onDescriptionChange(section.sk, v),
+  );
+  const notesVoice = useVoiceField(section.notes, (v) =>
+    onNotesChange(section.sk, v),
+  );
+
   return (
     <View
       style={[
         styles.section,
         isActive && styles.sectionActive,
-        { borderLeftWidth: 4, borderLeftColor: severityColor ?? theme.colors.input },
+        {
+          borderLeftWidth: 4,
+          borderLeftColor: severityColor ?? theme.colors.input,
+        },
       ]}
     >
       <View style={styles.sectionHeader}>
@@ -621,7 +664,10 @@ function SectionCard({
           ref={(r) => {
             inputRefs.current[`desc_${section.sk}`] = r;
           }}
-          onFocus={() => setFocusedField(`desc_${section.sk}`)}
+          onFocus={() => {
+            setFocusedField(`desc_${section.sk}`);
+            descriptionVoice.onFocus();
+          }}
           style={styles.sectionNameInput}
           value={section.description}
           onChangeText={(v) => onDescriptionChange(section.sk, v)}
@@ -650,7 +696,10 @@ function SectionCard({
         ref={(r) => {
           inputRefs.current[`notes_${section.sk}`] = r;
         }}
-        onFocus={() => setFocusedField(`notes_${section.sk}`)}
+        onFocus={() => {
+          setFocusedField(`notes_${section.sk}`);
+          notesVoice.onFocus();
+        }}
         style={[styles.input, styles.textArea]}
         value={section.notes}
         onChangeText={(v) => onNotesChange(section.sk, v)}
@@ -668,18 +717,10 @@ function SectionCard({
       >
         {section.details.map((detail) => (
           <View key={detail.sk} style={styles.thumbnailContainer}>
-            <TouchableOpacity
+            <Thumbnail
+              detail={detail}
               onPress={() => onOpenPhoto(detail, section.sk)}
-              activeOpacity={0.8}
-              style={styles.thumbnailWrapper}
-            >
-              <Image
-                source={{ uri: detail.uri }}
-                style={styles.thumbnail}
-                resizeMode="cover"
-              />
-              {!!detail.note && <View style={styles.thumbnailDot} />}
-            </TouchableOpacity>
+            />
 
             <TouchableOpacity
               style={styles.thumbnailDelete}
@@ -718,6 +759,34 @@ function SectionCard({
   );
 }
 
+// ── Thumbnail ──────────────────────────────────────────────────────────────
+function Thumbnail({ detail, onPress }) {
+  const [loading, setLoading] = useState(!!detail.uri);
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      activeOpacity={0.8}
+      style={styles.thumbnailWrapper}
+    >
+      {!!detail.uri && (
+        <Image
+          source={{ uri: detail.uri }}
+          style={styles.thumbnail}
+          resizeMode="cover"
+          onLoad={() => setLoading(false)}
+          onError={() => setLoading(false)}
+        />
+      )}
+      {loading && (
+        <View style={[StyleSheet.absoluteFillObject, styles.thumbnailLoading]}>
+          <ActivityIndicator size="small" color={theme.colors.primary} />
+        </View>
+      )}
+      {!!detail.note && <View style={styles.thumbnailDot} />}
+    </TouchableOpacity>
+  );
+}
+
 // ── SeverityPicker ─────────────────────────────────────────────────────────
 function SeverityPicker({ value, onChange }) {
   return (
@@ -739,7 +808,11 @@ function SeverityPicker({ value, onChange }) {
             <View
               style={[
                 severityStyles.dot,
-                { backgroundColor: selected ? "rgba(255,255,255,0.85)" : s.color },
+                {
+                  backgroundColor: selected
+                    ? "rgba(255,255,255,0.85)"
+                    : s.color,
+                },
               ]}
             />
             <Text
@@ -907,6 +980,11 @@ const styles = StyleSheet.create({
     height: THUMB,
     borderRadius: theme.layout.borderRadius.s,
     overflow: "hidden",
+    backgroundColor: theme.colors.input,
+  },
+  thumbnailLoading: {
+    alignItems: "center",
+    justifyContent: "center",
   },
   thumbnail: {
     width: THUMB,

@@ -104,3 +104,30 @@ export async function softDeleteInspection(sk) {
     throw e;
   }
 }
+
+// Hard-delete an inspection and every record that hangs off it from local
+// SQLite. Used by the "reassign away from me" path so the inspection leaves
+// my Day/Week view immediately without waiting for the next syncAll cycle.
+// Also blocks a subsequent push from accidentally undoing the cloud reassign
+// by upserting the stale local row.
+//
+// FK constraints aren't ON DELETE CASCADE in the local schema, so children
+// must go first.
+export async function deleteInspectionLocal(sk) {
+  try {
+    await db.runAsync(
+      `DELETE FROM InspectionDetail WHERE InspectionDescriptionSk IN
+       (SELECT InspectionDescriptionSk FROM InspectionDescription WHERE InspectionSk = ?)`,
+      [sk],
+    );
+    await db.runAsync(
+      `DELETE FROM InspectionDescription WHERE InspectionSk = ?`,
+      [sk],
+    );
+    await db.runAsync(`DELETE FROM SmsStatus WHERE InspectionSk = ?`, [sk]);
+    await db.runAsync(`DELETE FROM Inspections WHERE InspectionSk = ?`, [sk]);
+  } catch (e) {
+    logError(e, `db/inspections.deleteInspectionLocal sk=${sk}`);
+    throw e;
+  }
+}

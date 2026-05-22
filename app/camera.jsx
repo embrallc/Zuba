@@ -1,8 +1,6 @@
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { theme } from "@theme";
 import { CameraView, useCameraPermissions } from "expo-camera";
-import * as FileSystem from "expo-file-system/legacy";
-import * as MediaLibrary from "expo-media-library";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useRef, useState } from "react";
 import {
@@ -15,20 +13,20 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { insertDetail } from "../db/inspectionForm";
+import { addInspectionPhoto } from "../db/inspectionForm";
 import { logError } from "../db/logs";
-
-const PHOTOS_DIR = `${FileSystem.documentDirectory}inspection_photos/`;
+import { saveToPhotoLibrary } from "../utils/inspectionPhotos";
 
 export default function CameraScreen() {
   const router = useRouter();
   const { sectionSk } = useLocalSearchParams();
   const [permission, requestPermission] = useCameraPermissions();
-  const [mediaPermission, requestMediaPermission] = MediaLibrary.usePermissions();
   const cameraRef = useRef(null);
 
-  // URIs held in memory — only temp paths from the camera, displayed immediately
-  const [capturedUris, setCapturedUris] = useState([]);
+  // Each entry: { tempUri, assetId }. The temp URI drives the thumbnail strip
+  // (immediate, no MediaLibrary round-trip). assetId is the persistent handle
+  // we pass to addInspectionPhoto in handleDone — no app-sandbox copy is made.
+  const [captured, setCaptured] = useState([]);
   const [capturing, setCapturing] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -40,15 +38,8 @@ export default function CameraScreen() {
         quality: 0.85,
         skipProcessing: true,
       });
-      // Save to device photo library so it appears in albums
-      let perm = mediaPermission;
-      if (!perm?.granted) {
-        perm = await requestMediaPermission();
-      }
-      if (perm?.granted) {
-        await MediaLibrary.saveToLibraryAsync(photo.uri);
-      }
-      setCapturedUris((prev) => [photo.uri, ...prev]);
+      const assetId = await saveToPhotoLibrary(photo.uri);
+      setCaptured((prev) => [{ tempUri: photo.uri, assetId }, ...prev]);
     } catch (e) {
       logError(e, "CameraScreen.handleCapture");
     } finally {
@@ -57,19 +48,20 @@ export default function CameraScreen() {
   }
 
   async function handleDone() {
-    if (capturedUris.length === 0) {
+    if (captured.length === 0) {
       router.back();
       return;
     }
     setSaving(true);
     try {
-      // Create permanent dir once
-      await FileSystem.makeDirectoryAsync(PHOTOS_DIR, { intermediates: true });
-      // Copy each photo to permanent storage then write DB record
-      for (let i = 0; i < capturedUris.length; i++) {
-        const dest = `${PHOTOS_DIR}${Date.now()}_${i}.jpg`;
-        await FileSystem.copyAsync({ from: capturedUris[i], to: dest });
-        await insertDetail(sectionSk, { pictureURI: dest });
+      // Reverse so DB insertion order matches capture order (most recent last).
+      const ordered = [...captured].reverse();
+      for (const item of ordered) {
+        await addInspectionPhoto({
+          descriptionSk: sectionSk,
+          sourceUri: item.tempUri,
+          assetId: item.assetId,
+        });
       }
     } catch (e) {
       logError(e, "CameraScreen.handleDone");
@@ -116,7 +108,7 @@ export default function CameraScreen() {
           <MaterialCommunityIcons name="close" size={26} color="#fff" />
         </TouchableOpacity>
 
-        {capturedUris.length > 0 && (
+        {captured.length > 0 && (
           <TouchableOpacity
             onPress={handleDone}
             disabled={saving || capturing}
@@ -125,25 +117,23 @@ export default function CameraScreen() {
             {saving ? (
               <ActivityIndicator color="#fff" size="small" />
             ) : (
-              <Text style={styles.doneBtnText}>
-                Done ({capturedUris.length})
-              </Text>
+              <Text style={styles.doneBtnText}>Done ({captured.length})</Text>
             )}
           </TouchableOpacity>
         )}
       </SafeAreaView>
 
       {/* Thumbnail strip — most recent on left */}
-      {capturedUris.length > 0 && (
+      {captured.length > 0 && (
         <View style={styles.stripContainer}>
           <FlatList
             horizontal
-            data={capturedUris}
-            keyExtractor={(uri, i) => `${uri}-${i}`}
+            data={captured}
+            keyExtractor={(item, i) => `${item.tempUri}-${i}`}
             showsHorizontalScrollIndicator={false}
             contentContainerStyle={styles.stripContent}
             renderItem={({ item }) => (
-              <Image source={{ uri: item }} style={styles.stripThumb} />
+              <Image source={{ uri: item.tempUri }} style={styles.stripThumb} />
             )}
           />
         </View>

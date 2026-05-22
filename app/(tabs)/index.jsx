@@ -1,5 +1,6 @@
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { theme } from "@theme";
+import dayjs from "dayjs";
 import { useFocusEffect, useRouter } from "expo-router";
 import { MotiView } from "moti";
 import { useCallback, useMemo, useState } from "react";
@@ -22,15 +23,14 @@ import { useMapStore } from "../../stores/useMapStore";
 
 const FAB_SIZE = (theme?.layout?.iconSize?.l ?? 28) * 2;
 
-function getTodayPrefix() {
-  const d = new Date();
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd}`;
-}
-
-const SEARCH_FIELDS = ["FullName", "AddressLine1", "AddressLine2", "City", "State", "ZipCode"];
+const SEARCH_FIELDS = [
+  "FullName",
+  "AddressLine1",
+  "AddressLine2",
+  "City",
+  "State",
+  "ZipCode",
+];
 
 export default function MyDayScreen() {
   const [pulseKey, setPulseKey] = useState(0);
@@ -48,10 +48,15 @@ export default function MyDayScreen() {
   const openGlobal = useMapStore((s) => s.openGlobal);
 
   const todayInspections = useMemo(() => {
-    const today = getTodayPrefix();
+    const today = dayjs().format("YYYY-MM-DD");
     return sortedIds
       .map((id) => inspections[id])
-      .filter((i) => i && i.ScheduledAt?.startsWith(today));
+      .filter(
+        (i) =>
+          i &&
+          i.ScheduledAt &&
+          dayjs(i.ScheduledAt).format("YYYY-MM-DD") === today,
+      );
   }, [sortedIds, inspections]);
 
   const filtered = useMemo(() => {

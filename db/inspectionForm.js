@@ -1,4 +1,5 @@
 import * as Crypto from "expo-crypto";
+import { saveToPhotoLibrary } from "../utils/inspectionPhotos";
 import { db } from "./index";
 import { logError } from "./logs";
 
@@ -21,7 +22,12 @@ export async function getDescriptionsByInspection(inspectionSk) {
   }
 }
 
-export async function insertDescription(inspectionSk, description = "", position = 0, severity = null) {
+export async function insertDescription(
+  inspectionSk,
+  description = "",
+  position = 0,
+  severity = null,
+) {
   try {
     const sk = Crypto.randomUUID();
     const now = Date.now();
@@ -103,13 +109,20 @@ export async function updateDescription(sk, description) {
 export async function deleteDescription(sk) {
   try {
     const now = Date.now();
-    // Soft-delete section and all its pictures in one transaction
-    await db.execAsync(`
-      UPDATE InspectionDescription SET _deleted = 1, Synced = 0, _lastChangedAt = ${now}
-        WHERE InspectionDescriptionSk = '${sk}';
-      UPDATE InspectionDetail SET _deleted = 1, Synced = 0, _lastChangedAt = ${now}
-        WHERE InspectionDescriptionSk = '${sk}';
-    `);
+    // Soft-delete the section and every photo attached to it. Two parametered
+    // statements so the sk value never participates in SQL string assembly.
+    await db.runAsync(
+      `UPDATE InspectionDescription
+         SET _deleted = 1, Synced = 0, _lastChangedAt = ?
+       WHERE InspectionDescriptionSk = ?`,
+      [now, sk],
+    );
+    await db.runAsync(
+      `UPDATE InspectionDetail
+         SET _deleted = 1, Synced = 0, _lastChangedAt = ?
+       WHERE InspectionDescriptionSk = ?`,
+      [now, sk],
+    );
   } catch (e) {
     logError(e, `db/inspectionForm.deleteDescription sk=${sk}`);
     throw e;
@@ -135,26 +148,80 @@ export async function getDetailsByDescription(descriptionSk) {
   }
 }
 
-export async function insertDetail(descriptionSk, { pictureURI }) {
+export async function insertDetail(
+  descriptionSk,
+  { sk: providedSk, localPictureURI, cloudPictureURI } = {},
+) {
   try {
-    const sk = Crypto.randomUUID();
+    const sk = providedSk ?? Crypto.randomUUID();
     const now = Date.now();
     await db.runAsync(
       `INSERT INTO InspectionDetail
-         (InspectionDetailSk, InspectionDescriptionSk, PictureURI, PictureNote, PictureMarkup, _version, _lastChangedAt, _deleted)
-       VALUES (?, ?, ?, '', NULL, 1, ?, 0)`,
-      [sk, descriptionSk, pictureURI, now],
+         (InspectionDetailSk, InspectionDescriptionSk, LocalPictureURI, CloudPictureURI, PictureNote, PictureMarkup, _version, _lastChangedAt, _deleted)
+       VALUES (?, ?, ?, ?, '', NULL, 1, ?, 0)`,
+      [
+        sk,
+        descriptionSk,
+        localPictureURI ?? null,
+        cloudPictureURI ?? null,
+        now,
+      ],
     );
     return {
       InspectionDetailSk: sk,
       InspectionDescriptionSk: descriptionSk,
-      PictureURI: pictureURI,
+      LocalPictureURI: localPictureURI ?? null,
+      CloudPictureURI: cloudPictureURI ?? null,
       PictureNote: "",
       PictureMarkup: null,
     };
   } catch (e) {
     logError(e, `db/inspectionForm.insertDetail descSk=${descriptionSk}`);
     throw e;
+  }
+}
+
+// User just added a photo. Save into the user's Photos library so they own
+// it, then insert the detail row with the asset id and Synced=0. The cloud
+// upload is deferred to the next syncAll — pushInspectionDetails will see
+// LocalPictureURI set with no CloudPictureURI and upload it then.
+//
+// Pass `assetId` if the caller already has one (e.g. ImagePicker returns it
+// when a photo is selected from the library, or the in-app camera saved
+// during capture) to skip the library save step.
+export async function addInspectionPhoto({
+  descriptionSk,
+  sourceUri,
+  assetId: providedAssetId,
+}) {
+  try {
+    if (!descriptionSk) return null;
+    if (!sourceUri && !providedAssetId) return null;
+
+    const assetId =
+      providedAssetId ??
+      (sourceUri ? await saveToPhotoLibrary(sourceUri) : null);
+
+    return await insertDetail(descriptionSk, {
+      localPictureURI: assetId,
+    });
+  } catch (e) {
+    logError(e, `db/inspectionForm.addInspectionPhoto descSk=${descriptionSk}`);
+    return null;
+  }
+}
+
+// Sets CloudPictureURI after a successful Storage upload. Does not touch
+// Synced — the caller (sync.js) handles that as part of the row push.
+export async function setCloudPictureURI(sk, cloudPictureURI) {
+  try {
+    if (!sk) return;
+    await db.runAsync(
+      `UPDATE InspectionDetail SET CloudPictureURI = ? WHERE InspectionDetailSk = ?`,
+      [cloudPictureURI ?? null, sk],
+    );
+  } catch (e) {
+    logError(e, `db/inspectionForm.setCloudPictureURI sk=${sk}`);
   }
 }
 

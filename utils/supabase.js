@@ -13,7 +13,11 @@ const SecureStoreAdapter = {
         )
       );
       return chunks.join("");
-    } catch (_) {
+    } catch (e) {
+      // Returning null here causes Supabase to treat the user as logged
+      // out — surface the reason so we can tell whether it's a real corruption
+      // or a transient SecureStore error.
+      console.warn(`[SecureStore] getItem failed for key=${key}:`, e?.message);
       return null;
     }
   },
@@ -41,16 +45,22 @@ const SecureStoreAdapter = {
   },
 
   removeItem: async (key) => {
-    const chunkCount = await SecureStore.getItemAsync(`${key}.chunks`);
-    if (chunkCount !== null) {
-      await Promise.all(
-        Array.from({ length: parseInt(chunkCount, 10) }, (_, i) =>
-          SecureStore.deleteItemAsync(`${key}.chunk.${i}`)
-        )
-      );
-      await SecureStore.deleteItemAsync(`${key}.chunks`);
+    try {
+      const chunkCount = await SecureStore.getItemAsync(`${key}.chunks`);
+      if (chunkCount !== null) {
+        // Tolerate individual chunk-delete failures so one corrupt key can't
+        // leave the rest behind.
+        await Promise.all(
+          Array.from({ length: parseInt(chunkCount, 10) }, (_, i) =>
+            SecureStore.deleteItemAsync(`${key}.chunk.${i}`).catch(() => {}),
+          ),
+        );
+        await SecureStore.deleteItemAsync(`${key}.chunks`).catch(() => {});
+      }
+      await SecureStore.deleteItemAsync(key).catch(() => {});
+    } catch (e) {
+      console.warn(`[SecureStore] removeItem failed for key=${key}:`, e?.message);
     }
-    await SecureStore.deleteItemAsync(key).catch(() => {});
   },
 };
 

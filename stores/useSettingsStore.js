@@ -14,6 +14,13 @@ export const useSettingsStore = create((set) => ({
   showWeekends: false,
   cloudStorageEnabled: false,
   userSk: null,
+  // Cached from session.user_metadata at login. Authoritative copy lives on
+  // the cloud users row + auth.users.raw_user_meta_data; this is just for
+  // client-side UX gating (e.g. showing the Manage Users settings row).
+  userProfile: null,
+  orgSk: null,
+  fname: null,
+  lname: null,
   apptLengthMinutes: 60,
   calendarStartHour: 7,
 
@@ -78,5 +85,21 @@ export const useSettingsStore = create((set) => ({
 
   setUserSk: (sk) => {
     set({ userSk: sk });
+  },
+
+  setUserProfile: (val) => {
+    set({ userProfile: val });
+  },
+
+  setOrgSk: (val) => {
+    set({ orgSk: val });
+  },
+
+  setFname: (val) => {
+    set({ fname: val });
+  },
+
+  setLname: (val) => {
+    set({ lname: val });
   },
 }));

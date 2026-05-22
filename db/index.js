@@ -1,9 +1,30 @@
 import * as SQLite from "expo-sqlite";
 
-const db = SQLite.openDatabaseSync("clientmanagement.db");
+let _db = null;
+let _currentDbName = null;
 
-export function initializeDatabase() {
-  db.execSync(`
+// Proxy delegates every property access to the live _db instance so callers
+// never need to update their import after initializeDatabase() fires.
+export const db = new Proxy(
+  {},
+  {
+    get(_, prop) {
+      const val = _db?.[prop];
+      return typeof val === "function" ? val.bind(_db) : val;
+    },
+  },
+);
+
+export function getCurrentDbName() {
+  return _currentDbName;
+}
+
+export function initializeDatabase(userId) {
+  const dbName = `cm_${userId}.db`;
+  if (_currentDbName === dbName) return; // already open for this user
+  _currentDbName = dbName;
+  _db = SQLite.openDatabaseSync(dbName);
+  _db.execSync(`
     PRAGMA journal_mode = WAL;
     PRAGMA foreign_keys = ON;
 
@@ -41,7 +62,7 @@ export function initializeDatabase() {
       lname       TEXT,
       OrgSk       TEXT NOT NULL,
       Role        TEXT CHECK(Role IN ('admin', 'user')),
-      UserProfile TEXT CHECK(UserProfile IN ('owner', 'member')),
+      UserProfile TEXT,
       _version INTEGER DEFAULT 1,
       _lastChangedAt INTEGER,
       _deleted BOOLEAN DEFAULT 0,
@@ -88,7 +109,8 @@ export function initializeDatabase() {
     CREATE TABLE IF NOT EXISTS InspectionDetail (
       InspectionDetailSk TEXT PRIMARY KEY NOT NULL,
       InspectionDescriptionSk TEXT NOT NULL,
-      PictureURI TEXT,
+      LocalPictureURI TEXT,
+      CloudPictureURI TEXT,
       PictureNote TEXT,
       PictureMarkup TEXT,
       _version INTEGER DEFAULT 1,
@@ -134,20 +156,20 @@ export function initializeDatabase() {
 
   // Patch existing databases — CREATE TABLE IF NOT EXISTS won't modify them
   try {
-    db.execSync(
+    _db.execSync(
       `ALTER TABLE InspectionDescription ADD COLUMN Position INTEGER DEFAULT 0`,
     );
   } catch (_) {}
   try {
-    db.execSync(`ALTER TABLE InspectionDescription ADD COLUMN Notes TEXT`);
+    _db.execSync(`ALTER TABLE InspectionDescription ADD COLUMN Notes TEXT`);
   } catch (_) {}
   try {
-    db.execSync(
+    _db.execSync(
       `ALTER TABLE InspectionDescription ADD COLUMN SeverityLevel TEXT DEFAULT NULL`,
     );
   } catch (_) {}
   try {
-    db.execSync(`CREATE TABLE IF NOT EXISTS SectionTemplate (
+    _db.execSync(`CREATE TABLE IF NOT EXISTS SectionTemplate (
       SectionTemplateSk TEXT PRIMARY KEY NOT NULL,
       UserSk TEXT NOT NULL,
       Name TEXT NOT NULL,
@@ -158,7 +180,7 @@ export function initializeDatabase() {
     )`);
   } catch (_) {}
   try {
-    db.execSync(`CREATE TABLE IF NOT EXISTS SmsTemplate (
+    _db.execSync(`CREATE TABLE IF NOT EXISTS SmsTemplate (
       SmsTemplateSk TEXT PRIMARY KEY NOT NULL,
       UserSk        TEXT NOT NULL,
       Name          TEXT NOT NULL DEFAULT '',
@@ -170,7 +192,7 @@ export function initializeDatabase() {
     )`);
   } catch (_) {}
   try {
-    db.execSync(`CREATE TABLE IF NOT EXISTS Organizations (
+    _db.execSync(`CREATE TABLE IF NOT EXISTS Organizations (
       OrgSk     TEXT PRIMARY KEY NOT NULL,
       OrgName   TEXT,
       UserId    TEXT NOT NULL,
@@ -179,13 +201,61 @@ export function initializeDatabase() {
     )`);
   } catch (_) {}
   try {
-    db.execSync(`ALTER TABLE Users ADD COLUMN UserProfile TEXT CHECK(UserProfile IN ('owner', 'member'))`);
+    _db.execSync(`ALTER TABLE Users ADD COLUMN UserProfile TEXT`);
+  } catch (_) {}
+
+  // One-time: pre-existing local DBs were created with
+  // CHECK(UserProfile IN ('owner', 'member')) which now rejects 'admin'.
+  // SQLite can't ALTER a CHECK constraint, so rebuild the table without it.
+  try {
+    const row = _db.getFirstSync(
+      `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'Users'`,
+    );
+    if ((row?.sql ?? "").includes("CHECK(UserProfile IN")) {
+      _db.execSync(`
+        PRAGMA foreign_keys = OFF;
+        BEGIN TRANSACTION;
+        CREATE TABLE Users_new (
+          UserSk      TEXT PRIMARY KEY NOT NULL,
+          UserId      TEXT UNIQUE,
+          fname       TEXT,
+          lname       TEXT,
+          OrgSk       TEXT NOT NULL,
+          Role        TEXT CHECK(Role IN ('admin', 'user')),
+          UserProfile TEXT,
+          _version INTEGER DEFAULT 1,
+          _lastChangedAt INTEGER,
+          _deleted BOOLEAN DEFAULT 0,
+          Synced INTEGER NOT NULL DEFAULT 0
+        );
+        INSERT INTO Users_new (UserSk, UserId, fname, lname, OrgSk, Role, UserProfile, _version, _lastChangedAt, _deleted, Synced)
+          SELECT UserSk, UserId, fname, lname, OrgSk, Role, UserProfile, _version, _lastChangedAt, _deleted, Synced FROM Users;
+        DROP TABLE Users;
+        ALTER TABLE Users_new RENAME TO Users;
+        COMMIT;
+        PRAGMA foreign_keys = ON;
+      `);
+    }
+  } catch (e) {
+    console.warn("[db] UserProfile CHECK rebuild skipped:", e?.message);
+  }
+  try {
+    _db.execSync(
+      `ALTER TABLE Inspections ADD COLUMN Status TEXT DEFAULT 'OPEN'`,
+    );
   } catch (_) {}
   try {
-    db.execSync(`ALTER TABLE Inspections ADD COLUMN Status TEXT DEFAULT 'OPEN'`);
+    _db.execSync(
+      `ALTER TABLE InspectionDetail RENAME COLUMN PictureURI TO LocalPictureURI`,
+    );
   } catch (_) {}
   try {
-    db.execSync(`CREATE TABLE IF NOT EXISTS SmsStatus (
+    _db.execSync(
+      `ALTER TABLE InspectionDetail ADD COLUMN CloudPictureURI TEXT`,
+    );
+  } catch (_) {}
+  try {
+    _db.execSync(`CREATE TABLE IF NOT EXISTS SmsStatus (
       SmsStatusSk   TEXT PRIMARY KEY NOT NULL,
       UserSk        TEXT NOT NULL,
       InspectionSk  TEXT NOT NULL,
@@ -214,10 +284,9 @@ export function initializeDatabase() {
   ];
   for (const table of syncTables) {
     try {
-      db.execSync(`ALTER TABLE ${table} ADD COLUMN Synced INTEGER NOT NULL DEFAULT 0`);
+      _db.execSync(
+        `ALTER TABLE ${table} ADD COLUMN Synced INTEGER NOT NULL DEFAULT 0`,
+      );
     } catch (_) {}
   }
 }
-
-export { db };
-

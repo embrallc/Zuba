@@ -1,5 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { db } from "./index";
+import * as FileSystem from "expo-file-system";
+import { db, getCurrentDbName } from "./index";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Raw query runner — accepts any SQL string and optional params array.
@@ -27,20 +28,48 @@ export async function devQuery(sql, params = []) {
 export async function wipeDatabase() {
   try {
     console.log("\n── wipeDatabase ──────────────────────");
-    db.execSync(`
-      DELETE FROM SmsStatus;
-      DELETE FROM SmsTemplate;
-      DELETE FROM InspectionDetail;
-      DELETE FROM InspectionDescription;
-      DELETE FROM Inspections;
-      DELETE FROM SectionTemplate;
-      DELETE FROM Users;
-      DELETE FROM Organizations;
-      DELETE FROM AppLogs;
-      DELETE FROM DayCache;
-    `);
+
+    // Clear every table in the current user's DB (only if DB is open)
+    if (getCurrentDbName()) {
+      db.execSync(`
+        DELETE FROM SmsStatus;
+        DELETE FROM SmsTemplate;
+        DELETE FROM InspectionDetail;
+        DELETE FROM InspectionDescription;
+        DELETE FROM Inspections;
+        DELETE FROM SectionTemplate;
+        DELETE FROM Users;
+        DELETE FROM Organizations;
+        DELETE FROM AppLogs;
+        DELETE FROM DayCache;
+      `);
+    }
     await AsyncStorage.removeItem("user_sk");
-    console.log("All tables cleared and user_sk removed.");
+
+    // Delete all other per-user DB files (cm_*.db) from the SQLite directory
+    const sqliteDir = `${FileSystem.documentDirectory}SQLite/`;
+    const currentName = getCurrentDbName();
+    try {
+      const files = await FileSystem.readDirectoryAsync(sqliteDir);
+      const others = files.filter(
+        (f) => f.startsWith("cm_") && f.endsWith(".db") && f !== currentName,
+      );
+      for (const file of others) {
+        await FileSystem.deleteAsync(`${sqliteDir}${file}`, {
+          idempotent: true,
+        });
+        await FileSystem.deleteAsync(`${sqliteDir}${file}-wal`, {
+          idempotent: true,
+        });
+        await FileSystem.deleteAsync(`${sqliteDir}${file}-shm`, {
+          idempotent: true,
+        });
+      }
+      console.log(`Tables cleared. Removed ${others.length} other DB file(s).`);
+    } catch {
+      console.log("Tables cleared (SQLite dir not readable or no other DBs).");
+    }
+
     console.log("──────────────────────────────────────\n");
   } catch (e) {
     console.error("── wipeDatabase ERROR ────────────────", e.message);

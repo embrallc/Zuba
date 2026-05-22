@@ -1,7 +1,9 @@
+import dayjs from 'dayjs';
 import { useInspectionStore } from '../stores/useInspectionStore';
 import { supabase } from './supabase';
 import { db } from '../db/index';
 import { logError } from '../db/logs';
+import { uploadInspectionPhoto } from './inspectionPhotos';
 
 function cloudInspectionToStoreObj(r) {
   return {
@@ -35,183 +37,275 @@ async function pushInspections(userId) {
   const rows = db.getAllSync(`SELECT * FROM Inspections WHERE Synced = 0`);
   if (!rows.length) return;
 
-  const { error } = await supabase.from('inspections').upsert(
-    rows.map(r => ({
-      inspection_sk:    r.InspectionSk,
-      user_id:          userId,
-      full_name:        r.FullName ?? null,
-      summary:          r.Summary ?? null,
-      address_line1:    r.AddressLine1 ?? null,
-      address_line2:    r.AddressLine2 ?? null,
-      city:             r.City ?? null,
-      state:            r.State ?? null,
-      zip_code:         r.ZipCode ?? null,
-      scheduled_at:     r.ScheduledAt ?? null,
-      phone:            r.Phone ?? null,
-      email:            r.Email ?? null,
-      longitude:        r.Longitude ?? null,
-      latitude:         r.Latitude ?? null,
-      status:           r.Status ?? 'OPEN',
-      _version:         r._version ?? 1,
-      _last_changed_at: r._lastChangedAt ?? null,
-      _deleted:         !!r._deleted,
-    })),
-    { onConflict: 'inspection_sk' },
-  );
-  if (error) throw error;
-
-  const ph = rows.map(() => '?').join(',');
-  await db.runAsync(
-    `UPDATE Inspections SET Synced = 1 WHERE InspectionSk IN (${ph})`,
-    rows.map(r => r.InspectionSk),
-  );
+  // Per-row push so a single upsert failure can't strand the others with
+  // Synced = 0 (which would re-push everything on the next sync — risking a
+  // clobber of a teammate's intervening cloud edit).
+  for (const r of rows) {
+    try {
+      const { error } = await supabase.from('inspections').upsert(
+        {
+          inspection_sk:    r.InspectionSk,
+          user_id:          userId,
+          full_name:        r.FullName ?? null,
+          summary:          r.Summary ?? null,
+          address_line1:    r.AddressLine1 ?? null,
+          address_line2:    r.AddressLine2 ?? null,
+          city:             r.City ?? null,
+          state:            r.State ?? null,
+          zip_code:         r.ZipCode ?? null,
+          scheduled_at:     r.ScheduledAt ?? null,
+          phone:            r.Phone ?? null,
+          email:            r.Email ?? null,
+          longitude:        r.Longitude ?? null,
+          latitude:         r.Latitude ?? null,
+          status:           r.Status ?? 'OPEN',
+          _version:         r._version ?? 1,
+          _last_changed_at: r._lastChangedAt ?? null,
+          _deleted:         !!r._deleted,
+        },
+        { onConflict: 'inspection_sk' },
+      );
+      if (error) throw error;
+      await db.runAsync(
+        `UPDATE Inspections SET Synced = 1 WHERE InspectionSk = ?`,
+        [r.InspectionSk],
+      );
+    } catch (e) {
+      logError(e, `sync/pushInspections:${r?.InspectionSk ?? 'unknown'}`);
+    }
+  }
 }
 
 async function pushInspectionDescriptions(userId) {
   const rows = db.getAllSync(`SELECT * FROM InspectionDescription WHERE Synced = 0`);
   if (!rows.length) return;
 
-  const { error } = await supabase.from('inspection_descriptions').upsert(
-    rows.map(r => ({
-      inspection_description_sk: r.InspectionDescriptionSk,
-      inspection_sk:             r.InspectionSk,
-      user_id:                   userId,
-      description:               r.Description ?? null,
-      notes:                     r.Notes ?? null,
-      position:                  r.Position ?? 0,
-      severity_level:            r.SeverityLevel ?? null,
-      _version:                  r._version ?? 1,
-      _last_changed_at:          r._lastChangedAt ?? null,
-      _deleted:                  !!r._deleted,
-    })),
-    { onConflict: 'inspection_description_sk' },
-  );
-  if (error) throw error;
-
-  const ph = rows.map(() => '?').join(',');
-  await db.runAsync(
-    `UPDATE InspectionDescription SET Synced = 1 WHERE InspectionDescriptionSk IN (${ph})`,
-    rows.map(r => r.InspectionDescriptionSk),
-  );
+  for (const r of rows) {
+    try {
+      const { error } = await supabase.from('inspection_descriptions').upsert(
+        {
+          inspection_description_sk: r.InspectionDescriptionSk,
+          inspection_sk:             r.InspectionSk,
+          user_id:                   userId,
+          description:               r.Description ?? null,
+          notes:                     r.Notes ?? null,
+          position:                  r.Position ?? 0,
+          severity_level:            r.SeverityLevel ?? null,
+          _version:                  r._version ?? 1,
+          _last_changed_at:          r._lastChangedAt ?? null,
+          _deleted:                  !!r._deleted,
+        },
+        { onConflict: 'inspection_description_sk' },
+      );
+      if (error) throw error;
+      await db.runAsync(
+        `UPDATE InspectionDescription SET Synced = 1 WHERE InspectionDescriptionSk = ?`,
+        [r.InspectionDescriptionSk],
+      );
+    } catch (e) {
+      logError(e, `sync/pushInspectionDescriptions:${r?.InspectionDescriptionSk ?? 'unknown'}`);
+    }
+  }
 }
 
 async function pushInspectionDetails(userId) {
   const rows = db.getAllSync(`SELECT * FROM InspectionDetail WHERE Synced = 0`);
+  console.log(`[sync] pushInspectionDetails: ${rows.length} dirty row(s)`);
   if (!rows.length) return;
 
-  const { error } = await supabase.from('inspection_details').upsert(
-    rows.map(r => ({
-      inspection_detail_sk:      r.InspectionDetailSk,
-      inspection_description_sk: r.InspectionDescriptionSk,
-      user_id:                   userId,
-      picture_uri:               r.PictureURI ?? null,
-      picture_note:              r.PictureNote ?? null,
-      picture_markup:            r.PictureMarkup ?? null,
-      _version:                  r._version ?? 1,
-      _last_changed_at:          r._lastChangedAt ?? null,
-      _deleted:                  !!r._deleted,
-    })),
-    { onConflict: 'inspection_detail_sk' },
-  );
-  if (error) throw error;
+  // OrgSk is part of the cloud bucket path. Pull once for the whole batch.
+  let orgSk = null;
+  try {
+    const userRow = db.getFirstSync(
+      `SELECT OrgSk FROM Users WHERE UserId = ?`,
+      [userId],
+    );
+    orgSk = userRow?.OrgSk ?? null;
+  } catch (e) {
+    logError(e, 'sync/pushInspectionDetails:lookupOrgSk');
+  }
+  if (!orgSk) {
+    console.warn(`[sync] pushInspectionDetails: OrgSk missing for userId=${userId} — photo uploads will be SKIPPED`);
+  }
 
-  const ph = rows.map(() => '?').join(',');
-  await db.runAsync(
-    `UPDATE InspectionDetail SET Synced = 1 WHERE InspectionDetailSk IN (${ph})`,
-    rows.map(r => r.InspectionDetailSk),
-  );
+  // Per-row push: each row may need a Storage upload before the DB upsert.
+  for (const r of rows) {
+    try {
+      let cloudUri = r.CloudPictureURI ?? null;
+
+      // Upload the photo if we have a local copy and no cloud key yet.
+      // Skip deleted rows — no point uploading something we're tombstoning.
+      const needsUpload = !cloudUri && r.LocalPictureURI && !r._deleted;
+      if (needsUpload && !orgSk) {
+        console.warn(`[sync] detail ${r.InspectionDetailSk}: skipping upload — no OrgSk`);
+      }
+      if (needsUpload && orgSk) {
+        console.log(`[sync] detail ${r.InspectionDetailSk}: uploading local=${r.LocalPictureURI}`);
+        const uploaded = await uploadInspectionPhoto({
+          localUri: r.LocalPictureURI,
+          orgSk,
+          userId,
+          detailSk: r.InspectionDetailSk,
+        });
+        if (uploaded) {
+          console.log(`[sync] detail ${r.InspectionDetailSk}: uploaded → ${uploaded}`);
+          cloudUri = uploaded;
+          try {
+            await db.runAsync(
+              `UPDATE InspectionDetail SET CloudPictureURI = ? WHERE InspectionDetailSk = ?`,
+              [cloudUri, r.InspectionDetailSk],
+            );
+          } catch (e) {
+            logError(e, `sync/pushInspectionDetails:saveCloudUri ${r.InspectionDetailSk}`);
+          }
+        } else {
+          console.warn(`[sync] detail ${r.InspectionDetailSk}: upload returned null`);
+        }
+        // If upload failed, cloudUri stays null. Row will still upsert (so
+        // notes/markup/deletes propagate), and the next syncAll retries.
+      }
+
+      const { error } = await supabase.from('inspection_details').upsert(
+        {
+          inspection_detail_sk:      r.InspectionDetailSk,
+          inspection_description_sk: r.InspectionDescriptionSk,
+          user_id:                   userId,
+          local_picture_uri:         r.LocalPictureURI ?? null,
+          cloud_picture_uri:         cloudUri,
+          picture_note:              r.PictureNote ?? null,
+          picture_markup:            r.PictureMarkup ?? null,
+          _version:                  r._version ?? 1,
+          _last_changed_at:          r._lastChangedAt ?? null,
+          _deleted:                  !!r._deleted,
+        },
+        { onConflict: 'inspection_detail_sk' },
+      );
+      if (error) throw error;
+
+      await db.runAsync(
+        `UPDATE InspectionDetail SET Synced = 1 WHERE InspectionDetailSk = ?`,
+        [r.InspectionDetailSk],
+      );
+    } catch (e) {
+      logError(e, `sync/pushInspectionDetails:${r?.InspectionDetailSk ?? 'unknown'}`);
+    }
+  }
 }
 
 async function pushSectionTemplates(userId) {
   const rows = db.getAllSync(`SELECT * FROM SectionTemplate WHERE Synced = 0`);
   if (!rows.length) return;
 
-  const { error } = await supabase.from('section_templates').upsert(
-    rows.map(r => ({
-      section_template_sk: r.SectionTemplateSk,
-      user_id:             userId,
-      name:                r.Name,
-      position:            r.Position ?? 0,
-      created_at:          r.CreatedAt,
-      updated_at:          r.UpdatedAt,
-    })),
-    { onConflict: 'section_template_sk' },
-  );
-  if (error) throw error;
-
-  const ph = rows.map(() => '?').join(',');
-  await db.runAsync(
-    `UPDATE SectionTemplate SET Synced = 1 WHERE SectionTemplateSk IN (${ph})`,
-    rows.map(r => r.SectionTemplateSk),
-  );
+  for (const r of rows) {
+    try {
+      const { error } = await supabase.from('section_templates').upsert(
+        {
+          section_template_sk: r.SectionTemplateSk,
+          user_id:             userId,
+          name:                r.Name,
+          position:            r.Position ?? 0,
+          created_at:          r.CreatedAt,
+          updated_at:          r.UpdatedAt,
+        },
+        { onConflict: 'section_template_sk' },
+      );
+      if (error) throw error;
+      await db.runAsync(
+        `UPDATE SectionTemplate SET Synced = 1 WHERE SectionTemplateSk = ?`,
+        [r.SectionTemplateSk],
+      );
+    } catch (e) {
+      logError(e, `sync/pushSectionTemplates:${r?.SectionTemplateSk ?? 'unknown'}`);
+    }
+  }
 }
 
 async function pushSmsTemplates(userId) {
   const rows = db.getAllSync(`SELECT * FROM SmsTemplate WHERE Synced = 0`);
   if (!rows.length) return;
 
-  const { error } = await supabase.from('sms_templates').upsert(
-    rows.map(r => ({
-      sms_template_sk: r.SmsTemplateSk,
-      user_id:         userId,
-      name:            r.Name,
-      body:            r.Body,
-      position:        r.Position ?? 0,
-      created_at:      r.CreatedAt,
-      updated_at:      r.UpdatedAt,
-    })),
-    { onConflict: 'sms_template_sk' },
-  );
-  if (error) throw error;
-
-  const ph = rows.map(() => '?').join(',');
-  await db.runAsync(
-    `UPDATE SmsTemplate SET Synced = 1 WHERE SmsTemplateSk IN (${ph})`,
-    rows.map(r => r.SmsTemplateSk),
-  );
+  for (const r of rows) {
+    try {
+      const { error } = await supabase.from('sms_templates').upsert(
+        {
+          sms_template_sk: r.SmsTemplateSk,
+          user_id:         userId,
+          name:            r.Name,
+          body:            r.Body,
+          position:        r.Position ?? 0,
+          created_at:      r.CreatedAt,
+          updated_at:      r.UpdatedAt,
+        },
+        { onConflict: 'sms_template_sk' },
+      );
+      if (error) throw error;
+      await db.runAsync(
+        `UPDATE SmsTemplate SET Synced = 1 WHERE SmsTemplateSk = ?`,
+        [r.SmsTemplateSk],
+      );
+    } catch (e) {
+      logError(e, `sync/pushSmsTemplates:${r?.SmsTemplateSk ?? 'unknown'}`);
+    }
+  }
 }
 
 async function pushSmsStatus(userId) {
   const rows = db.getAllSync(`SELECT * FROM SmsStatus WHERE Synced = 0`);
   if (!rows.length) return;
 
-  const { error } = await supabase.from('sms_status').upsert(
-    rows.map(r => ({
-      sms_status_sk:    r.SmsStatusSk,
-      user_id:          userId,
-      inspection_sk:    r.InspectionSk,
-      sms_template_sk:  r.SmsTemplateSk,
-      sent:             !!r.Sent,
-      sent_at:          r.SentAt ?? null,
-      _version:         r._version ?? 1,
-      _last_changed_at: r._lastChangedAt ?? null,
-      _deleted:         !!r._deleted,
-    })),
-    { onConflict: 'sms_status_sk' },
-  );
-  if (error) throw error;
-
-  const ph = rows.map(() => '?').join(',');
-  await db.runAsync(
-    `UPDATE SmsStatus SET Synced = 1 WHERE SmsStatusSk IN (${ph})`,
-    rows.map(r => r.SmsStatusSk),
-  );
+  for (const r of rows) {
+    try {
+      const { error } = await supabase.from('sms_status').upsert(
+        {
+          sms_status_sk:    r.SmsStatusSk,
+          user_id:          userId,
+          inspection_sk:    r.InspectionSk,
+          sms_template_sk:  r.SmsTemplateSk,
+          sent:             !!r.Sent,
+          sent_at:          r.SentAt ?? null,
+          _version:         r._version ?? 1,
+          _last_changed_at: r._lastChangedAt ?? null,
+          _deleted:         !!r._deleted,
+        },
+        { onConflict: 'sms_status_sk' },
+      );
+      if (error) throw error;
+      await db.runAsync(
+        `UPDATE SmsStatus SET Synced = 1 WHERE SmsStatusSk = ?`,
+        [r.SmsStatusSk],
+      );
+    } catch (e) {
+      logError(e, `sync/pushSmsStatus:${r?.SmsStatusSk ?? 'unknown'}`);
+    }
+  }
 }
 
 // ─── PULL ─────────────────────────────────────────────────────────────────────
-// RLS on every table ensures each select returns only rows the user can see.
+// Each pull explicitly filters by `user_id = self` (rather than relying on
+// RLS to scope rows) so the local DB stays a strict mirror of the calling
+// user's own work — even owners/admins whose RLS would let them see the
+// whole org. Cross-team views (All Inspections, Unassigned Records) query
+// the cloud directly via their own RPCs.
+//
+// Each pull returns a Set of cloud SKs so the prune phase can delete local
+// rows the cloud no longer attributes to us (e.g. an owner reassigned the
+// inspection to a teammate).
+//
 // Conflict rule: if cloud _version > local _version → update local.
 // Tables without _version (SectionTemplate, SmsTemplate) use UpdatedAt.
-// Per-row try/catch so a single FK violation doesn't abort the whole pull.
 
-async function pullInspections() {
-  const { data, error } = await supabase.from('inspections').select('*');
+async function pullInspections(userId) {
+  const { data, error } = await supabase
+    .from('inspections')
+    .select('*')
+    .eq('user_id', userId);
   if (error) throw error;
-  if (!data?.length) return;
 
+  const seen = new Set();
   const store = useInspectionStore.getState();
 
-  for (const r of data) {
+  for (const r of (data ?? [])) {
+    seen.add(r.inspection_sk);
     try {
       const local = db.getFirstSync(
         `SELECT _version FROM Inspections WHERE InspectionSk = ?`,
@@ -256,17 +350,22 @@ async function pullInspections() {
         }
       }
     } catch (e) {
-      logError(e, `sync/pullInspections:${r.inspection_sk}`);
+      logError(e, `sync/pullInspections:${r?.inspection_sk ?? 'unknown'}`);
     }
   }
+  return seen;
 }
 
-async function pullInspectionDescriptions() {
-  const { data, error } = await supabase.from('inspection_descriptions').select('*');
+async function pullInspectionDescriptions(userId) {
+  const { data, error } = await supabase
+    .from('inspection_descriptions')
+    .select('*')
+    .eq('user_id', userId);
   if (error) throw error;
-  if (!data?.length) return;
 
-  for (const r of data) {
+  const seen = new Set();
+  for (const r of (data ?? [])) {
+    seen.add(r.inspection_description_sk);
     try {
       const local = db.getFirstSync(
         `SELECT _version FROM InspectionDescription WHERE InspectionDescriptionSk = ?`,
@@ -297,58 +396,77 @@ async function pullInspectionDescriptions() {
         );
       }
     } catch (e) {
-      logError(e, `sync/pullInspectionDescriptions:${r.inspection_description_sk}`);
+      logError(e, `sync/pullInspectionDescriptions:${r?.inspection_description_sk ?? 'unknown'}`);
     }
   }
+  return seen;
 }
 
-async function pullInspectionDetails() {
-  const { data, error } = await supabase.from('inspection_details').select('*');
+async function pullInspectionDetails(userId) {
+  const { data, error } = await supabase
+    .from('inspection_details')
+    .select('*')
+    .eq('user_id', userId);
   if (error) throw error;
-  if (!data?.length) return;
 
-  for (const r of data) {
+  const seen = new Set();
+  for (const r of (data ?? [])) {
+    seen.add(r.inspection_detail_sk);
     try {
       const local = db.getFirstSync(
         `SELECT _version FROM InspectionDetail WHERE InspectionDetailSk = ?`,
         [r.inspection_detail_sk],
       );
       if (!local) {
+        // Mirror the cloud row directly. LocalPictureURI may point to a path
+        // that doesn't exist on this device — resolvePhotoUri handles that
+        // by falling back to a signed cloud URL.
         await db.runAsync(
           `INSERT OR IGNORE INTO InspectionDetail
-           (InspectionDetailSk, InspectionDescriptionSk, PictureURI, PictureNote, PictureMarkup,
+           (InspectionDetailSk, InspectionDescriptionSk, LocalPictureURI, CloudPictureURI, PictureNote, PictureMarkup,
             _version, _lastChangedAt, _deleted, Synced)
-           VALUES (?,?,?,?,?,?,?,?,?)`,
+           VALUES (?,?,?,?,?,?,?,?,?,?)`,
           [
             r.inspection_detail_sk, r.inspection_description_sk,
-            r.picture_uri ?? null, r.picture_note ?? null, r.picture_markup ?? null,
+            r.local_picture_uri ?? null, r.cloud_picture_uri ?? null,
+            r.picture_note ?? null, r.picture_markup ?? null,
             r._version ?? 1, r._last_changed_at, r._deleted ? 1 : 0, 1,
           ],
         );
       } else if ((r._version ?? 1) > (local._version ?? 1)) {
         await db.runAsync(
           `UPDATE InspectionDetail SET
-           InspectionDescriptionSk=?, PictureURI=?, PictureNote=?, PictureMarkup=?,
+           InspectionDescriptionSk=?, LocalPictureURI=?, CloudPictureURI=?, PictureNote=?, PictureMarkup=?,
            _version=?, _lastChangedAt=?, _deleted=?, Synced=1
            WHERE InspectionDetailSk=?`,
           [
-            r.inspection_description_sk, r.picture_uri, r.picture_note, r.picture_markup,
+            r.inspection_description_sk,
+            r.local_picture_uri ?? null, r.cloud_picture_uri ?? null,
+            r.picture_note, r.picture_markup,
             r._version ?? 1, r._last_changed_at, r._deleted ? 1 : 0, r.inspection_detail_sk,
           ],
         );
       }
     } catch (e) {
-      logError(e, `sync/pullInspectionDetails:${r.inspection_detail_sk}`);
+      logError(e, `sync/pullInspectionDetails:${r?.inspection_detail_sk ?? 'unknown'}`);
     }
   }
+  return seen;
 }
 
-async function pullSectionTemplates() {
-  const { data, error } = await supabase.from('section_templates').select('*');
+async function pullSectionTemplates(userId) {
+  // Templates are per-user; explicitly scope to self so an owner whose RLS
+  // can see other users' rows doesn't accidentally import their templates
+  // into local SQLite.
+  const { data, error } = await supabase
+    .from('section_templates')
+    .select('*')
+    .eq('user_id', userId);
   if (error) throw error;
-  if (!data?.length) return;
 
-  for (const r of data) {
+  const seen = new Set();
+  for (const r of (data ?? [])) {
+    seen.add(r.section_template_sk);
     try {
       const local = db.getFirstSync(
         `SELECT UpdatedAt FROM SectionTemplate WHERE SectionTemplateSk = ?`,
@@ -364,7 +482,7 @@ async function pullSectionTemplates() {
             r.created_at, r.updated_at, 1,
           ],
         );
-      } else if (r.updated_at > local.UpdatedAt) {
+      } else if (dayjs(r.updated_at).valueOf() > dayjs(local.UpdatedAt).valueOf()) {
         await db.runAsync(
           `UPDATE SectionTemplate SET Name=?, Position=?, UpdatedAt=?, Synced=1
            WHERE SectionTemplateSk=?`,
@@ -372,17 +490,22 @@ async function pullSectionTemplates() {
         );
       }
     } catch (e) {
-      logError(e, `sync/pullSectionTemplates:${r.section_template_sk}`);
+      logError(e, `sync/pullSectionTemplates:${r?.section_template_sk ?? 'unknown'}`);
     }
   }
+  return seen;
 }
 
-async function pullSmsTemplates() {
-  const { data, error } = await supabase.from('sms_templates').select('*');
+async function pullSmsTemplates(userId) {
+  const { data, error } = await supabase
+    .from('sms_templates')
+    .select('*')
+    .eq('user_id', userId);
   if (error) throw error;
-  if (!data?.length) return;
 
-  for (const r of data) {
+  const seen = new Set();
+  for (const r of (data ?? [])) {
+    seen.add(r.sms_template_sk);
     try {
       const local = db.getFirstSync(
         `SELECT UpdatedAt FROM SmsTemplate WHERE SmsTemplateSk = ?`,
@@ -398,7 +521,7 @@ async function pullSmsTemplates() {
             r.created_at, r.updated_at, 1,
           ],
         );
-      } else if (r.updated_at > local.UpdatedAt) {
+      } else if (dayjs(r.updated_at).valueOf() > dayjs(local.UpdatedAt).valueOf()) {
         await db.runAsync(
           `UPDATE SmsTemplate SET Name=?, Body=?, Position=?, UpdatedAt=?, Synced=1
            WHERE SmsTemplateSk=?`,
@@ -406,17 +529,22 @@ async function pullSmsTemplates() {
         );
       }
     } catch (e) {
-      logError(e, `sync/pullSmsTemplates:${r.sms_template_sk}`);
+      logError(e, `sync/pullSmsTemplates:${r?.sms_template_sk ?? 'unknown'}`);
     }
   }
+  return seen;
 }
 
-async function pullSmsStatus() {
-  const { data, error } = await supabase.from('sms_status').select('*');
+async function pullSmsStatus(userId) {
+  const { data, error } = await supabase
+    .from('sms_status')
+    .select('*')
+    .eq('user_id', userId);
   if (error) throw error;
-  if (!data?.length) return;
 
-  for (const r of data) {
+  const seen = new Set();
+  for (const r of (data ?? [])) {
+    seen.add(r.sms_status_sk);
     try {
       const local = db.getFirstSync(
         `SELECT _version FROM SmsStatus WHERE SmsStatusSk = ?`,
@@ -446,59 +574,40 @@ async function pullSmsStatus() {
         );
       }
     } catch (e) {
-      logError(e, `sync/pullSmsStatus:${r.sms_status_sk}`);
+      logError(e, `sync/pullSmsStatus:${r?.sms_status_sk ?? 'unknown'}`);
     }
   }
+  return seen;
 }
 
-// ─── TARGETED PUSH ───────────────────────────────────────────────────────────
-// Call after individual mutations so the cloud is updated immediately without
-// waiting for the next full syncAll.
+// ─── PRUNE ────────────────────────────────────────────────────────────────────
+// After the pull phase, delete any locally-synced rows whose SK isn't in the
+// cloud's response for this user. This is how reassign-away propagates — the
+// inspection still exists in the cloud but the caller no longer owns it, so
+// it's no longer returned by the user-scoped pull and we remove it locally.
+//
+// Conservative: only touches Synced = 1 / _deleted = 0 rows. Unsynced local
+// edits and pending tombstones are left alone so a push retry can finish.
+// Children deleted before parents to satisfy FK constraints.
 
-export async function pushInspection(sk) {
-  try {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session?.user?.id) return;
-    const userId = session.user.id;
-
-    const row = db.getFirstSync(
-      `SELECT * FROM Inspections WHERE InspectionSk = ?`,
-      [sk],
-    );
-    if (!row) return;
-
-    const { error } = await supabase.from('inspections').upsert(
-      {
-        inspection_sk:    row.InspectionSk,
-        user_id:          userId,
-        full_name:        row.FullName ?? null,
-        summary:          row.Summary ?? null,
-        address_line1:    row.AddressLine1 ?? null,
-        address_line2:    row.AddressLine2 ?? null,
-        city:             row.City ?? null,
-        state:            row.State ?? null,
-        zip_code:         row.ZipCode ?? null,
-        scheduled_at:     row.ScheduledAt ?? null,
-        phone:            row.Phone ?? null,
-        email:            row.Email ?? null,
-        longitude:        row.Longitude ?? null,
-        latitude:         row.Latitude ?? null,
-        status:           row.Status ?? 'OPEN',
-        _version:         row._version ?? 1,
-        _last_changed_at: row._lastChangedAt ?? null,
-        _deleted:         !!row._deleted,
-      },
-      { onConflict: 'inspection_sk' },
-    );
-    if (error) throw error;
-
-    await db.runAsync(
-      `UPDATE Inspections SET Synced = 1 WHERE InspectionSk = ?`,
-      [sk],
-    );
-  } catch (e) {
-    logError(e, `sync/pushInspection:${sk}`);
+function pruneTable(table, skColumn, seen, onRemove, hasDeleted = true) {
+  const where = hasDeleted ? 'Synced = 1 AND _deleted = 0' : 'Synced = 1';
+  const rows = db.getAllSync(
+    `SELECT ${skColumn} AS sk FROM ${table} WHERE ${where}`,
+  );
+  let removed = 0;
+  for (const r of rows) {
+    if (!seen.has(r.sk)) {
+      try {
+        db.runSync(`DELETE FROM ${table} WHERE ${skColumn} = ?`, [r.sk]);
+        if (onRemove) onRemove(r.sk);
+        removed++;
+      } catch (e) {
+        logError(e, `sync/prune:${table}:${r.sk}`);
+      }
+    }
   }
+  if (removed > 0) console.log(`[sync] pruned ${removed} row(s) from ${table}`);
 }
 
 // ─── MAIN ─────────────────────────────────────────────────────────────────────
@@ -507,8 +616,12 @@ export async function pushInspection(sk) {
 
 export async function syncAll() {
   try {
+    console.log('[sync] syncAll starting');
     const { data: { session } } = await supabase.auth.getSession();
-    if (!session?.user?.id) return;
+    if (!session?.user?.id) {
+      console.log('[sync] syncAll: no session, skipping');
+      return;
+    }
     const userId = session.user.id;
 
     // Push phase — push local changes to cloud before pulling
@@ -523,30 +636,64 @@ export async function syncAll() {
     ];
     for (const [name, fn] of pushSteps) {
       try {
+        console.log(`[sync] starting ${name}`);
         await fn();
+        console.log(`[sync] done ${name}`);
       } catch (e) {
+        console.error(`[sync] ERROR in ${name}:`, e?.message);
         logError(e, `sync/${name}`);
       }
     }
 
-    // Pull phase — bring down anything missing or newer on cloud
-    // Same FK order so parent rows exist before child inserts
+    // Pull phase — bring down anything missing or newer on cloud.
+    // Parent-first so child INSERTs satisfy FK constraints. Each user-scoped
+    // pull returns the set of SKs the cloud attributes to this user, which
+    // the prune phase below uses to delete locally-stale rows.
+    let inspectionSks   = new Set();
+    let descriptionSks  = new Set();
+    let detailSks       = new Set();
+    let sectionTplSks   = new Set();
+    let smsTplSks       = new Set();
+    let smsStatusSks    = new Set();
     const pullSteps = [
-      ['pullInspections',            pullInspections],
-      ['pullInspectionDescriptions', pullInspectionDescriptions],
-      ['pullInspectionDetails',      pullInspectionDetails],
-      ['pullSectionTemplates',       pullSectionTemplates],
-      ['pullSmsTemplates',           pullSmsTemplates],
-      ['pullSmsStatus',              pullSmsStatus],
+      ['pullInspections',            async () => { inspectionSks  = await pullInspections(userId); }],
+      ['pullInspectionDescriptions', async () => { descriptionSks = await pullInspectionDescriptions(userId); }],
+      ['pullInspectionDetails',      async () => { detailSks      = await pullInspectionDetails(userId); }],
+      ['pullSectionTemplates',       async () => { sectionTplSks  = await pullSectionTemplates(userId); }],
+      ['pullSmsTemplates',           async () => { smsTplSks      = await pullSmsTemplates(userId); }],
+      ['pullSmsStatus',              async () => { smsStatusSks   = await pullSmsStatus(userId); }],
     ];
     for (const [name, fn] of pullSteps) {
       try {
+        console.log(`[sync] starting ${name}`);
         await fn();
+        console.log(`[sync] done ${name}`);
       } catch (e) {
+        console.error(`[sync] ERROR in ${name}:`, e?.message);
         logError(e, `sync/${name}`);
       }
     }
+
+    // Prune phase — remove local rows the cloud no longer returns for us.
+    // Child-first so deletes don't violate FK constraints. The inspection
+    // store mirror is kept in sync via the onRemove callback for the
+    // top-level inspections prune.
+    try {
+      const store = useInspectionStore.getState();
+      pruneTable('InspectionDetail',      'InspectionDetailSk',      detailSks);
+      pruneTable('InspectionDescription', 'InspectionDescriptionSk', descriptionSks);
+      pruneTable('Inspections',           'InspectionSk',            inspectionSks,
+        (sk) => store.remove(sk));
+      pruneTable('SmsStatus',             'SmsStatusSk',             smsStatusSks);
+      pruneTable('SectionTemplate', 'SectionTemplateSk', sectionTplSks, null, false);
+      pruneTable('SmsTemplate',     'SmsTemplateSk',     smsTplSks,     null, false);
+    } catch (e) {
+      logError(e, 'sync/prune');
+    }
+
+    console.log('[sync] syncAll complete');
   } catch (e) {
+    console.error('[sync] syncAll uncaught error:', e?.message, e?.stack);
     logError(e, 'sync/syncAll');
   }
 }

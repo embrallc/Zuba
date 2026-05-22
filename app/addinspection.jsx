@@ -5,7 +5,7 @@ import dayjs from "dayjs";
 import * as Location from "expo-location";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { AnimatePresence, MotiView } from "moti";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -36,6 +36,15 @@ const FIELD_ORDER = [
   "City",
   "State",
   "ZipCode",
+];
+
+const EMAIL_DOMAINS = [
+  "gmail.com",
+  "yahoo.com",
+  "outlook.com",
+  "hotmail.com",
+  "icloud.com",
+  "aol.com",
 ];
 
 export default function AddInspectionScreen() {
@@ -77,6 +86,10 @@ export default function AddInspectionScreen() {
     Longitude: existing?.Longitude ?? null,
   });
 
+  // Holds a Promise that resolves to {Latitude, Longitude} | null when geocoding
+  // is in-flight, so handleSave can await it rather than saving stale null coords.
+  const geocodingRef = useRef(null);
+
   // ── Keyboard toolbar state ────────────────────────────────────────────────
   const inputRefs = useRef({});
   const [focusedField, setFocusedField] = useState(null);
@@ -117,31 +130,50 @@ export default function AddInspectionScreen() {
     setForm((prev) => ({ ...prev, [field]: value }));
   }
 
-  // Auto-geocode when full address is present
+  // Auto-geocode when full address is present.
+  // Stores a Promise in geocodingRef so handleSave can await it if the user
+  // taps Save before the debounce + geocode round-trip finishes.
   useEffect(() => {
     const { AddressLine1, City, State, ZipCode } = form;
-    if (!AddressLine1 || !City || !State || !ZipCode) return;
+    if (!AddressLine1 || !City || !State || !ZipCode) {
+      geocodingRef.current = null;
+      return;
+    }
 
+    let resolveGeo;
+    geocodingRef.current = new Promise((res) => {
+      resolveGeo = res;
+    });
+
+    let cancelled = false;
     const timeout = setTimeout(async () => {
       try {
         const results = await Location.geocodeAsync(
           `${AddressLine1}, ${City}, ${State} ${ZipCode}`,
         );
-        if (results.length > 0) {
-          setGeo({
-            Latitude: results[0].latitude,
-            Longitude: results[0].longitude,
-          });
-        }
+        if (cancelled) return;
+        const first = results?.[0];
+        const coords =
+          first?.latitude != null && first?.longitude != null
+            ? { Latitude: first.latitude, Longitude: first.longitude }
+            : null;
+        if (coords) setGeo(coords);
+        resolveGeo(coords);
       } catch (e) {
+        if (cancelled) return;
         logError(
           e,
-          `AddInspectionScreen.geocode addr="${form.AddressLine1}, ${form.City}, ${form.State} ${form.ZipCode}"`,
+          `AddInspectionScreen.geocode addr="${AddressLine1}, ${City}, ${State} ${ZipCode}"`,
         );
+        resolveGeo(null);
       }
     }, 800);
 
-    return () => clearTimeout(timeout);
+    return () => {
+      cancelled = true;
+      clearTimeout(timeout);
+      resolveGeo(null);
+    };
   }, [form.AddressLine1, form.City, form.State, form.ZipCode]);
 
   async function handleSave() {
@@ -167,12 +199,27 @@ export default function AddInspectionScreen() {
     }
 
     setSaving(true);
+
+    // If address is present but coords aren't captured yet, wait for the
+    // in-flight geocoding promise before saving (shows spinner during wait).
+    let lat = geo.Latitude;
+    let lng = geo.Longitude;
+    const hasAddress =
+      form.AddressLine1 && form.City && form.State && form.ZipCode;
+    if (hasAddress && !lat && geocodingRef.current) {
+      const coords = await geocodingRef.current.catch(() => null);
+      if (coords?.Latitude != null && coords?.Longitude != null) {
+        lat = coords.Latitude;
+        lng = coords.Longitude;
+      }
+    }
+
     const data = {
       ...form,
       Summary: existing?.Summary ?? "",
       ScheduledAt: dayjs(scheduledAt).toISOString(),
-      Latitude: geo.Latitude,
-      Longitude: geo.Longitude,
+      Latitude: lat,
+      Longitude: lng,
     };
 
     try {
@@ -226,6 +273,23 @@ export default function AddInspectionScreen() {
     return () => setFocusedField(field);
   }
 
+  // Email domain autocomplete: once the user types "@", show common domains
+  // filtered by whatever partial domain they've typed. Suggestions hide once
+  // the partial matches a domain exactly.
+  const emailSuggestions = useMemo(() => {
+    const at = form.Email.indexOf("@");
+    if (at < 0) return [];
+    const partial = form.Email.slice(at + 1).toLowerCase();
+    if (EMAIL_DOMAINS.includes(partial)) return [];
+    return EMAIL_DOMAINS.filter((d) => d.startsWith(partial));
+  }, [form.Email]);
+
+  function applyEmailDomain(domain) {
+    const at = form.Email.indexOf("@");
+    const local = at >= 0 ? form.Email.slice(0, at) : form.Email;
+    set("Email", `${local}@${domain}`);
+  }
+
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <KeyboardAvoidingView
@@ -271,6 +335,7 @@ export default function AddInspectionScreen() {
               returnKeyType="next"
               onSubmitEditing={focusNext}
               autoCapitalize="words"
+              autoCorrect={false}
             />
           </Field>
 
@@ -302,7 +367,38 @@ export default function AddInspectionScreen() {
               autoCapitalize="none"
               returnKeyType="next"
               onSubmitEditing={focusNext}
+              autoCorrect={false}
+              autoComplete="email"
             />
+            <AnimatePresence>
+              {emailSuggestions.length > 0 ? (
+                <MotiView
+                  key="email-suggestions"
+                  from={{ opacity: 0, translateY: -4 }}
+                  animate={{ opacity: 1, translateY: 0 }}
+                  exit={{ opacity: 0, translateY: -4 }}
+                  transition={{ type: "timing", duration: 160 }}
+                >
+                  <ScrollView
+                    horizontal
+                    keyboardShouldPersistTaps="handled"
+                    showsHorizontalScrollIndicator={false}
+                    contentContainerStyle={styles.emailSuggestionRow}
+                  >
+                    {emailSuggestions.map((d) => (
+                      <TouchableOpacity
+                        key={d}
+                        style={styles.emailChip}
+                        onPress={() => applyEmailDomain(d)}
+                        activeOpacity={0.7}
+                      >
+                        <Text style={styles.emailChipText}>@{d}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                </MotiView>
+              ) : null}
+            </AnimatePresence>
           </Field>
 
           <Text style={styles.sectionLabel}>SCHEDULE</Text>
@@ -360,6 +456,7 @@ export default function AddInspectionScreen() {
               returnKeyType="next"
               onSubmitEditing={focusNext}
               autoCapitalize="words"
+              autoCorrect={false}
             />
           </Field>
 
@@ -375,6 +472,7 @@ export default function AddInspectionScreen() {
               returnKeyType="next"
               onSubmitEditing={focusNext}
               autoCapitalize="words"
+              autoCorrect={false}
             />
           </Field>
 
@@ -392,6 +490,7 @@ export default function AddInspectionScreen() {
                   returnKeyType="next"
                   onSubmitEditing={focusNext}
                   autoCapitalize="words"
+                  autoCorrect={false}
                 />
               </Field>
             </View>
@@ -552,6 +651,24 @@ const styles = StyleSheet.create({
   row: {
     flexDirection: "row",
     gap: theme.spacing.s,
+  },
+  emailSuggestionRow: {
+    paddingTop: theme.spacing.xs,
+    paddingBottom: theme.spacing.xs,
+    gap: theme.spacing.xs,
+  },
+  emailChip: {
+    backgroundColor: theme.colors.cardBackground,
+    borderWidth: theme.layout.borderWidth.base,
+    borderColor: theme.colors.input,
+    borderRadius: 999,
+    paddingHorizontal: theme.spacing.s,
+    paddingVertical: theme.spacing.xs,
+    marginRight: theme.spacing.xs,
+  },
+  emailChipText: {
+    ...theme.typography.caption,
+    color: theme.colors.primary,
   },
   geoConfirmRow: {
     flexDirection: "row",
