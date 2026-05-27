@@ -25,6 +25,7 @@ import { insertInspection, updateInspection } from "../db/inspections";
 import { logError } from "../db/logs";
 import { useInspectionStore } from "../stores/useInspectionStore";
 import { useSettingsStore } from "../stores/useSettingsStore";
+import { maybePromptForUpcomingApptNotif } from "../utils/notifications";
 import { findOverlappingInspection } from "../utils/overlapUtils";
 
 const FIELD_ORDER = [
@@ -229,6 +230,9 @@ export default function AddInspectionScreen() {
       } else {
         const created = await insertInspection({ ...data, UserSk: userSk });
         addToStore(created);
+        // First-inspection onboarding prompt for local reminders. No-op
+        // after the first time it runs (AsyncStorage flag inside the helper).
+        await maybePromptForUpcomingApptNotif({ userSk });
       }
       router.back();
     } catch (e) {

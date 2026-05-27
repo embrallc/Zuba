@@ -1,9 +1,9 @@
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { theme } from "@theme";
 import dayjs from "dayjs";
-import { useFocusEffect, useRouter } from "expo-router";
+import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { MotiView } from "moti";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   FlatList,
   SafeAreaView,
@@ -35,6 +35,25 @@ const SEARCH_FIELDS = [
 export default function MyDayScreen() {
   const [pulseKey, setPulseKey] = useState(0);
   const [query, setQuery] = useState("");
+
+  // Notification tap or any other deep link can hand us `?q=<full name>` to
+  // pre-fill the search bar. Sync once per param change so a manual edit
+  // afterwards is not stomped on.
+  const params = useLocalSearchParams();
+  useEffect(() => {
+    const incoming =
+      typeof params?.q === "string"
+        ? params.q
+        : Array.isArray(params?.q)
+          ? params.q[0]
+          : "";
+    if (incoming && incoming !== query) {
+      setQuery(incoming);
+    }
+    // Intentionally only depend on the incoming param; we don't want every
+    // user keystroke to re-trigger this effect.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params?.q]);
 
   useFocusEffect(
     useCallback(() => {

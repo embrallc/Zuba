@@ -14,6 +14,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { Guard } from "../components/Guard";
 import { getAllInspections } from "../db/inspections";
 import { logError } from "../db/logs";
 import { updateUserName } from "../db/users";
@@ -177,7 +178,7 @@ export default function SettingsScreen() {
       if (data?.status === "blocked_sole_owner") {
         Alert.alert(
           "Promote Another Owner First",
-          data.message ??
+          data?.message ??
             "You're the only owner of this organization. Promote another user to owner in Manage Users before deleting your account.",
           [
             { text: "Cancel", style: "cancel" },
@@ -404,6 +405,14 @@ export default function SettingsScreen() {
           onPress={() => router.push("/sectiontemplates")}
         />
 
+        <Text style={styles.sectionLabel}>NOTIFICATIONS</Text>
+
+        <NavRow
+          label="Notifications"
+          description="Choose which push notifications you'd like to receive"
+          onPress={() => router.push("/notifications")}
+        />
+
         <Text style={styles.sectionLabel}>MESSAGING</Text>
 
         <NavRow
@@ -412,28 +421,26 @@ export default function SettingsScreen() {
           onPress={() => router.push("/smstemplates")}
         />
 
-        {(userProfile === "owner" || userProfile === "admin") && (
-          <>
-            <Text style={styles.sectionLabel}>TEAM</Text>
-            {userProfile === "owner" && (
-              <NavRow
-                label="Manage Users"
-                description="Set owner, admin, or member access for your organization"
-                onPress={() => router.push("/manageusers")}
-              />
-            )}
+        <Guard guard={userProfile === "owner" || userProfile === "admin"}>
+          <Text style={styles.sectionLabel}>TEAM</Text>
+          <Guard guard={userProfile === "owner"}>
             <NavRow
-              label="Unassigned Records"
-              description="Reassign inspections that were left behind by a deleted account"
-              onPress={() => router.push("/unassigned")}
+              label="Manage Users"
+              description="Set owner, admin, or member access for your organization"
+              onPress={() => router.push("/manageusers")}
             />
-            <NavRow
-              label="All Inspections"
-              description="View every inspection in your org and reassign when a teammate is out"
-              onPress={() => router.push("/allinspections")}
-            />
-          </>
-        )}
+          </Guard>
+          <NavRow
+            label="Unassigned Records"
+            description="Reassign inspections that were left behind by a deleted account"
+            onPress={() => router.push("/unassigned")}
+          />
+          <NavRow
+            label="All Inspections"
+            description="View every inspection in your org and reassign when a teammate is out"
+            onPress={() => router.push("/allinspections")}
+          />
+        </Guard>
 
 
         {/* ── RevenueCat subscription section (pending Apple Developer approval) ──

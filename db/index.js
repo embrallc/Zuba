@@ -138,6 +138,17 @@ export function initializeDatabase(userId) {
       Synced        INTEGER NOT NULL DEFAULT 0
     );
 
+    CREATE TABLE IF NOT EXISTS NotificationSettings (
+      NotificationSk     TEXT PRIMARY KEY NOT NULL,
+      UserId             TEXT NOT NULL,
+      NotificationName   TEXT NOT NULL,
+      IsNotificationOn   INTEGER NOT NULL DEFAULT 0,
+      _version           INTEGER DEFAULT 1,
+      _lastChangedAt     INTEGER,
+      Synced             INTEGER NOT NULL DEFAULT 0,
+      UNIQUE(UserId, NotificationName)
+    );
+
     CREATE TABLE IF NOT EXISTS SmsStatus (
       SmsStatusSk   TEXT PRIMARY KEY NOT NULL,
       UserSk        TEXT NOT NULL,
@@ -271,6 +282,20 @@ export function initializeDatabase(userId) {
     )`);
   } catch (_) {}
 
+  // Patch in NotificationSettings for existing databases.
+  try {
+    _db.execSync(`CREATE TABLE IF NOT EXISTS NotificationSettings (
+      NotificationSk     TEXT PRIMARY KEY NOT NULL,
+      UserId             TEXT NOT NULL,
+      NotificationName   TEXT NOT NULL,
+      IsNotificationOn   INTEGER NOT NULL DEFAULT 0,
+      _version           INTEGER DEFAULT 1,
+      _lastChangedAt     INTEGER,
+      Synced             INTEGER NOT NULL DEFAULT 0,
+      UNIQUE(UserId, NotificationName)
+    )`);
+  } catch (_) {}
+
   // Add Synced column to all sync-eligible tables
   const syncTables = [
     "Organizations",
@@ -281,6 +306,7 @@ export function initializeDatabase(userId) {
     "SectionTemplate",
     "SmsTemplate",
     "SmsStatus",
+    "NotificationSettings",
   ];
   for (const table of syncTables) {
     try {

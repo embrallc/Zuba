@@ -60,7 +60,7 @@ function logError(
     error:
       err instanceof Error
         ? err.message
-        : (anyErr?.message as string | undefined) ?? String(err),
+        : ((anyErr?.message as string | undefined) ?? String(err)),
     code: anyErr?.code,
     details: anyErr?.details,
     hint: anyErr?.hint,

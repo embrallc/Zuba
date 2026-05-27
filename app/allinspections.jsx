@@ -158,11 +158,16 @@ export default function AllInspectionsScreen() {
         return;
       }
       const results = data?.results ?? [];
-      const failures = results.filter((r) => !r.ok);
+      const failures = results.filter((r) => !r?.ok);
       if (failures.length > 0) {
         Alert.alert(
           "Some reassignments failed",
-          failures.map((f) => `• ${f.inspection_sk}: ${f.error}`).join("\n"),
+          failures
+            .map(
+              (f) =>
+                `• ${f?.inspection_sk ?? "unknown"}: ${f?.error ?? "unknown error"}`,
+            )
+            .join("\n"),
         );
       }
 
@@ -172,7 +177,10 @@ export default function AllInspectionsScreen() {
       // any unsynced local edit on the row would otherwise be pushed first
       // and overwrite the cloud reassign with our stale user_id.
       const successfulSet = new Set(
-        results.filter((r) => r.ok).map((r) => r.inspection_sk),
+        results
+          .filter((r) => r?.ok)
+          .map((r) => r?.inspection_sk)
+          .filter(Boolean),
       );
       const store = useInspectionStore.getState();
       for (const p of pendingPayload) {

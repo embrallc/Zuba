@@ -208,11 +208,15 @@ export default function InspectionFormScreen() {
   function handleSummaryChange(value) {
     setSummary(value);
     scheduleAutoSave("summary", async () => {
+      // `inspection` comes from the store and is `null` until the row is
+      // loaded — guard the spreads so a quick edit before hydration can't
+      // overwrite fields with undefined.
+      const base = inspection ?? {};
       const updated = await updateInspection(inspectionSk, {
-        ...inspection,
+        ...base,
         Summary: value,
       });
-      updateInStore({ ...inspection, ...updated });
+      updateInStore({ ...base, ...(updated ?? {}) });
     });
   }
 
@@ -407,6 +411,22 @@ export default function InspectionFormScreen() {
     });
   }
 
+  function handleOpenMarkup(detail) {
+    router.push({
+      pathname: "/photoedit",
+      params: {
+        detailSk: detail.sk,
+        uri: detail.uri ?? "",
+        initialMarkup:
+          typeof detail.markup === "string"
+            ? detail.markup
+            : detail.markup
+              ? JSON.stringify(detail.markup)
+              : "",
+      },
+    });
+  }
+
   async function handleDeletePhoto(detailSk, sectionSk) {
     try {
       await deleteDetail(detailSk);
@@ -454,6 +474,7 @@ export default function InspectionFormScreen() {
           onCameraPress={handleCameraPress}
           onUploadPhoto={pickFromLibrary}
           onOpenPhoto={handleOpenPhoto}
+          onOpenMarkup={handleOpenMarkup}
           onDeletePhoto={handleDeletePhoto}
           drag={drag}
           isActive={isActive}
@@ -623,6 +644,7 @@ function SectionCard({
   onCameraPress,
   onUploadPhoto,
   onOpenPhoto,
+  onOpenMarkup,
   onDeletePhoto,
   drag,
   isActive,
@@ -720,6 +742,7 @@ function SectionCard({
             <Thumbnail
               detail={detail}
               onPress={() => onOpenPhoto(detail, section.sk)}
+              onEditPress={() => onOpenMarkup(detail)}
             />
 
             <TouchableOpacity
@@ -760,8 +783,19 @@ function SectionCard({
 }
 
 // ── Thumbnail ──────────────────────────────────────────────────────────────
-function Thumbnail({ detail, onPress }) {
+function detailHasMarkup(markup) {
+  if (!markup) return false;
+  try {
+    const parsed = typeof markup === "string" ? JSON.parse(markup) : markup;
+    return Array.isArray(parsed?.strokes) && parsed.strokes.length > 0;
+  } catch (_) {
+    return false;
+  }
+}
+
+function Thumbnail({ detail, onPress, onEditPress }) {
   const [loading, setLoading] = useState(!!detail.uri);
+  const hasMarkup = detailHasMarkup(detail.markup);
   return (
     <TouchableOpacity
       onPress={onPress}
@@ -783,6 +817,23 @@ function Thumbnail({ detail, onPress }) {
         </View>
       )}
       {!!detail.note && <View style={styles.thumbnailDot} />}
+
+      {/* Markup edit chip — top-left. Green tint when strokes exist so the
+          inspector can see at a glance which photos already carry annotations. */}
+      <TouchableOpacity
+        onPress={(e) => {
+          e?.stopPropagation?.();
+          onEditPress?.();
+        }}
+        hitSlop={theme.layout.hitSlop.medium}
+        style={[styles.thumbnailEdit, hasMarkup && styles.thumbnailEditActive]}
+      >
+        <MaterialCommunityIcons
+          name="pencil"
+          size={11}
+          color={hasMarkup ? "#fff" : "rgba(255,255,255,0.85)"}
+        />
+      </TouchableOpacity>
     </TouchableOpacity>
   );
 }
@@ -1011,6 +1062,20 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.error,
     alignItems: "center",
     justifyContent: "center",
+  },
+  thumbnailEdit: {
+    position: "absolute",
+    top: 4,
+    left: 4,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: "rgba(0,0,0,0.55)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  thumbnailEditActive: {
+    backgroundColor: "#16A34A",
   },
   addThumbnailBtn: {
     width: THUMB,

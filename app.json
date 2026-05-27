@@ -65,6 +65,14 @@
           "microphonePermission": "Allow ClientManagement to use the microphone for voice dictation.",
           "speechRecognitionPermission": "Allow ClientManagement to convert your speech to text for inspection notes."
         }
+      ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/icon.png",
+          "color": "#5C5CE8",
+          "defaultChannel": "upcoming-appt"
+        }
       ]
     ],
     "experiments": {

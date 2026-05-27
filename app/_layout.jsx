@@ -1,4 +1,5 @@
 import { theme } from "@theme";
+import * as Notifications from "expo-notifications";
 import { router, Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { useEffect, useState } from "react";
@@ -8,6 +9,7 @@ import {
   configureReanimatedLogger,
   ReanimatedLogLevel,
 } from "react-native-reanimated";
+import { DB_EVENTS, subscribe } from "../db/events";
 import { initializeDatabase } from "../db/index";
 import { getAllInspections } from "../db/inspections";
 import { logError } from "../db/logs";
@@ -16,6 +18,11 @@ import { getLocalUser, getOrCreateUser, pullSelfUser } from "../db/users";
 import { useInspectionStore } from "../stores/useInspectionStore";
 import { useSettingsStore } from "../stores/useSettingsStore";
 import { useSmsStore } from "../stores/useSmsStore";
+import {
+  cancelUpcomingApptNotif,
+  getUpcomingApptTapRoute,
+  scheduleUpcomingApptNotif,
+} from "../utils/notifications";
 import { supabase } from "../utils/supabase";
 import { syncAll } from "../utils/sync";
 
@@ -37,6 +44,9 @@ export default function RootLayout() {
   const [isAuthed, setIsAuthed] = useState(false);
   const loadInspections = useInspectionStore((s) => s.load);
   const loadSettings = useSettingsStore((s) => s.loadSettings);
+  const loadNotificationsFromDb = useSettingsStore(
+    (s) => s.loadNotificationsFromDb,
+  );
   const setUserSk = useSettingsStore((s) => s.setUserSk);
   const setUserProfile = useSettingsStore((s) => s.setUserProfile);
   const setOrgSk = useSettingsStore((s) => s.setOrgSk);
@@ -81,6 +91,9 @@ export default function RootLayout() {
       .catch((e) => logError(e, "RootLayout.pullSelfUser"));
 
     await loadSettings();
+    // SQLite is the source of truth for notification toggles — overwrite the
+    // AsyncStorage-hydrated map with whatever loadSettings just put in place.
+    await loadNotificationsFromDb(userSk);
     const inspections = await getAllInspections();
     loadInspections(inspections);
     try {
@@ -169,6 +182,86 @@ export default function RootLayout() {
     if (!isAuthed) router.replace("/login");
   }, [ready, isAuthed]);
 
+  // Wire db-layer events to the notification scheduler. db/inspections.js
+  // emits on insert/update/delete; we react by scheduling or cancelling a
+  // local reminder. Keeps the db module decoupled from the notifications
+  // module — both sides only know about the event names in db/events.js.
+  //
+  // Mount once at app start (not gated on auth) so cancellations still fire
+  // for unauthenticated cleanup paths. The scheduler itself is gated on
+  // permission + master-toggle internally, so listening eagerly is safe.
+  useEffect(() => {
+    const handleInsertOrUpdate = (inspection) => {
+      scheduleUpcomingApptNotif({ inspection });
+    };
+    const handleDelete = (payload) => {
+      cancelUpcomingApptNotif(payload?.InspectionSk);
+    };
+    const unsubInsert = subscribe(
+      DB_EVENTS.INSPECTION_INSERTED,
+      handleInsertOrUpdate,
+    );
+    const unsubUpdate = subscribe(
+      DB_EVENTS.INSPECTION_UPDATED,
+      handleInsertOrUpdate,
+    );
+    const unsubDelete = subscribe(DB_EVENTS.INSPECTION_DELETED, handleDelete);
+    return () => {
+      unsubInsert();
+      unsubUpdate();
+      unsubDelete();
+    };
+  }, []);
+
+  // Notification tap routing. Two paths handled here:
+  //   1. Live tap while the app is open / backgrounded — covered by
+  //      addNotificationResponseReceivedListener.
+  //   2. Cold-start tap that woke the app from killed state — covered by
+  //      getLastNotificationResponseAsync (one-shot read on mount).
+  // Both funnel through getUpcomingApptTapRoute, which validates the data
+  // payload and returns a navigation descriptor (or null to ignore).
+  useEffect(() => {
+    if (!ready || !isAuthed) return;
+
+    function handleResponse(response) {
+      const route = getUpcomingApptTapRoute(response);
+      if (!route) return;
+      try {
+        router.navigate(route);
+      } catch (e) {
+        logError(e, "RootLayout.notificationResponse.navigate");
+      }
+    }
+
+    // 1. Live taps.
+    const sub = Notifications.addNotificationResponseReceivedListener(
+      (response) => {
+        try {
+          handleResponse(response);
+        } catch (e) {
+          logError(e, "RootLayout.notificationResponse.live");
+        }
+      },
+    );
+
+    // 2. Cold-start tap. Use a tiny delay so router has fully mounted the
+    // tabs stack before we push onto it.
+    let coldStartTimer = null;
+    Notifications.getLastNotificationResponseAsync()
+      .then((response) => {
+        if (!response) return;
+        coldStartTimer = setTimeout(() => handleResponse(response), 250);
+      })
+      .catch((e) =>
+        logError(e, "RootLayout.notificationResponse.coldStart"),
+      );
+
+    return () => {
+      sub.remove();
+      if (coldStartTimer) clearTimeout(coldStartTimer);
+    };
+  }, [ready, isAuthed]);
+
   if (!ready) {
     return (
       <View
@@ -231,6 +324,10 @@ export default function RootLayout() {
         />
         <Stack.Screen
           name="smstemplates"
+          options={{ headerShown: false, animation: "slide_from_right" }}
+        />
+        <Stack.Screen
+          name="notifications"
           options={{ headerShown: false, animation: "slide_from_right" }}
         />
         <Stack.Screen

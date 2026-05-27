@@ -1,5 +1,6 @@
 import dayjs from "dayjs";
 import * as Crypto from "expo-crypto";
+import { DB_EVENTS, emit } from "./events";
 import { db } from "./index";
 import { logError } from "./logs";
 
@@ -43,13 +44,15 @@ export async function insertInspection(data) {
         now,
       ],
     );
-    return {
+    const inserted = {
       ...data,
       InspectionSk: sk,
       _version: 1,
       _lastChangedAt: now,
       _deleted: 0,
     };
+    emit(DB_EVENTS.INSPECTION_INSERTED, inserted);
+    return inserted;
   } catch (e) {
     logError(e, `db/inspections.insertInspection userSk=${data.UserSk}`);
     throw e;
@@ -85,7 +88,9 @@ export async function updateInspection(sk, data) {
         sk,
       ],
     );
-    return { ...data, InspectionSk: sk, _lastChangedAt: now };
+    const updated = { ...data, InspectionSk: sk, _lastChangedAt: now };
+    emit(DB_EVENTS.INSPECTION_UPDATED, updated);
+    return updated;
   } catch (e) {
     logError(e, `db/inspections.updateInspection sk=${sk}`);
     throw e;
@@ -99,6 +104,7 @@ export async function softDeleteInspection(sk) {
       `UPDATE Inspections SET _deleted = 1, _lastChangedAt = ?, Synced = 0 WHERE InspectionSk = ?`,
       [now, sk],
     );
+    emit(DB_EVENTS.INSPECTION_DELETED, { InspectionSk: sk });
   } catch (e) {
     logError(e, `db/inspections.softDeleteInspection sk=${sk}`);
     throw e;
@@ -126,6 +132,7 @@ export async function deleteInspectionLocal(sk) {
     );
     await db.runAsync(`DELETE FROM SmsStatus WHERE InspectionSk = ?`, [sk]);
     await db.runAsync(`DELETE FROM Inspections WHERE InspectionSk = ?`, [sk]);
+    emit(DB_EVENTS.INSPECTION_DELETED, { InspectionSk: sk });
   } catch (e) {
     logError(e, `db/inspections.deleteInspectionLocal sk=${sk}`);
     throw e;

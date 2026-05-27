@@ -125,11 +125,16 @@ export default function UnassignedRecordsScreen() {
         return;
       }
       const results = data?.results ?? [];
-      const failures = results.filter((r) => !r.ok);
+      const failures = results.filter((r) => !r?.ok);
       if (failures.length > 0) {
         Alert.alert(
           "Some reassignments failed",
-          failures.map((f) => `• ${f.inspection_sk}: ${f.error}`).join("\n"),
+          failures
+            .map(
+              (f) =>
+                `• ${f?.inspection_sk ?? "unknown"}: ${f?.error ?? "unknown error"}`,
+            )
+            .join("\n"),
         );
       }
       // Refresh the list (succeeded rows drop off) and sync local DB so the

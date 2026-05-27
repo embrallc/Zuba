@@ -1,31 +1,31 @@
-import dayjs from 'dayjs';
-import { useInspectionStore } from '../stores/useInspectionStore';
-import { supabase } from './supabase';
-import { db } from '../db/index';
-import { logError } from '../db/logs';
-import { uploadInspectionPhoto } from './inspectionPhotos';
+import dayjs from "dayjs";
+import { db } from "../db/index";
+import { logError } from "../db/logs";
+import { useInspectionStore } from "../stores/useInspectionStore";
+import { uploadInspectionPhoto } from "./inspectionPhotos";
+import { supabase } from "./supabase";
 
 function cloudInspectionToStoreObj(r) {
   return {
-    InspectionSk:  r.inspection_sk,
-    UserSk:        r.user_id,
-    FullName:      r.full_name ?? null,
-    Summary:       r.summary ?? null,
-    AddressLine1:  r.address_line1 ?? null,
-    AddressLine2:  r.address_line2 ?? null,
-    City:          r.city ?? null,
-    State:         r.state ?? null,
-    ZipCode:       r.zip_code ?? null,
-    ScheduledAt:   r.scheduled_at ?? null,
-    Phone:         r.phone ?? null,
-    Email:         r.email ?? null,
-    Longitude:     r.longitude ?? null,
-    Latitude:      r.latitude ?? null,
-    Status:        r.status ?? 'OPEN',
-    _version:      r._version ?? 1,
+    InspectionSk: r.inspection_sk,
+    UserSk: r.user_id,
+    FullName: r.full_name ?? null,
+    Summary: r.summary ?? null,
+    AddressLine1: r.address_line1 ?? null,
+    AddressLine2: r.address_line2 ?? null,
+    City: r.city ?? null,
+    State: r.state ?? null,
+    ZipCode: r.zip_code ?? null,
+    ScheduledAt: r.scheduled_at ?? null,
+    Phone: r.phone ?? null,
+    Email: r.email ?? null,
+    Longitude: r.longitude ?? null,
+    Latitude: r.latitude ?? null,
+    Status: r.status ?? "OPEN",
+    _version: r._version ?? 1,
     _lastChangedAt: r._last_changed_at ?? null,
-    _deleted:      r._deleted ? 1 : 0,
-    Synced:        1,
+    _deleted: r._deleted ? 1 : 0,
+    Synced: 1,
   };
 }
 
@@ -42,28 +42,28 @@ async function pushInspections(userId) {
   // clobber of a teammate's intervening cloud edit).
   for (const r of rows) {
     try {
-      const { error } = await supabase.from('inspections').upsert(
+      const { error } = await supabase.from("inspections").upsert(
         {
-          inspection_sk:    r.InspectionSk,
-          user_id:          userId,
-          full_name:        r.FullName ?? null,
-          summary:          r.Summary ?? null,
-          address_line1:    r.AddressLine1 ?? null,
-          address_line2:    r.AddressLine2 ?? null,
-          city:             r.City ?? null,
-          state:            r.State ?? null,
-          zip_code:         r.ZipCode ?? null,
-          scheduled_at:     r.ScheduledAt ?? null,
-          phone:            r.Phone ?? null,
-          email:            r.Email ?? null,
-          longitude:        r.Longitude ?? null,
-          latitude:         r.Latitude ?? null,
-          status:           r.Status ?? 'OPEN',
-          _version:         r._version ?? 1,
+          inspection_sk: r.InspectionSk,
+          user_id: userId,
+          full_name: r.FullName ?? null,
+          summary: r.Summary ?? null,
+          address_line1: r.AddressLine1 ?? null,
+          address_line2: r.AddressLine2 ?? null,
+          city: r.City ?? null,
+          state: r.State ?? null,
+          zip_code: r.ZipCode ?? null,
+          scheduled_at: r.ScheduledAt ?? null,
+          phone: r.Phone ?? null,
+          email: r.Email ?? null,
+          longitude: r.Longitude ?? null,
+          latitude: r.Latitude ?? null,
+          status: r.Status ?? "OPEN",
+          _version: r._version ?? 1,
           _last_changed_at: r._lastChangedAt ?? null,
-          _deleted:         !!r._deleted,
+          _deleted: !!r._deleted,
         },
-        { onConflict: 'inspection_sk' },
+        { onConflict: "inspection_sk" },
       );
       if (error) throw error;
       await db.runAsync(
@@ -71,31 +71,33 @@ async function pushInspections(userId) {
         [r.InspectionSk],
       );
     } catch (e) {
-      logError(e, `sync/pushInspections:${r?.InspectionSk ?? 'unknown'}`);
+      logError(e, `sync/pushInspections:${r?.InspectionSk ?? "unknown"}`);
     }
   }
 }
 
 async function pushInspectionDescriptions(userId) {
-  const rows = db.getAllSync(`SELECT * FROM InspectionDescription WHERE Synced = 0`);
+  const rows = db.getAllSync(
+    `SELECT * FROM InspectionDescription WHERE Synced = 0`,
+  );
   if (!rows.length) return;
 
   for (const r of rows) {
     try {
-      const { error } = await supabase.from('inspection_descriptions').upsert(
+      const { error } = await supabase.from("inspection_descriptions").upsert(
         {
           inspection_description_sk: r.InspectionDescriptionSk,
-          inspection_sk:             r.InspectionSk,
-          user_id:                   userId,
-          description:               r.Description ?? null,
-          notes:                     r.Notes ?? null,
-          position:                  r.Position ?? 0,
-          severity_level:            r.SeverityLevel ?? null,
-          _version:                  r._version ?? 1,
-          _last_changed_at:          r._lastChangedAt ?? null,
-          _deleted:                  !!r._deleted,
+          inspection_sk: r.InspectionSk,
+          user_id: userId,
+          description: r.Description ?? null,
+          notes: r.Notes ?? null,
+          position: r.Position ?? 0,
+          severity_level: r.SeverityLevel ?? null,
+          _version: r._version ?? 1,
+          _last_changed_at: r._lastChangedAt ?? null,
+          _deleted: !!r._deleted,
         },
-        { onConflict: 'inspection_description_sk' },
+        { onConflict: "inspection_description_sk" },
       );
       if (error) throw error;
       await db.runAsync(
@@ -103,7 +105,10 @@ async function pushInspectionDescriptions(userId) {
         [r.InspectionDescriptionSk],
       );
     } catch (e) {
-      logError(e, `sync/pushInspectionDescriptions:${r?.InspectionDescriptionSk ?? 'unknown'}`);
+      logError(
+        e,
+        `sync/pushInspectionDescriptions:${r?.InspectionDescriptionSk ?? "unknown"}`,
+      );
     }
   }
 }
@@ -122,10 +127,12 @@ async function pushInspectionDetails(userId) {
     );
     orgSk = userRow?.OrgSk ?? null;
   } catch (e) {
-    logError(e, 'sync/pushInspectionDetails:lookupOrgSk');
+    logError(e, "sync/pushInspectionDetails:lookupOrgSk");
   }
   if (!orgSk) {
-    console.warn(`[sync] pushInspectionDetails: OrgSk missing for userId=${userId} — photo uploads will be SKIPPED`);
+    console.warn(
+      `[sync] pushInspectionDetails: OrgSk missing for userId=${userId} — photo uploads will be SKIPPED`,
+    );
   }
 
   // Per-row push: each row may need a Storage upload before the DB upsert.
@@ -137,10 +144,14 @@ async function pushInspectionDetails(userId) {
       // Skip deleted rows — no point uploading something we're tombstoning.
       const needsUpload = !cloudUri && r.LocalPictureURI && !r._deleted;
       if (needsUpload && !orgSk) {
-        console.warn(`[sync] detail ${r.InspectionDetailSk}: skipping upload — no OrgSk`);
+        console.warn(
+          `[sync] detail ${r.InspectionDetailSk}: skipping upload — no OrgSk`,
+        );
       }
       if (needsUpload && orgSk) {
-        console.log(`[sync] detail ${r.InspectionDetailSk}: uploading local=${r.LocalPictureURI}`);
+        console.log(
+          `[sync] detail ${r.InspectionDetailSk}: uploading local=${r.LocalPictureURI}`,
+        );
         const uploaded = await uploadInspectionPhoto({
           localUri: r.LocalPictureURI,
           orgSk,
@@ -148,7 +159,9 @@ async function pushInspectionDetails(userId) {
           detailSk: r.InspectionDetailSk,
         });
         if (uploaded) {
-          console.log(`[sync] detail ${r.InspectionDetailSk}: uploaded → ${uploaded}`);
+          console.log(
+            `[sync] detail ${r.InspectionDetailSk}: uploaded → ${uploaded}`,
+          );
           cloudUri = uploaded;
           try {
             await db.runAsync(
@@ -156,29 +169,34 @@ async function pushInspectionDetails(userId) {
               [cloudUri, r.InspectionDetailSk],
             );
           } catch (e) {
-            logError(e, `sync/pushInspectionDetails:saveCloudUri ${r.InspectionDetailSk}`);
+            logError(
+              e,
+              `sync/pushInspectionDetails:saveCloudUri ${r.InspectionDetailSk}`,
+            );
           }
         } else {
-          console.warn(`[sync] detail ${r.InspectionDetailSk}: upload returned null`);
+          console.warn(
+            `[sync] detail ${r.InspectionDetailSk}: upload returned null`,
+          );
         }
         // If upload failed, cloudUri stays null. Row will still upsert (so
         // notes/markup/deletes propagate), and the next syncAll retries.
       }
 
-      const { error } = await supabase.from('inspection_details').upsert(
+      const { error } = await supabase.from("inspection_details").upsert(
         {
-          inspection_detail_sk:      r.InspectionDetailSk,
+          inspection_detail_sk: r.InspectionDetailSk,
           inspection_description_sk: r.InspectionDescriptionSk,
-          user_id:                   userId,
-          local_picture_uri:         r.LocalPictureURI ?? null,
-          cloud_picture_uri:         cloudUri,
-          picture_note:              r.PictureNote ?? null,
-          picture_markup:            r.PictureMarkup ?? null,
-          _version:                  r._version ?? 1,
-          _last_changed_at:          r._lastChangedAt ?? null,
-          _deleted:                  !!r._deleted,
+          user_id: userId,
+          local_picture_uri: r.LocalPictureURI ?? null,
+          cloud_picture_uri: cloudUri,
+          picture_note: r.PictureNote ?? null,
+          picture_markup: r.PictureMarkup ?? null,
+          _version: r._version ?? 1,
+          _last_changed_at: r._lastChangedAt ?? null,
+          _deleted: !!r._deleted,
         },
-        { onConflict: 'inspection_detail_sk' },
+        { onConflict: "inspection_detail_sk" },
       );
       if (error) throw error;
 
@@ -187,7 +205,10 @@ async function pushInspectionDetails(userId) {
         [r.InspectionDetailSk],
       );
     } catch (e) {
-      logError(e, `sync/pushInspectionDetails:${r?.InspectionDetailSk ?? 'unknown'}`);
+      logError(
+        e,
+        `sync/pushInspectionDetails:${r?.InspectionDetailSk ?? "unknown"}`,
+      );
     }
   }
 }
@@ -198,16 +219,16 @@ async function pushSectionTemplates(userId) {
 
   for (const r of rows) {
     try {
-      const { error } = await supabase.from('section_templates').upsert(
+      const { error } = await supabase.from("section_templates").upsert(
         {
           section_template_sk: r.SectionTemplateSk,
-          user_id:             userId,
-          name:                r.Name,
-          position:            r.Position ?? 0,
-          created_at:          r.CreatedAt,
-          updated_at:          r.UpdatedAt,
+          user_id: userId,
+          name: r.Name,
+          position: r.Position ?? 0,
+          created_at: r.CreatedAt,
+          updated_at: r.UpdatedAt,
         },
-        { onConflict: 'section_template_sk' },
+        { onConflict: "section_template_sk" },
       );
       if (error) throw error;
       await db.runAsync(
@@ -215,7 +236,10 @@ async function pushSectionTemplates(userId) {
         [r.SectionTemplateSk],
       );
     } catch (e) {
-      logError(e, `sync/pushSectionTemplates:${r?.SectionTemplateSk ?? 'unknown'}`);
+      logError(
+        e,
+        `sync/pushSectionTemplates:${r?.SectionTemplateSk ?? "unknown"}`,
+      );
     }
   }
 }
@@ -226,17 +250,17 @@ async function pushSmsTemplates(userId) {
 
   for (const r of rows) {
     try {
-      const { error } = await supabase.from('sms_templates').upsert(
+      const { error } = await supabase.from("sms_templates").upsert(
         {
           sms_template_sk: r.SmsTemplateSk,
-          user_id:         userId,
-          name:            r.Name,
-          body:            r.Body,
-          position:        r.Position ?? 0,
-          created_at:      r.CreatedAt,
-          updated_at:      r.UpdatedAt,
+          user_id: userId,
+          name: r.Name,
+          body: r.Body,
+          position: r.Position ?? 0,
+          created_at: r.CreatedAt,
+          updated_at: r.UpdatedAt,
         },
-        { onConflict: 'sms_template_sk' },
+        { onConflict: "sms_template_sk" },
       );
       if (error) throw error;
       await db.runAsync(
@@ -244,7 +268,7 @@ async function pushSmsTemplates(userId) {
         [r.SmsTemplateSk],
       );
     } catch (e) {
-      logError(e, `sync/pushSmsTemplates:${r?.SmsTemplateSk ?? 'unknown'}`);
+      logError(e, `sync/pushSmsTemplates:${r?.SmsTemplateSk ?? "unknown"}`);
     }
   }
 }
@@ -255,19 +279,19 @@ async function pushSmsStatus(userId) {
 
   for (const r of rows) {
     try {
-      const { error } = await supabase.from('sms_status').upsert(
+      const { error } = await supabase.from("sms_status").upsert(
         {
-          sms_status_sk:    r.SmsStatusSk,
-          user_id:          userId,
-          inspection_sk:    r.InspectionSk,
-          sms_template_sk:  r.SmsTemplateSk,
-          sent:             !!r.Sent,
-          sent_at:          r.SentAt ?? null,
-          _version:         r._version ?? 1,
+          sms_status_sk: r.SmsStatusSk,
+          user_id: userId,
+          inspection_sk: r.InspectionSk,
+          sms_template_sk: r.SmsTemplateSk,
+          sent: !!r.Sent,
+          sent_at: r.SentAt ?? null,
+          _version: r._version ?? 1,
           _last_changed_at: r._lastChangedAt ?? null,
-          _deleted:         !!r._deleted,
+          _deleted: !!r._deleted,
         },
-        { onConflict: 'sms_status_sk' },
+        { onConflict: "sms_status_sk" },
       );
       if (error) throw error;
       await db.runAsync(
@@ -275,7 +299,7 @@ async function pushSmsStatus(userId) {
         [r.SmsStatusSk],
       );
     } catch (e) {
-      logError(e, `sync/pushSmsStatus:${r?.SmsStatusSk ?? 'unknown'}`);
+      logError(e, `sync/pushSmsStatus:${r?.SmsStatusSk ?? "unknown"}`);
     }
   }
 }
@@ -296,15 +320,15 @@ async function pushSmsStatus(userId) {
 
 async function pullInspections(userId) {
   const { data, error } = await supabase
-    .from('inspections')
-    .select('*')
-    .eq('user_id', userId);
+    .from("inspections")
+    .select("*")
+    .eq("user_id", userId);
   if (error) throw error;
 
   const seen = new Set();
   const store = useInspectionStore.getState();
 
-  for (const r of (data ?? [])) {
+  for (const r of data ?? []) {
     seen.add(r.inspection_sk);
     try {
       const local = db.getFirstSync(
@@ -319,11 +343,25 @@ async function pullInspections(userId) {
             _version, _lastChangedAt, _deleted, Synced)
            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
           [
-            r.inspection_sk, r.user_id, r.full_name, r.summary,
-            r.address_line1, r.address_line2, r.city, r.state, r.zip_code,
-            r.scheduled_at, r.phone, r.email, r.longitude, r.latitude,
-            r.status ?? 'OPEN', r._version ?? 1, r._last_changed_at,
-            r._deleted ? 1 : 0, 1,
+            r.inspection_sk,
+            r.user_id,
+            r.full_name,
+            r.summary,
+            r.address_line1,
+            r.address_line2,
+            r.city,
+            r.state,
+            r.zip_code,
+            r.scheduled_at,
+            r.phone,
+            r.email,
+            r.longitude,
+            r.latitude,
+            r.status ?? "OPEN",
+            r._version ?? 1,
+            r._last_changed_at,
+            r._deleted ? 1 : 0,
+            1,
           ],
         );
         if (!r._deleted) {
@@ -337,10 +375,24 @@ async function pullInspections(userId) {
            _version=?, _lastChangedAt=?, _deleted=?, Synced=1
            WHERE InspectionSk=?`,
           [
-            r.user_id, r.full_name, r.summary, r.address_line1, r.address_line2,
-            r.city, r.state, r.zip_code, r.scheduled_at, r.phone, r.email,
-            r.longitude, r.latitude, r.status ?? 'OPEN',
-            r._version ?? 1, r._last_changed_at, r._deleted ? 1 : 0, r.inspection_sk,
+            r.user_id,
+            r.full_name,
+            r.summary,
+            r.address_line1,
+            r.address_line2,
+            r.city,
+            r.state,
+            r.zip_code,
+            r.scheduled_at,
+            r.phone,
+            r.email,
+            r.longitude,
+            r.latitude,
+            r.status ?? "OPEN",
+            r._version ?? 1,
+            r._last_changed_at,
+            r._deleted ? 1 : 0,
+            r.inspection_sk,
           ],
         );
         if (r._deleted) {
@@ -350,7 +402,7 @@ async function pullInspections(userId) {
         }
       }
     } catch (e) {
-      logError(e, `sync/pullInspections:${r?.inspection_sk ?? 'unknown'}`);
+      logError(e, `sync/pullInspections:${r?.inspection_sk ?? "unknown"}`);
     }
   }
   return seen;
@@ -358,13 +410,13 @@ async function pullInspections(userId) {
 
 async function pullInspectionDescriptions(userId) {
   const { data, error } = await supabase
-    .from('inspection_descriptions')
-    .select('*')
-    .eq('user_id', userId);
+    .from("inspection_descriptions")
+    .select("*")
+    .eq("user_id", userId);
   if (error) throw error;
 
   const seen = new Set();
-  for (const r of (data ?? [])) {
+  for (const r of data ?? []) {
     seen.add(r.inspection_description_sk);
     try {
       const local = db.getFirstSync(
@@ -378,9 +430,16 @@ async function pullInspectionDescriptions(userId) {
             _version, _lastChangedAt, _deleted, Synced)
            VALUES (?,?,?,?,?,?,?,?,?,?)`,
           [
-            r.inspection_description_sk, r.inspection_sk, r.description, r.notes,
-            r.position ?? 0, r.severity_level ?? null,
-            r._version ?? 1, r._last_changed_at, r._deleted ? 1 : 0, 1,
+            r.inspection_description_sk,
+            r.inspection_sk,
+            r.description,
+            r.notes,
+            r.position ?? 0,
+            r.severity_level ?? null,
+            r._version ?? 1,
+            r._last_changed_at,
+            r._deleted ? 1 : 0,
+            1,
           ],
         );
       } else if ((r._version ?? 1) > (local._version ?? 1)) {
@@ -390,13 +449,23 @@ async function pullInspectionDescriptions(userId) {
            _version=?, _lastChangedAt=?, _deleted=?, Synced=1
            WHERE InspectionDescriptionSk=?`,
           [
-            r.inspection_sk, r.description, r.notes, r.position ?? 0, r.severity_level ?? null,
-            r._version ?? 1, r._last_changed_at, r._deleted ? 1 : 0, r.inspection_description_sk,
+            r.inspection_sk,
+            r.description,
+            r.notes,
+            r.position ?? 0,
+            r.severity_level ?? null,
+            r._version ?? 1,
+            r._last_changed_at,
+            r._deleted ? 1 : 0,
+            r.inspection_description_sk,
           ],
         );
       }
     } catch (e) {
-      logError(e, `sync/pullInspectionDescriptions:${r?.inspection_description_sk ?? 'unknown'}`);
+      logError(
+        e,
+        `sync/pullInspectionDescriptions:${r?.inspection_description_sk ?? "unknown"}`,
+      );
     }
   }
   return seen;
@@ -404,13 +473,13 @@ async function pullInspectionDescriptions(userId) {
 
 async function pullInspectionDetails(userId) {
   const { data, error } = await supabase
-    .from('inspection_details')
-    .select('*')
-    .eq('user_id', userId);
+    .from("inspection_details")
+    .select("*")
+    .eq("user_id", userId);
   if (error) throw error;
 
   const seen = new Set();
-  for (const r of (data ?? [])) {
+  for (const r of data ?? []) {
     seen.add(r.inspection_detail_sk);
     try {
       const local = db.getFirstSync(
@@ -427,10 +496,16 @@ async function pullInspectionDetails(userId) {
             _version, _lastChangedAt, _deleted, Synced)
            VALUES (?,?,?,?,?,?,?,?,?,?)`,
           [
-            r.inspection_detail_sk, r.inspection_description_sk,
-            r.local_picture_uri ?? null, r.cloud_picture_uri ?? null,
-            r.picture_note ?? null, r.picture_markup ?? null,
-            r._version ?? 1, r._last_changed_at, r._deleted ? 1 : 0, 1,
+            r.inspection_detail_sk,
+            r.inspection_description_sk,
+            r.local_picture_uri ?? null,
+            r.cloud_picture_uri ?? null,
+            r.picture_note ?? null,
+            r.picture_markup ?? null,
+            r._version ?? 1,
+            r._last_changed_at,
+            r._deleted ? 1 : 0,
+            1,
           ],
         );
       } else if ((r._version ?? 1) > (local._version ?? 1)) {
@@ -441,14 +516,22 @@ async function pullInspectionDetails(userId) {
            WHERE InspectionDetailSk=?`,
           [
             r.inspection_description_sk,
-            r.local_picture_uri ?? null, r.cloud_picture_uri ?? null,
-            r.picture_note, r.picture_markup,
-            r._version ?? 1, r._last_changed_at, r._deleted ? 1 : 0, r.inspection_detail_sk,
+            r.local_picture_uri ?? null,
+            r.cloud_picture_uri ?? null,
+            r.picture_note,
+            r.picture_markup,
+            r._version ?? 1,
+            r._last_changed_at,
+            r._deleted ? 1 : 0,
+            r.inspection_detail_sk,
           ],
         );
       }
     } catch (e) {
-      logError(e, `sync/pullInspectionDetails:${r?.inspection_detail_sk ?? 'unknown'}`);
+      logError(
+        e,
+        `sync/pullInspectionDetails:${r?.inspection_detail_sk ?? "unknown"}`,
+      );
     }
   }
   return seen;
@@ -459,13 +542,13 @@ async function pullSectionTemplates(userId) {
   // can see other users' rows doesn't accidentally import their templates
   // into local SQLite.
   const { data, error } = await supabase
-    .from('section_templates')
-    .select('*')
-    .eq('user_id', userId);
+    .from("section_templates")
+    .select("*")
+    .eq("user_id", userId);
   if (error) throw error;
 
   const seen = new Set();
-  for (const r of (data ?? [])) {
+  for (const r of data ?? []) {
     seen.add(r.section_template_sk);
     try {
       const local = db.getFirstSync(
@@ -478,11 +561,18 @@ async function pullSectionTemplates(userId) {
            (SectionTemplateSk, UserSk, Name, Position, CreatedAt, UpdatedAt, Synced)
            VALUES (?,?,?,?,?,?,?)`,
           [
-            r.section_template_sk, r.user_id, r.name, r.position ?? 0,
-            r.created_at, r.updated_at, 1,
+            r.section_template_sk,
+            r.user_id,
+            r.name,
+            r.position ?? 0,
+            r.created_at,
+            r.updated_at,
+            1,
           ],
         );
-      } else if (dayjs(r.updated_at).valueOf() > dayjs(local.UpdatedAt).valueOf()) {
+      } else if (
+        dayjs(r.updated_at).valueOf() > dayjs(local.UpdatedAt).valueOf()
+      ) {
         await db.runAsync(
           `UPDATE SectionTemplate SET Name=?, Position=?, UpdatedAt=?, Synced=1
            WHERE SectionTemplateSk=?`,
@@ -490,7 +580,10 @@ async function pullSectionTemplates(userId) {
         );
       }
     } catch (e) {
-      logError(e, `sync/pullSectionTemplates:${r?.section_template_sk ?? 'unknown'}`);
+      logError(
+        e,
+        `sync/pullSectionTemplates:${r?.section_template_sk ?? "unknown"}`,
+      );
     }
   }
   return seen;
@@ -498,13 +591,13 @@ async function pullSectionTemplates(userId) {
 
 async function pullSmsTemplates(userId) {
   const { data, error } = await supabase
-    .from('sms_templates')
-    .select('*')
-    .eq('user_id', userId);
+    .from("sms_templates")
+    .select("*")
+    .eq("user_id", userId);
   if (error) throw error;
 
   const seen = new Set();
-  for (const r of (data ?? [])) {
+  for (const r of data ?? []) {
     seen.add(r.sms_template_sk);
     try {
       const local = db.getFirstSync(
@@ -517,11 +610,19 @@ async function pullSmsTemplates(userId) {
            (SmsTemplateSk, UserSk, Name, Body, Position, CreatedAt, UpdatedAt, Synced)
            VALUES (?,?,?,?,?,?,?,?)`,
           [
-            r.sms_template_sk, r.user_id, r.name, r.body, r.position ?? 0,
-            r.created_at, r.updated_at, 1,
+            r.sms_template_sk,
+            r.user_id,
+            r.name,
+            r.body,
+            r.position ?? 0,
+            r.created_at,
+            r.updated_at,
+            1,
           ],
         );
-      } else if (dayjs(r.updated_at).valueOf() > dayjs(local.UpdatedAt).valueOf()) {
+      } else if (
+        dayjs(r.updated_at).valueOf() > dayjs(local.UpdatedAt).valueOf()
+      ) {
         await db.runAsync(
           `UPDATE SmsTemplate SET Name=?, Body=?, Position=?, UpdatedAt=?, Synced=1
            WHERE SmsTemplateSk=?`,
@@ -529,7 +630,7 @@ async function pullSmsTemplates(userId) {
         );
       }
     } catch (e) {
-      logError(e, `sync/pullSmsTemplates:${r?.sms_template_sk ?? 'unknown'}`);
+      logError(e, `sync/pullSmsTemplates:${r?.sms_template_sk ?? "unknown"}`);
     }
   }
   return seen;
@@ -537,13 +638,13 @@ async function pullSmsTemplates(userId) {
 
 async function pullSmsStatus(userId) {
   const { data, error } = await supabase
-    .from('sms_status')
-    .select('*')
-    .eq('user_id', userId);
+    .from("sms_status")
+    .select("*")
+    .eq("user_id", userId);
   if (error) throw error;
 
   const seen = new Set();
-  for (const r of (data ?? [])) {
+  for (const r of data ?? []) {
     seen.add(r.sms_status_sk);
     try {
       const local = db.getFirstSync(
@@ -557,9 +658,16 @@ async function pullSmsStatus(userId) {
             _version, _lastChangedAt, _deleted, Synced)
            VALUES (?,?,?,?,?,?,?,?,?,?)`,
           [
-            r.sms_status_sk, r.user_id, r.inspection_sk, r.sms_template_sk,
-            r.sent ? 1 : 0, r.sent_at ?? null,
-            r._version ?? 1, r._last_changed_at, r._deleted ? 1 : 0, 1,
+            r.sms_status_sk,
+            r.user_id,
+            r.inspection_sk,
+            r.sms_template_sk,
+            r.sent ? 1 : 0,
+            r.sent_at ?? null,
+            r._version ?? 1,
+            r._last_changed_at,
+            r._deleted ? 1 : 0,
+            1,
           ],
         );
       } else if ((r._version ?? 1) > (local._version ?? 1)) {
@@ -568,13 +676,17 @@ async function pullSmsStatus(userId) {
            Sent=?, SentAt=?, _version=?, _lastChangedAt=?, _deleted=?, Synced=1
            WHERE SmsStatusSk=?`,
           [
-            r.sent ? 1 : 0, r.sent_at ?? null,
-            r._version ?? 1, r._last_changed_at, r._deleted ? 1 : 0, r.sms_status_sk,
+            r.sent ? 1 : 0,
+            r.sent_at ?? null,
+            r._version ?? 1,
+            r._last_changed_at,
+            r._deleted ? 1 : 0,
+            r.sms_status_sk,
           ],
         );
       }
     } catch (e) {
-      logError(e, `sync/pullSmsStatus:${r?.sms_status_sk ?? 'unknown'}`);
+      logError(e, `sync/pullSmsStatus:${r?.sms_status_sk ?? "unknown"}`);
     }
   }
   return seen;
@@ -591,7 +703,7 @@ async function pullSmsStatus(userId) {
 // Children deleted before parents to satisfy FK constraints.
 
 function pruneTable(table, skColumn, seen, onRemove, hasDeleted = true) {
-  const where = hasDeleted ? 'Synced = 1 AND _deleted = 0' : 'Synced = 1';
+  const where = hasDeleted ? "Synced = 1 AND _deleted = 0" : "Synced = 1";
   const rows = db.getAllSync(
     `SELECT ${skColumn} AS sk FROM ${table} WHERE ${where}`,
   );
@@ -616,10 +728,12 @@ function pruneTable(table, skColumn, seen, onRemove, hasDeleted = true) {
 
 export async function syncAll() {
   try {
-    console.log('[sync] syncAll starting');
-    const { data: { session } } = await supabase.auth.getSession();
+    console.log("[sync] syncAll starting");
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
     if (!session?.user?.id) {
-      console.log('[sync] syncAll: no session, skipping');
+      console.log("[sync] syncAll: no session, skipping");
       return;
     }
     const userId = session.user.id;
@@ -627,12 +741,12 @@ export async function syncAll() {
     // Push phase — push local changes to cloud before pulling
     // FK order: parent tables before children
     const pushSteps = [
-      ['pushInspections',            () => pushInspections(userId)],
-      ['pushInspectionDescriptions', () => pushInspectionDescriptions(userId)],
-      ['pushInspectionDetails',      () => pushInspectionDetails(userId)],
-      ['pushSectionTemplates',       () => pushSectionTemplates(userId)],
-      ['pushSmsTemplates',           () => pushSmsTemplates(userId)],
-      ['pushSmsStatus',              () => pushSmsStatus(userId)],
+      ["pushInspections", () => pushInspections(userId)],
+      ["pushInspectionDescriptions", () => pushInspectionDescriptions(userId)],
+      ["pushInspectionDetails", () => pushInspectionDetails(userId)],
+      ["pushSectionTemplates", () => pushSectionTemplates(userId)],
+      ["pushSmsTemplates", () => pushSmsTemplates(userId)],
+      ["pushSmsStatus", () => pushSmsStatus(userId)],
     ];
     for (const [name, fn] of pushSteps) {
       try {
@@ -649,19 +763,49 @@ export async function syncAll() {
     // Parent-first so child INSERTs satisfy FK constraints. Each user-scoped
     // pull returns the set of SKs the cloud attributes to this user, which
     // the prune phase below uses to delete locally-stale rows.
-    let inspectionSks   = new Set();
-    let descriptionSks  = new Set();
-    let detailSks       = new Set();
-    let sectionTplSks   = new Set();
-    let smsTplSks       = new Set();
-    let smsStatusSks    = new Set();
+    let inspectionSks = new Set();
+    let descriptionSks = new Set();
+    let detailSks = new Set();
+    let sectionTplSks = new Set();
+    let smsTplSks = new Set();
+    let smsStatusSks = new Set();
     const pullSteps = [
-      ['pullInspections',            async () => { inspectionSks  = await pullInspections(userId); }],
-      ['pullInspectionDescriptions', async () => { descriptionSks = await pullInspectionDescriptions(userId); }],
-      ['pullInspectionDetails',      async () => { detailSks      = await pullInspectionDetails(userId); }],
-      ['pullSectionTemplates',       async () => { sectionTplSks  = await pullSectionTemplates(userId); }],
-      ['pullSmsTemplates',           async () => { smsTplSks      = await pullSmsTemplates(userId); }],
-      ['pullSmsStatus',              async () => { smsStatusSks   = await pullSmsStatus(userId); }],
+      [
+        "pullInspections",
+        async () => {
+          inspectionSks = await pullInspections(userId);
+        },
+      ],
+      [
+        "pullInspectionDescriptions",
+        async () => {
+          descriptionSks = await pullInspectionDescriptions(userId);
+        },
+      ],
+      [
+        "pullInspectionDetails",
+        async () => {
+          detailSks = await pullInspectionDetails(userId);
+        },
+      ],
+      [
+        "pullSectionTemplates",
+        async () => {
+          sectionTplSks = await pullSectionTemplates(userId);
+        },
+      ],
+      [
+        "pullSmsTemplates",
+        async () => {
+          smsTplSks = await pullSmsTemplates(userId);
+        },
+      ],
+      [
+        "pullSmsStatus",
+        async () => {
+          smsStatusSks = await pullSmsStatus(userId);
+        },
+      ],
     ];
     for (const [name, fn] of pullSteps) {
       try {
@@ -680,20 +824,31 @@ export async function syncAll() {
     // top-level inspections prune.
     try {
       const store = useInspectionStore.getState();
-      pruneTable('InspectionDetail',      'InspectionDetailSk',      detailSks);
-      pruneTable('InspectionDescription', 'InspectionDescriptionSk', descriptionSks);
-      pruneTable('Inspections',           'InspectionSk',            inspectionSks,
-        (sk) => store.remove(sk));
-      pruneTable('SmsStatus',             'SmsStatusSk',             smsStatusSks);
-      pruneTable('SectionTemplate', 'SectionTemplateSk', sectionTplSks, null, false);
-      pruneTable('SmsTemplate',     'SmsTemplateSk',     smsTplSks,     null, false);
+      pruneTable("InspectionDetail", "InspectionDetailSk", detailSks);
+      pruneTable(
+        "InspectionDescription",
+        "InspectionDescriptionSk",
+        descriptionSks,
+      );
+      pruneTable("Inspections", "InspectionSk", inspectionSks, (sk) =>
+        store.remove(sk),
+      );
+      pruneTable("SmsStatus", "SmsStatusSk", smsStatusSks);
+      pruneTable(
+        "SectionTemplate",
+        "SectionTemplateSk",
+        sectionTplSks,
+        null,
+        false,
+      );
+      pruneTable("SmsTemplate", "SmsTemplateSk", smsTplSks, null, false);
     } catch (e) {
-      logError(e, 'sync/prune');
+      logError(e, "sync/prune");
     }
 
-    console.log('[sync] syncAll complete');
+    console.log("[sync] syncAll complete");
   } catch (e) {
-    console.error('[sync] syncAll uncaught error:', e?.message, e?.stack);
-    logError(e, 'sync/syncAll');
+    console.error("[sync] syncAll uncaught error:", e?.message, e?.stack);
+    logError(e, "sync/syncAll");
   }
 }
