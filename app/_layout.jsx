@@ -9,6 +9,7 @@ import {
   configureReanimatedLogger,
   ReanimatedLogLevel,
 } from "react-native-reanimated";
+import TopBanner from "../components/TopBanner";
 import { DB_EVENTS, subscribe } from "../db/events";
 import { initializeDatabase } from "../db/index";
 import { getAllInspections } from "../db/inspections";
@@ -252,9 +253,7 @@ export default function RootLayout() {
         if (!response) return;
         coldStartTimer = setTimeout(() => handleResponse(response), 250);
       })
-      .catch((e) =>
-        logError(e, "RootLayout.notificationResponse.coldStart"),
-      );
+      .catch((e) => logError(e, "RootLayout.notificationResponse.coldStart"));
 
     return () => {
       sub.remove();
@@ -292,10 +291,6 @@ export default function RootLayout() {
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen
           name="addinspection"
-          options={{ headerShown: false, presentation: "modal" }}
-        />
-        <Stack.Screen
-          name="monthtooltip"
           options={{ headerShown: false, presentation: "modal" }}
         />
         <Stack.Screen
@@ -351,6 +346,9 @@ export default function RootLayout() {
           }}
         />
       </Stack>
+      {/* Global drop-down notification banner. Sits above every screen so
+          any module can call showBanner(...) without per-screen wiring. */}
+      <TopBanner />
     </GestureHandlerRootView>
   );
 }

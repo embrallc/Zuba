@@ -6,6 +6,7 @@ import { MotiView } from "moti";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   FlatList,
+  RefreshControl,
   SafeAreaView,
   StyleSheet,
   Text,
@@ -15,11 +16,15 @@ import {
 } from "react-native";
 import Animated, { FadeInDown } from "react-native-reanimated";
 import InspectionCard from "../../components/InspectionCard";
+import MyDayDashboard from "../../components/MyDayDashboard";
 import { runDevQuery } from "../../db/devQuery";
+import { getAllInspections } from "../../db/inspections";
 import { logError } from "../../db/logs";
 import { useDebouncedPress } from "../../hooks/useDebouncedPress";
+import { useMyDayRoute } from "../../hooks/useMyDayRoute";
 import { useInspectionStore } from "../../stores/useInspectionStore";
 import { useMapStore } from "../../stores/useMapStore";
+import { syncAll } from "../../utils/sync";
 
 const FAB_SIZE = (theme?.layout?.iconSize?.l ?? 28) * 2;
 
@@ -64,7 +69,39 @@ export default function MyDayScreen() {
   const router = useRouter();
   const sortedIds = useInspectionStore((s) => s.sortedIds);
   const inspections = useInspectionStore((s) => s.inspections);
+  const loadInspections = useInspectionStore((s) => s.load);
   const openGlobal = useMapStore((s) => s.openGlobal);
+
+  // My Day dashboard data. Fetches on mount; the hook handles location
+  // permission, error banners, and inflight de-dupe.
+  const {
+    data: routeData,
+    loading: routeLoading,
+    error: routeError,
+    refresh: refreshRoute,
+  } = useMyDayRoute();
+
+  // Pull-to-refresh. Triggers a full reconciliation:
+  //   1. syncAll() — pull any cloud-side inspection changes the user can't
+  //      see yet (teammate added one, web edit, etc.)
+  //   2. reload local inspections into the store
+  //   3. refresh the dashboard route data (cache-aware — only hits Google
+  //      Routes if fingerprint or TTL invalidates)
+  const [refreshing, setRefreshing] = useState(false);
+  async function handlePullRefresh() {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      await syncAll();
+      const fresh = await getAllInspections();
+      loadInspections(fresh ?? []);
+      await refreshRoute();
+    } catch (e) {
+      logError(e, "MyDayScreen.handlePullRefresh");
+    } finally {
+      setRefreshing(false);
+    }
+  }
 
   const todayInspections = useMemo(() => {
     const today = dayjs().format("YYYY-MM-DD");
@@ -174,19 +211,12 @@ export default function MyDayScreen() {
 
       {/* Dashboard — top 3/5 */}
       <View style={styles.dashboardSection}>
-        <View style={styles.dashboardCard}>
-          <MaterialCommunityIcons
-            name="weather-sunny"
-            size={theme.layout.iconSize.xl}
-            color={theme.colors.primary}
-            style={styles.dashboardIcon}
-          />
-          <Text style={styles.dashboardTitle}>My Day</Text>
-          <Text style={styles.dashboardSub}>
-            Traffic · Weather · Miles · Summary
-          </Text>
-          <Text style={styles.dashboardComingSoon}>Dashboard coming soon</Text>
-        </View>
+        <MyDayDashboard
+          data={routeData}
+          loading={routeLoading}
+          error={routeError}
+          onRefresh={refreshRoute}
+        />
       </View>
 
       {/* Today's inspections — bottom 2/5 */}
@@ -198,12 +228,22 @@ export default function MyDayScreen() {
             color={theme.colors.textSubtle}
           />
           <Text style={styles.listSectionTitle}>Today's Inspections</Text>
-          <Text style={styles.listSectionCount}>{filtered.length}</Text>
+          <View style={styles.listSectionCountBubble}>
+            <Text style={styles.listSectionCount}>{filtered.length}</Text>
+          </View>
         </View>
 
         <FlatList
           data={filtered}
           keyExtractor={(item) => item.InspectionSk}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={handlePullRefresh}
+              tintColor={theme.colors.primary}
+              colors={[theme.colors.primary]}
+            />
+          }
           renderItem={({ item, index }) => (
             <Animated.View
               entering={FadeInDown.delay(Math.min(index * 55, 220))
@@ -351,23 +391,29 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: theme.spacing.xs,
     paddingHorizontal: theme.spacing.m,
-    paddingVertical: theme.spacing.s,
-    marginHorizontal: theme.spacing.xs,
-    marginTop: theme.spacing.xs,
-    marginBottom: theme.spacing.xs,
-    backgroundColor: theme.colors.cardBackground,
-    borderRadius: theme.layout.borderRadius.m,
-    ...theme.shadows.light,
+    paddingTop: theme.spacing.xs,
+    paddingBottom: theme.spacing.xs,
   },
   listSectionTitle: {
     ...theme.typography.label,
     color: theme.colors.textSubtle,
     flex: 1,
   },
+  listSectionCountBubble: {
+    minWidth: 24,
+    height: 24,
+    paddingHorizontal: 8,
+    borderRadius: 12,
+    backgroundColor: theme.colors.cardBackground,
+    alignItems: "center",
+    justifyContent: "center",
+    ...theme.shadows.light,
+  },
   listSectionCount: {
     ...theme.typography.caption,
     color: theme.colors.primary,
     fontWeight: "700",
+    textAlign: "center",
   },
   list: {
     paddingTop: theme.spacing.xs,

@@ -23,6 +23,8 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import KeyboardToolbar from "../components/KeyboardToolbar";
 import { insertInspection, updateInspection } from "../db/inspections";
 import { logError } from "../db/logs";
+import { NOTIFICATION_NAMES } from "../db/notificationSettings";
+import { showBanner } from "../stores/useBannerStore";
 import { useInspectionStore } from "../stores/useInspectionStore";
 import { useSettingsStore } from "../stores/useSettingsStore";
 import { maybePromptForUpcomingApptNotif } from "../utils/notifications";
@@ -233,6 +235,25 @@ export default function AddInspectionScreen() {
         // First-inspection onboarding prompt for local reminders. No-op
         // after the first time it runs (AsyncStorage flag inside the helper).
         await maybePromptForUpcomingApptNotif({ userSk });
+
+        // Drop a confirmation banner. Read the toggle AFTER the prompt
+        // resolves so a first-inspection user who just tapped Allow sees
+        // the "we will remind you" copy correctly.
+        const upcomingOn =
+          !!useSettingsStore.getState().notifications?.[
+            NOTIFICATION_NAMES.UPCOMING_APPT
+          ];
+        const when = dayjs(scheduledAt).format("MMM D [at] h:mm A");
+        const name = form.FullName?.trim() || "your client";
+        showBanner({
+          message: `Inspection scheduled for ${name} on ${when}.${
+            upcomingOn
+              ? " We'll send you a reminder when it's getting close!"
+              : ""
+          }`,
+          kind: "success",
+          duration: 5000,
+        });
       }
       router.back();
     } catch (e) {

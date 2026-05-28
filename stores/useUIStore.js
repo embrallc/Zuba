@@ -29,8 +29,4 @@ export const useUIStore = create((set) => ({
     }),
 
   setLoading: (val) => set({ isLoading: val }),
-
-  // Shared date for cross-tab navigation (month → week)
-  selectedDate: null,
-  setSelectedDate: (date) => set({ selectedDate: date }),
 }));
