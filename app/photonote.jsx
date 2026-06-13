@@ -86,6 +86,7 @@ export default function PhotoNoteModal() {
           uri: await resolvePhotoUri({
             localUri: d.LocalPictureURI,
             cloudUri: d.CloudPictureURI,
+            detailSk: d.InspectionDetailSk,
           }),
           note: d.PictureNote ?? "",
           markup: d.PictureMarkup ?? null,

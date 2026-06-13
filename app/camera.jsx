@@ -15,7 +15,6 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { addInspectionPhoto } from "../db/inspectionForm";
 import { logError } from "../db/logs";
-import { saveToPhotoLibrary } from "../utils/inspectionPhotos";
 
 export default function CameraScreen() {
   const router = useRouter();
@@ -23,9 +22,9 @@ export default function CameraScreen() {
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = useRef(null);
 
-  // Each entry: { tempUri, assetId }. The temp URI drives the thumbnail strip
-  // (immediate, no MediaLibrary round-trip). assetId is the persistent handle
-  // we pass to addInspectionPhoto in handleDone — no app-sandbox copy is made.
+  // Each entry: { tempUri }. The temp URI drives the thumbnail strip;
+  // handleDone processes each capture into the app's photo cache (downscale +
+  // JPEG) — nothing is written to the user's Photos library.
   const [captured, setCaptured] = useState([]);
   const [capturing, setCapturing] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -38,8 +37,7 @@ export default function CameraScreen() {
         quality: 0.85,
         skipProcessing: true,
       });
-      const assetId = await saveToPhotoLibrary(photo.uri);
-      setCaptured((prev) => [{ tempUri: photo.uri, assetId }, ...prev]);
+      setCaptured((prev) => [{ tempUri: photo.uri }, ...prev]);
     } catch (e) {
       logError(e, "CameraScreen.handleCapture");
     } finally {
@@ -60,7 +58,6 @@ export default function CameraScreen() {
         await addInspectionPhoto({
           descriptionSk: sectionSk,
           sourceUri: item.tempUri,
-          assetId: item.assetId,
         });
       }
     } catch (e) {

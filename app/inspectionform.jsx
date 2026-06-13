@@ -139,6 +139,7 @@ export default function InspectionFormScreen() {
               uri: await resolvePhotoUri({
                 localUri: det.LocalPictureURI,
                 cloudUri: det.CloudPictureURI,
+                detailSk: det.InspectionDetailSk,
               }),
               note: det.PictureNote ?? "",
               markup: det.PictureMarkup ?? null,
@@ -332,20 +333,21 @@ export default function InspectionFormScreen() {
   }
 
   // ── Photo helpers ──────────────────────────────────────────────────────
-  // Photo flow: save to Photos library, upload to Storage, insert detail row.
-  // No app-sandbox copy is kept — see db/inspectionForm.addInspectionPhoto.
-  async function appendPhoto(sectionSk, sourceUri, assetId) {
+  // Photo flow: downscale + JPEG into the app photo cache, insert detail row,
+  // upload to Storage on next sync. Never touches the user's Photos library —
+  // see db/inspectionForm.addInspectionPhoto.
+  async function appendPhoto(sectionSk, sourceUri) {
     try {
-      if (!sourceUri && !assetId) return;
+      if (!sourceUri) return;
       const newDetail = await addInspectionPhoto({
         descriptionSk: sectionSk,
         sourceUri,
-        assetId,
       });
       if (!newDetail) return;
       const uri = await resolvePhotoUri({
         localUri: newDetail.LocalPictureURI,
         cloudUri: newDetail.CloudPictureURI,
+        detailSk: newDetail.InspectionDetailSk,
       });
       setSections((prev) =>
         prev.map((s) =>
@@ -388,9 +390,9 @@ export default function InspectionFormScreen() {
       });
       if (result.canceled || !result.assets?.length) return;
       for (const asset of result.assets) {
-        // assetId is populated when the user has full Photos access; falls back
-        // to sourceUri so addInspectionPhoto can save into the library itself.
-        await appendPhoto(sectionSk, asset.uri, asset.assetId);
+        // asset.uri is the picker's temp copy — appendPhoto processes it into
+        // our own cache, so the original library photo is never referenced.
+        await appendPhoto(sectionSk, asset.uri);
       }
     } catch (e) {
       logError(

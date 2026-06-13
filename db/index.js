@@ -85,6 +85,8 @@ export function initializeDatabase(userId) {
       Longitude REAL,
       Latitude REAL,
       Status TEXT DEFAULT 'OPEN',
+      LastReportPath TEXT,
+      LastReportAt INTEGER,
       _version INTEGER DEFAULT 1,
       _lastChangedAt INTEGER,
       _deleted BOOLEAN DEFAULT 0,
@@ -254,6 +256,14 @@ export function initializeDatabase(userId) {
     _db.execSync(
       `ALTER TABLE Inspections ADD COLUMN Status TEXT DEFAULT 'OPEN'`,
     );
+  } catch (_) {}
+  // Device-local pointers to the last generated report PDF in the app
+  // sandbox. Deliberately NOT synced — the file only exists on this device.
+  try {
+    _db.execSync(`ALTER TABLE Inspections ADD COLUMN LastReportPath TEXT`);
+  } catch (_) {}
+  try {
+    _db.execSync(`ALTER TABLE Inspections ADD COLUMN LastReportAt INTEGER`);
   } catch (_) {}
   try {
     _db.execSync(

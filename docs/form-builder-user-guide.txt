@@ -1,0 +1,261 @@
+=====================================================================
+KENSA FORM BUILDER — USER GUIDE
+Design your own inspection report, your way.
+=====================================================================
+
+The Form Builder lets you design the printable report your clients
+receive. You lay out the design once — your company header, the client
+info block, the walkthrough sections — and every report you generate
+after that follows your design automatically, no matter how big or
+small the inspection was.
+
+You design on your computer, in your web browser, where you have a big
+screen and a mouse. Your phone is only used to get you in the door.
+
+
+---------------------------------------------------------------------
+1. OPENING THE FORM BUILDER
+---------------------------------------------------------------------
+
+1. In the Kensa app, go to Settings and find REPORT DESIGNER.
+   (Only the owner of your organization sees this section.)
+2. Tap "Get editor link".
+3. Tap "Share" to email the link to yourself, then open it on your
+   computer — or tap "Open" to take a quick look on your phone.
+
+That link is private to your company. Anyone who has it can edit your
+report design, so treat it like a key:
+
+  - The link works for 90 days, then you'll need a fresh one.
+  - If you ever think someone else got hold of it, tap "Regenerate"
+    in Settings. That creates a new link and instantly kills the old
+    one everywhere.
+
+The first time you open the Form Builder you won't see a blank page —
+we start you off with a complete working report design. Feel free to
+move things, restyle them, or delete them entirely. You can't break
+anything; every report design can be rebuilt in minutes.
+
+
+---------------------------------------------------------------------
+2. FINDING YOUR WAY AROUND
+---------------------------------------------------------------------
+
+The screen has four areas:
+
+  TOP BAR      — your template's name, Undo / Redo, zoom, the save
+                 status, and the Publish button.
+  LEFT PANEL   — everything you can add: Sections, Elements, Shapes,
+                 and Data Fields. You DRAG items from here onto the
+                 page.
+  THE PAGE     — the white sheet in the middle. This is your report.
+  RIGHT PANEL  — the details of whatever you have selected: position,
+                 size, colors, fonts, and more. Click anything on the
+                 page and this panel changes to match it.
+
+The bar along the bottom of the screen has quick reminders of the
+shortcuts that make editing faster.
+
+
+---------------------------------------------------------------------
+3. SECTIONS — THE BUILDING BLOCKS
+---------------------------------------------------------------------
+
+Your report is a stack of horizontal sections, from top to bottom.
+There are two kinds, and the difference is the most important idea in
+the whole Form Builder:
+
+STATIC SECTIONS
+  Appear exactly once in the report. Use these for things you only
+  need one time: the report header, the client's name and address,
+  a summary at the end.
+
+REPEATING SECTIONS  (marked with a purple stripe)
+  This is where the magic happens. A repeating section is a TEMPLATE
+  that gets stamped out once for every area you inspected. Design it
+  once — for example: section name at the top, a severity tag in the
+  corner, notes below, photos at the bottom. Then, if your walkthrough
+  covered Basement, Roof, and Foundation, the finished report
+  automatically shows that same layout three times — once with the
+  Basement's notes and photos, once with the Roof's, once with the
+  Foundation's. Ten areas? Ten copies. You never touch the design.
+
+Working with sections:
+  - Drag "Static Section" or "Repeating Section" from the left panel
+    onto the page. A purple line shows where it will land.
+  - Hover over a section to reveal its toolbar: move up / move down,
+    duplicate, and delete.
+  - Drag a section's bottom edge to make it taller.
+  - Click a section's name tag to select it; use the right panel to
+    rename it or switch it between Static and Repeating.
+
+Because repeating sections grow with each report, the number of pages
+takes care of itself. The dashed "Page 2" lines on the design page are
+just a rough guide.
+
+
+---------------------------------------------------------------------
+4. ELEMENTS — WHAT GOES INSIDE A SECTION
+---------------------------------------------------------------------
+
+Drag any of these from the left panel into a section:
+
+TEXT
+  A block of words you write yourself. Double-click it to start
+  typing. While you're typing, a small toolbar appears with Bold,
+  Italic, Underline, and a text color picker — select some words and
+  style just those, exactly like a word processor.
+
+FIELD LINE
+  A line that gets filled in. Point it at one of your data fields
+  (see the next chapter) and the real value prints there. Leave it
+  unmapped and it prints as a blank line — perfect for anything you
+  like to fill in by hand. Choose between three looks in the right
+  panel: a simple underline, a box, or plain text.
+
+DIVIDER
+  A horizontal rule for visually separating content. Adjust its
+  thickness and color in the right panel.
+
+PHOTO GRID
+  A grid of photo placeholders. Put one inside a Repeating Section
+  and each area's photos fill it automatically in the finished
+  report, with their captions underneath. Choose 2, 3, or 4 columns,
+  the spacing, and whether captions show.
+
+IMAGE / LOGO
+  A picture that's part of your design — your company logo in the
+  header, a certification badge, a signature image. Drop it on the
+  page, then use "Upload image" in the right panel to pick a PNG or
+  JPG straight from your computer. The picture always fits inside
+  its box without stretching, and big files are scaled down
+  automatically. Upload once — it prints on every report.
+
+Moving and sizing things:
+  - Click to select. Drag to move. Pull the corner handles to resize.
+  - Pink lines appear when an element lines up with its neighbors —
+    let go and it snaps perfectly into alignment.
+  - Hold Alt while dragging to place something freely, with no
+    snapping.
+  - Arrow keys nudge the selected item one pixel (hold Shift for
+    bigger steps).
+
+
+---------------------------------------------------------------------
+5. SHAPES — BACKGROUNDS AND ACCENTS
+---------------------------------------------------------------------
+
+Rectangles, ellipses, and lines live BEHIND your text and fields,
+always. Use them for colored header bars, soft background panels
+behind a block of fields, or accent lines.
+
+  - Drag a shape into a section, then style it on the right: fill
+    color, border, rounded corners, and transparency.
+  - Shapes never cover your text — anything you drop on top of a
+    shape stays readable on top of it.
+  - With a section selected, the right panel lists all of its
+    background shapes so you can grab one even when it's behind
+    other things.
+
+
+---------------------------------------------------------------------
+6. DATA FIELDS — WHERE YOUR REAL DATA SHOWS UP
+---------------------------------------------------------------------
+
+The pill-shaped items at the bottom of the left panel — like
+"Customer Name" or "Address Line 1" — are live data fields. They're
+the bridge between the app and your report: when a report is
+generated, each one is replaced by the actual value from that
+inspection.
+
+Two ways to use them:
+
+  1. DROP ONE ONTO THE PAGE
+     It becomes its own field element you can place and style.
+
+  2. DROP ONE INTO THE MIDDLE OF A SENTENCE
+     Drag the pill directly into a Text block you're editing and it
+     lands right where your cursor points, as a small purple chip.
+     For example:
+        "This report was prepared for {Customer Name} on
+         {Report Date}."
+     prints as:
+        "This report was prepared for Sarah Mitchell on June 5,
+         2026."
+
+One rule to remember:
+  Fields in the "Walkthrough Section" group — Section Name, Section
+  Notes, Severity — change with every area of the home, so they only
+  make sense inside a REPEATING section. If you drop one into a
+  static section, the Form Builder outlines it in red and the right
+  panel explains the problem. Move it into a repeating section and
+  the warning disappears.
+
+
+---------------------------------------------------------------------
+7. SAVING AND PUBLISHING
+---------------------------------------------------------------------
+
+You never need to hit save. A moment after every change, the Form
+Builder saves automatically — watch the save status in the top bar
+("Saving…" then "All changes saved").
+
+Your edits go to a private DRAFT. Nothing about your real reports
+changes until you press PUBLISH in the top right. That's your "go
+live" switch: publish when you're happy, and every report generated
+from then on uses the new design. Until then, you can experiment
+freely.
+
+If you open the editor in two places at once and they step on each
+other, the editor notices and asks you to reload rather than letting
+one overwrite the other. Work from one tab at a time and you'll never
+see that message.
+
+
+---------------------------------------------------------------------
+8. SHORTCUTS WORTH KNOWING
+---------------------------------------------------------------------
+
+  Ctrl + Z            Undo            (Cmd on Mac)
+  Ctrl + Shift + Z    Redo
+  Ctrl + D            Duplicate the selected item
+  Delete              Remove the selected item
+  Arrow keys          Nudge 1px       (with Shift: 10px)
+  Alt while dragging  Place freely, no snapping
+  Double-click text   Edit the words
+  Escape              Stop editing / deselect
+
+
+---------------------------------------------------------------------
+9. IF SOMETHING GOES WRONG
+---------------------------------------------------------------------
+
+"This link isn't valid anymore"
+  Your link expired (they last 90 days) or someone regenerated it.
+  Open Kensa on your phone → Settings → Form Builder → Get editor
+  link, and use the fresh one.
+
+"Save failed — retrying"
+  Usually a brief internet hiccup. The editor keeps retrying as you
+  work; once the connection is back, the status returns to "All
+  changes saved". Avoid closing the tab while it shows unsaved
+  changes.
+
+"This template was changed somewhere else"
+  The design was edited from another tab or computer since you opened
+  this one. Click "Reload latest" to pick up the newest version, then
+  continue.
+
+A field prints blank in reports
+  Check two things: the element is mapped to a data field (right
+  panel → "Maps to"), and walkthrough fields live inside a repeating
+  section — look for the red outline that marks a misplaced field.
+
+Deleted something by accident
+  Ctrl + Z brings it right back — the editor remembers your last
+  60 steps.
+
+=====================================================================
+That's it. Drag, drop, publish — and every report you send carries
+your design.
+=====================================================================

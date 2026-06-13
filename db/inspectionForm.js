@@ -1,5 +1,9 @@
 import * as Crypto from "expo-crypto";
-import { saveToPhotoLibrary } from "../utils/inspectionPhotos";
+import {
+  deleteCachedPhoto,
+  deleteInspectionPhoto,
+  processAndCachePhoto,
+} from "../utils/inspectionPhotos";
 import { db } from "./index";
 import { logError } from "./logs";
 
@@ -58,7 +62,9 @@ export async function updateSectionPositions(updates) {
     const now = Date.now();
     for (const { sk, position } of updates) {
       await db.runAsync(
-        `UPDATE InspectionDescription SET Position = ?, _lastChangedAt = ?, Synced = 0 WHERE InspectionDescriptionSk = ?`,
+        `UPDATE InspectionDescription
+           SET Position = ?, _version = _version + 1, _lastChangedAt = ?, Synced = 0
+         WHERE InspectionDescriptionSk = ?`,
         [position, now, sk],
       );
     }
@@ -71,7 +77,9 @@ export async function updateSectionPositions(updates) {
 export async function updateSectionNotes(sk, notes) {
   try {
     await db.runAsync(
-      `UPDATE InspectionDescription SET Notes = ?, _lastChangedAt = ?, Synced = 0 WHERE InspectionDescriptionSk = ?`,
+      `UPDATE InspectionDescription
+         SET Notes = ?, _version = _version + 1, _lastChangedAt = ?, Synced = 0
+       WHERE InspectionDescriptionSk = ?`,
       [notes, Date.now(), sk],
     );
   } catch (e) {
@@ -83,7 +91,9 @@ export async function updateSectionNotes(sk, notes) {
 export async function updateSeverityLevel(sk, level) {
   try {
     await db.runAsync(
-      `UPDATE InspectionDescription SET SeverityLevel = ?, _lastChangedAt = ?, Synced = 0 WHERE InspectionDescriptionSk = ?`,
+      `UPDATE InspectionDescription
+         SET SeverityLevel = ?, _version = _version + 1, _lastChangedAt = ?, Synced = 0
+       WHERE InspectionDescriptionSk = ?`,
       [level, Date.now(), sk],
     );
   } catch (e) {
@@ -96,7 +106,7 @@ export async function updateDescription(sk, description) {
   try {
     await db.runAsync(
       `UPDATE InspectionDescription
-       SET Description = ?, _lastChangedAt = ?, Synced = 0
+       SET Description = ?, _version = _version + 1, _lastChangedAt = ?, Synced = 0
        WHERE InspectionDescriptionSk = ?`,
       [description, Date.now(), sk],
     );
@@ -109,20 +119,33 @@ export async function updateDescription(sk, description) {
 export async function deleteDescription(sk) {
   try {
     const now = Date.now();
+    // Capture the section's photos BEFORE tombstoning so their cloud/cache
+    // copies can be cleaned up below.
+    const details = await db.getAllAsync(
+      `SELECT InspectionDetailSk, CloudPictureURI FROM InspectionDetail
+       WHERE InspectionDescriptionSk = ? AND _deleted = 0`,
+      [sk],
+    );
     // Soft-delete the section and every photo attached to it. Two parametered
     // statements so the sk value never participates in SQL string assembly.
     await db.runAsync(
       `UPDATE InspectionDescription
-         SET _deleted = 1, Synced = 0, _lastChangedAt = ?
+         SET _deleted = 1, _version = _version + 1, Synced = 0, _lastChangedAt = ?
        WHERE InspectionDescriptionSk = ?`,
       [now, sk],
     );
     await db.runAsync(
       `UPDATE InspectionDetail
-         SET _deleted = 1, Synced = 0, _lastChangedAt = ?
+         SET _deleted = 1, _version = _version + 1, Synced = 0, _lastChangedAt = ?
        WHERE InspectionDescriptionSk = ?`,
       [now, sk],
     );
+    // Fire-and-forget: the rows are already tombstoned; storage cleanup is
+    // best-effort (a missed object only costs storage, never correctness).
+    for (const d of details ?? []) {
+      if (d.CloudPictureURI) deleteInspectionPhoto(d.CloudPictureURI);
+      deleteCachedPhoto(d.InspectionDetailSk);
+    }
   } catch (e) {
     logError(e, `db/inspectionForm.deleteDescription sk=${sk}`);
     throw e;
@@ -181,29 +204,24 @@ export async function insertDetail(
   }
 }
 
-// User just added a photo. Save into the user's Photos library so they own
-// it, then insert the detail row with the asset id and Synced=0. The cloud
-// upload is deferred to the next syncAll — pushInspectionDetails will see
-// LocalPictureURI set with no CloudPictureURI and upload it then.
-//
-// Pass `assetId` if the caller already has one (e.g. ImagePicker returns it
-// when a photo is selected from the library, or the in-app camera saved
-// during capture) to skip the library save step.
-export async function addInspectionPhoto({
-  descriptionSk,
-  sourceUri,
-  assetId: providedAssetId,
-}) {
+// User just added a photo. Downscale + JPEG it into the app CACHE (never the
+// user's Photos library — the cloud bucket is the durable copy), then insert
+// the detail row with the cache path and Synced=0. The cloud upload is
+// deferred to the next syncAll — pushInspectionDetails sees LocalPictureURI
+// set with no CloudPictureURI and uploads the already-processed file.
+export async function addInspectionPhoto({ descriptionSk, sourceUri }) {
   try {
-    if (!descriptionSk) return null;
-    if (!sourceUri && !providedAssetId) return null;
+    if (!descriptionSk || !sourceUri) return null;
 
-    const assetId =
-      providedAssetId ??
-      (sourceUri ? await saveToPhotoLibrary(sourceUri) : null);
+    // sk minted up front so the cache file can be named after it.
+    const sk = Crypto.randomUUID();
+    const cachePath = await processAndCachePhoto(sourceUri, sk);
 
+    // If processing failed, fall back to the raw temp URI — it may survive
+    // long enough for the next sync's upload pass to rescue it.
     return await insertDetail(descriptionSk, {
-      localPictureURI: assetId,
+      sk,
+      localPictureURI: cachePath ?? sourceUri,
     });
   } catch (e) {
     logError(e, `db/inspectionForm.addInspectionPhoto descSk=${descriptionSk}`);
@@ -225,13 +243,28 @@ export async function setCloudPictureURI(sk, cloudPictureURI) {
   }
 }
 
-export async function updateDetail(sk, { pictureNote, pictureMarkup }) {
+// Patch-style: only the fields actually present in `fields` are written, so
+// a markup-only save (photoedit) can never null out the note (photonote) and
+// vice versa.
+export async function updateDetail(sk, fields = {}) {
   try {
+    const sets = [];
+    const args = [];
+    if ("pictureNote" in fields) {
+      sets.push("PictureNote = ?");
+      args.push(fields.pictureNote ?? null);
+    }
+    if ("pictureMarkup" in fields) {
+      sets.push("PictureMarkup = ?");
+      args.push(fields.pictureMarkup ?? null);
+    }
+    if (!sets.length) return;
+    args.push(Date.now(), sk);
     await db.runAsync(
       `UPDATE InspectionDetail
-       SET PictureNote = ?, PictureMarkup = ?, _lastChangedAt = ?, Synced = 0
+       SET ${sets.join(", ")}, _version = _version + 1, _lastChangedAt = ?, Synced = 0
        WHERE InspectionDetailSk = ?`,
-      [pictureNote ?? null, pictureMarkup ?? null, Date.now(), sk],
+      args,
     );
   } catch (e) {
     logError(e, `db/inspectionForm.updateDetail sk=${sk}`);
@@ -241,10 +274,19 @@ export async function updateDetail(sk, { pictureNote, pictureMarkup }) {
 
 export async function deleteDetail(sk) {
   try {
+    const row = await db.getFirstAsync(
+      `SELECT CloudPictureURI FROM InspectionDetail WHERE InspectionDetailSk = ?`,
+      [sk],
+    );
     await db.runAsync(
-      `UPDATE InspectionDetail SET _deleted = 1, _lastChangedAt = ?, Synced = 0 WHERE InspectionDetailSk = ?`,
+      `UPDATE InspectionDetail
+         SET _deleted = 1, _version = _version + 1, _lastChangedAt = ?, Synced = 0
+       WHERE InspectionDetailSk = ?`,
       [Date.now(), sk],
     );
+    // Best-effort cleanup of the cloud + cache copies (fire-and-forget).
+    if (row?.CloudPictureURI) deleteInspectionPhoto(row.CloudPictureURI);
+    deleteCachedPhoto(sk);
   } catch (e) {
     logError(e, `db/inspectionForm.deleteDetail sk=${sk}`);
     throw e;

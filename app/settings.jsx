@@ -5,8 +5,10 @@ import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Linking,
   SafeAreaView,
   ScrollView,
+  Share,
   StyleSheet,
   Switch,
   Text,
@@ -22,10 +24,15 @@ import { useInspectionStore } from "../stores/useInspectionStore";
 import { useSettingsStore } from "../stores/useSettingsStore";
 import { signOutAndClear, supabase } from "../utils/supabase";
 import { syncAll } from "../utils/sync";
-// ── RevenueCat (pending Apple Developer approval) ─────────────────────────────
-// import { useSubscriptionStore } from "../stores/useSubscriptionStore";
-// import { presentCustomerCenter, presentPaywall } from "../utils/purchases";
-// ─────────────────────────────────────────────────────────────────────────────
+import { useSubscriptionStore } from "../stores/useSubscriptionStore";
+import { openManageSubscriptions, requestAccountDeletion } from "../utils/account";
+import {
+  logOutPurchases,
+  PAYWALL_RESULT,
+  presentCustomerCenter,
+  presentPaywall,
+  presentPaywallForUpgrade,
+} from "../utils/purchases";
 
 const APPT_LENGTH_OPTIONS = [15, 30, 45, 60, 75, 90, 105, 120];
 const START_HOUR_OPTIONS = [5, 6, 7, 8, 9, 10, 11];
@@ -46,13 +53,9 @@ function formatApptLength(minutes) {
 export default function SettingsScreen() {
   const router = useRouter();
   const showWeekends = useSettingsStore((s) => s.showWeekends);
-  const cloudStorageEnabled = useSettingsStore((s) => s.cloudStorageEnabled);
   const apptLengthMinutes = useSettingsStore((s) => s.apptLengthMinutes);
   const calendarStartHour = useSettingsStore((s) => s.calendarStartHour);
   const setShowWeekends = useSettingsStore((s) => s.setShowWeekends);
-  const setCloudStorageEnabled = useSettingsStore(
-    (s) => s.setCloudStorageEnabled,
-  );
   const setApptLengthMinutes = useSettingsStore((s) => s.setApptLengthMinutes);
   const setCalendarStartHour = useSettingsStore((s) => s.setCalendarStartHour);
   const userProfile = useSettingsStore((s) => s.userProfile);
@@ -61,6 +64,8 @@ export default function SettingsScreen() {
   const lname = useSettingsStore((s) => s.lname);
   const setFname = useSettingsStore((s) => s.setFname);
   const setLname = useSettingsStore((s) => s.setLname);
+  const integrations = useSettingsStore((s) => s.integrations);
+  const setIntegrations = useSettingsStore((s) => s.setIntegrations);
   const loadInspections = useInspectionStore((s) => s.load);
 
   // 'idle' | 'syncing' | 'done' | 'error'
@@ -77,7 +82,8 @@ export default function SettingsScreen() {
   useEffect(() => {
     return () => {
       if (nameSaveTimer.current) clearTimeout(nameSaveTimer.current);
-      if (nameStatusResetTimer.current) clearTimeout(nameStatusResetTimer.current);
+      if (nameStatusResetTimer.current)
+        clearTimeout(nameStatusResetTimer.current);
     };
   }, []);
 
@@ -90,7 +96,8 @@ export default function SettingsScreen() {
         lname: nextLname,
       });
       setNameStatus(ok ? "saved" : "error");
-      if (nameStatusResetTimer.current) clearTimeout(nameStatusResetTimer.current);
+      if (nameStatusResetTimer.current)
+        clearTimeout(nameStatusResetTimer.current);
       nameStatusResetTimer.current = setTimeout(
         () => setNameStatus("idle"),
         ok ? 1500 : 2500,
@@ -123,13 +130,32 @@ export default function SettingsScreen() {
       setTimeout(() => setSyncStatus("idle"), 2500);
     }
   }
-  // ── RevenueCat (pending Apple Developer approval) ───────────────────────────
-  // const isPro = useSubscriptionStore((s) => s.isPro);
-  // ───────────────────────────────────────────────────────────────────────────
+  const subscriptionStatus = useSubscriptionStore((s) => s.status);
+  const refreshSubscription = useSubscriptionStore((s) => s.refreshStatus);
+  const clearSubscription = useSubscriptionStore((s) => s.clear);
+
+  async function handleSubscribe() {
+    const result = await presentPaywall();
+    if (
+      result === PAYWALL_RESULT.PURCHASED ||
+      result === PAYWALL_RESULT.RESTORED
+    ) {
+      await refreshSubscription({ sync: true });
+    }
+  }
+
+  async function handleAddSeats() {
+    // Owner already holds the entitlement — present unconditionally so the
+    // store sheet can switch them to a bigger seat tier (prorated by Apple).
+    await presentPaywallForUpgrade();
+    await refreshSubscription({ sync: true });
+  }
 
   async function handleSignOut() {
     try {
+      await logOutPurchases();
       await signOutAndClear();
+      clearSubscription();
     } catch (e) {
       logError(e, "SettingsScreen.handleSignOut");
     } finally {
@@ -142,37 +168,43 @@ export default function SettingsScreen() {
   const [deleting, setDeleting] = useState(false);
 
   function handleDeleteAccount() {
-    Alert.alert(
-      "Delete Account",
-      "This permanently removes your account. If you're the only member of your organization, all your inspections and photos will also be deleted. This cannot be undone.",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Delete",
-          style: "destructive",
-          onPress: confirmDeleteAccount,
-        },
-      ],
-    );
+    // Apple guideline 5.1.1(v): deleting the account does NOT cancel an App
+    // Store subscription, and we're required to say so and point to where it
+    // can be cancelled.
+    const hasActiveSub =
+      subscriptionStatus?.periodEndsAt &&
+      Date.parse(subscriptionStatus.periodEndsAt) > Date.now();
+    const message =
+      "This permanently removes your account. If you're the only member of your organization, all your inspections and photos will also be deleted. This cannot be undone." +
+      (hasActiveSub
+        ? "\n\nYour App Store subscription is NOT cancelled automatically. To stop future payments, cancel it in your App Store subscription settings."
+        : "");
+    Alert.alert("Delete Account", message, [
+      { text: "Cancel", style: "cancel" },
+      ...(hasActiveSub
+        ? [{ text: "Manage Subscriptions", onPress: openManageSubscriptions }]
+        : []),
+      {
+        text: "Delete",
+        style: "destructive",
+        onPress: confirmDeleteAccount,
+      },
+    ]);
   }
 
   async function confirmDeleteAccount() {
     if (deleting) return;
     setDeleting(true);
     try {
-      const { data, error } = await supabase.functions.invoke("delete-account");
-      if (error) {
-        // supabase-js wraps non-2xx responses in a FunctionsHttpError with the
-        // underlying Response on `error.context`. Read the body so the user
-        // sees the real server-side reason rather than the generic
-        // "non 2xx status" wrapper message.
-        let detail = error.message ?? "Could not delete account.";
-        try {
-          const body = await error.context?.json?.();
-          if (body?.error) detail = body.error;
-        } catch (_) {}
-        logError(error, `SettingsScreen.deleteAccount.invoke detail="${detail}"`);
-        Alert.alert("Delete Failed", detail);
+      let data;
+      try {
+        data = await requestAccountDeletion();
+      } catch (invokeErr) {
+        logError(
+          invokeErr,
+          `SettingsScreen.deleteAccount.invoke detail="${invokeErr.message}"`,
+        );
+        Alert.alert("Delete Failed", invokeErr.message);
         return;
       }
       if (data?.status === "blocked_sole_owner") {
@@ -191,7 +223,9 @@ export default function SettingsScreen() {
         return;
       }
       // Either full_org_deleted or user_only_deleted — sign out and exit.
+      await logOutPurchases();
       await signOutAndClear();
+      clearSubscription();
       router.replace("/login");
     } catch (e) {
       logError(e, "SettingsScreen.deleteAccount");
@@ -421,6 +455,30 @@ export default function SettingsScreen() {
           onPress={() => router.push("/smstemplates")}
         />
 
+        <Text style={styles.sectionLabel}>INTEGRATIONS</Text>
+
+        <SettingRow
+          label="Apple Calendar"
+          description="Add your scheduled inspections to your Apple Calendar"
+          value={!!integrations?.appleCalendar}
+          onValueChange={(val) =>
+            setIntegrations({ ...integrations, appleCalendar: val })
+          }
+        />
+        <SettingRow
+          label="Google Calendar"
+          description="Add your scheduled inspections to your Google Calendar"
+          value={!!integrations?.googleCalendar}
+          onValueChange={(val) =>
+            setIntegrations({ ...integrations, googleCalendar: val })
+          }
+        />
+
+        <Guard guard={userProfile === "owner"}>
+          <Text style={styles.sectionLabel}>REPORT DESIGNER</Text>
+          <FormBuilderCard />
+        </Guard>
+
         <Guard guard={userProfile === "owner" || userProfile === "admin"}>
           <Text style={styles.sectionLabel}>TEAM</Text>
           <Guard guard={userProfile === "owner"}>
@@ -442,36 +500,27 @@ export default function SettingsScreen() {
           />
         </Guard>
 
+        <Text style={styles.sectionLabel}>ARCHIVE</Text>
 
-        {/* ── RevenueCat subscription section (pending Apple Developer approval) ──
-        <Text style={styles.sectionLabel}>SUBSCRIPTION</Text>
-        <View style={rowStyles.container}>
-          <View style={rowStyles.text}>
-            <Text style={rowStyles.label}>{isPro ? "Embra LLC Pro" : "Free Plan"}</Text>
-            <Text style={rowStyles.description}>
-              {isPro ? "Cloud sync and premium features active" : "Upgrade to unlock cloud sync and more"}
-            </Text>
-          </View>
-          <View style={[styles.badge, { backgroundColor: isPro ? theme.colors.success : theme.colors.input }]}>
-            <Text style={[styles.badgeText, { color: isPro ? "#fff" : theme.colors.textSubtle }]}>
-              {isPro ? "PRO" : "FREE"}
-            </Text>
-          </View>
-        </View>
-        {isPro ? (
-          <NavRow label="Manage Subscription" description="Cancel, restore purchases, or get support" onPress={presentCustomerCenter} />
-        ) : (
-          <NavRow label="Upgrade to Pro — $5.99/mo" description="Cloud sync, priority support, and future premium features" onPress={presentPaywall} />
-        )}
-        ── end RevenueCat section ── */}
+        <NavRow
+          label="Completed Inspections"
+          description="View inspections you've marked complete and reopen them if needed"
+          onPress={() =>
+            router.push({ pathname: "/archive", params: { type: "completed" } })
+          }
+        />
+        <NavRow
+          label="Deleted Inspections"
+          description="View deleted inspections and restore them if needed"
+          onPress={() =>
+            router.push({ pathname: "/archive", params: { type: "deleted" } })
+          }
+        />
 
-        <Text style={styles.sectionLabel}>STORAGE</Text>
-
-        <SettingRow
-          label="Cloud Storage"
-          description="Back up your inspections — $5.99/mo"
-          value={cloudStorageEnabled}
-          onValueChange={setCloudStorageEnabled}
+        <SubscriptionSection
+          status={subscriptionStatus}
+          onSubscribe={handleSubscribe}
+          onAddSeats={handleAddSeats}
         />
 
         <Text style={styles.sectionLabel}>ACCOUNT</Text>
@@ -512,6 +561,257 @@ export default function SettingsScreen() {
     </SafeAreaView>
   );
 }
+
+// Org-aware subscription card. The server's subscription-status verdict
+// (held in useSubscriptionStore) drives everything here — this component
+// never computes plan state itself, it just renders what it's told.
+function SubscriptionSection({ status, onSubscribe, onAddSeats }) {
+  const [busy, setBusy] = useState(false);
+  const isOwner = status?.role === "owner";
+  const state = status?.state ?? null;
+  const comp = (status?.seats ?? 0) >= 9999;
+
+  async function run(action) {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await action();
+    } catch (e) {
+      logError(e, "SettingsScreen.SubscriptionSection");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  let label = "Subscription";
+  let description = "Checking your plan…";
+  let badge = "—";
+  let badgeBg = theme?.colors?.input;
+  let badgeFg = theme?.colors?.textSubtle;
+
+  if (state === "trial") {
+    label = "Free Trial";
+    const d = status?.daysLeft ?? 0;
+    description = `${d} ${d === 1 ? "day" : "days"} left — your whole team is included`;
+    badge = "TRIAL";
+    badgeBg = theme?.colors?.primary;
+    badgeFg = "#fff";
+  } else if (state === "active") {
+    label = "Kensa Pro";
+    description = comp
+      ? "Complimentary access"
+      : isOwner
+        ? `${status?.members ?? 0} of ${status?.seats ?? 0} seats in use`
+        : "Provided by your organization";
+    badge = "PRO";
+    badgeBg = theme?.colors?.success;
+    badgeFg = "#fff";
+  } else if (state === "expired" || state === "seat_locked") {
+    label = "Subscription Inactive";
+    description = isOwner
+      ? "Your free trial has ended — subscribe to keep full access"
+      : "Ask your organization owner to subscribe";
+    badge = "EXPIRED";
+    badgeBg = theme?.colors?.error;
+    badgeFg = "#fff";
+  }
+
+  return (
+    <>
+      <Text style={styles.sectionLabel}>SUBSCRIPTION</Text>
+      <View style={rowStyles.container}>
+        <View style={rowStyles.text}>
+          <Text style={rowStyles.label}>{label}</Text>
+          <Text style={rowStyles.description}>{description}</Text>
+        </View>
+        <View style={[styles.badge, { backgroundColor: badgeBg }]}>
+          <Text style={[styles.badgeText, { color: badgeFg }]}>{badge}</Text>
+        </View>
+      </View>
+
+      {isOwner && (state === "trial" || state === "expired") && !comp && (
+        <NavRow
+          label="Subscribe"
+          description="One plan covers your whole team — pick the seat count that fits"
+          onPress={() => run(onSubscribe)}
+        />
+      )}
+      {isOwner && state === "active" && !comp && status?.seatsExceeded && (
+        <NavRow
+          label="Add Seats"
+          description={`Your team has ${status?.members ?? 0} members but only ${status?.seats ?? 0} ${(status?.seats ?? 0) === 1 ? "seat" : "seats"} — upgrade your plan`}
+          onPress={() => run(onAddSeats)}
+        />
+      )}
+      {isOwner && state === "active" && !comp && (
+        <NavRow
+          label="Manage Subscription"
+          description="Change plan, cancel, restore purchases, or get support"
+          onPress={() => run(presentCustomerCenter)}
+        />
+      )}
+    </>
+  );
+}
+
+// Owner-only card that mints/regenerates the secure Form Builder link. The
+// raw token only ever lives in the returned URL — the server keeps a hash —
+// so we don't persist it on-device; the owner copies/emails it to themselves.
+function FormBuilderCard() {
+  // 'idle' | 'loading' | 'ready' | 'error'
+  const [status, setStatus] = useState("idle");
+  const [url, setUrl] = useState(null);
+
+  async function mintLink() {
+    if (status === "loading") return;
+    setStatus("loading");
+    try {
+      const { data, error } = await supabase.functions.invoke("form-editor", {
+        body: { action: "mint" },
+      });
+      if (error || !data?.url) throw error ?? new Error("no url returned");
+      setUrl(data.url);
+      setStatus("ready");
+    } catch (e) {
+      logError(e, "SettingsScreen.FormBuilderCard.mint");
+      setStatus("error");
+    }
+  }
+
+  function handleRegenerate() {
+    Alert.alert(
+      "Regenerate Link",
+      "This creates a new editor link and permanently disables the old one. Continue?",
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: "Regenerate", style: "destructive", onPress: mintLink },
+      ],
+    );
+  }
+
+  async function handleShare() {
+    try {
+      await Share.share({
+        message: `Open the Kensa Form Builder in your browser:\n\n${url}`,
+      });
+    } catch (e) {
+      logError(e, "SettingsScreen.FormBuilderCard.share");
+    }
+  }
+
+  async function handleOpen() {
+    try {
+      await Linking.openURL(url);
+    } catch (e) {
+      logError(e, "SettingsScreen.FormBuilderCard.open");
+    }
+  }
+
+  return (
+    <View style={fbStyles.card}>
+      <Text style={rowStyles.label}>Form Builder</Text>
+      <Text style={rowStyles.description}>
+        Design your printable inspection report in a drag-and-drop editor on
+        your computer. The link is private to your organization — regenerate it
+        any time to revoke the old one.
+      </Text>
+
+      {status === "ready" && (
+        <Text style={fbStyles.url} numberOfLines={1} selectable>
+          {url}
+        </Text>
+      )}
+      {status === "error" && (
+        <Text style={fbStyles.error}>
+          Couldn't create a link. Check your connection and try again.
+        </Text>
+      )}
+
+      <View style={fbStyles.btnRow}>
+        {status === "ready" ? (
+          <>
+            <TouchableOpacity style={fbStyles.btn} onPress={handleOpen} activeOpacity={0.7}>
+              <MaterialCommunityIcons name="open-in-new" size={15} color={theme.colors.primary} />
+              <Text style={fbStyles.btnText}>Open</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={fbStyles.btn} onPress={handleShare} activeOpacity={0.7}>
+              <MaterialCommunityIcons name="share-variant" size={15} color={theme.colors.primary} />
+              <Text style={fbStyles.btnText}>Share</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={fbStyles.btn} onPress={handleRegenerate} activeOpacity={0.7}>
+              <MaterialCommunityIcons name="refresh" size={15} color={theme.colors.primary} />
+              <Text style={fbStyles.btnText}>Regenerate</Text>
+            </TouchableOpacity>
+          </>
+        ) : (
+          <TouchableOpacity
+            style={[fbStyles.btn, fbStyles.btnPrimary]}
+            onPress={mintLink}
+            activeOpacity={0.8}
+            disabled={status === "loading"}
+          >
+            {status === "loading" ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <MaterialCommunityIcons name="link-variant" size={15} color="#fff" />
+            )}
+            <Text style={[fbStyles.btnText, { color: "#fff" }]}>
+              {status === "loading" ? "Creating…" : "Get editor link"}
+            </Text>
+          </TouchableOpacity>
+        )}
+      </View>
+    </View>
+  );
+}
+
+const fbStyles = StyleSheet.create({
+  card: {
+    backgroundColor: theme.colors.cardBackground,
+    paddingHorizontal: theme.spacing.m,
+    paddingVertical: theme.spacing.m,
+    borderRadius: theme.layout.borderRadius.m,
+    marginBottom: theme.spacing.s,
+    ...theme.shadows.light,
+  },
+  url: {
+    ...theme.typography.caption,
+    color: theme.colors.primary,
+    backgroundColor: theme.colors.mainBackground,
+    borderRadius: theme.layout.borderRadius.s ?? 8,
+    paddingHorizontal: theme.spacing.s,
+    paddingVertical: theme.spacing.xs,
+    marginTop: theme.spacing.s,
+  },
+  error: {
+    ...theme.typography.caption,
+    color: theme.colors.error,
+    marginTop: theme.spacing.s,
+  },
+  btnRow: {
+    flexDirection: "row",
+    gap: theme.spacing.s,
+    marginTop: theme.spacing.s,
+  },
+  btn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    borderWidth: theme.layout.borderWidth.base,
+    borderColor: theme.colors.primary,
+    borderRadius: theme.layout.borderRadius.full,
+    paddingHorizontal: theme.spacing.m,
+    paddingVertical: 6,
+  },
+  btnPrimary: {
+    backgroundColor: theme.colors.primary,
+  },
+  btnText: {
+    ...theme.typography.label,
+    color: theme.colors.primary,
+    fontWeight: "600",
+  },
+});
 
 function NavRow({ label, description, onPress }) {
   return (

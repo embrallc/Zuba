@@ -120,7 +120,19 @@ export async function scheduleUpcomingApptNotif({
   scheduleReminderOffset,
 } = {}) {
   try {
-    if (!inspection?.InspectionSk || !inspection?.ScheduledAt) return null;
+    if (!inspection?.InspectionSk) return null;
+
+    // Terminal-status gate. A completed/closed inspection must never carry a
+    // reminder. Checked before the ScheduledAt guard (and before any other
+    // gate) so that completing an inspection — which emits INSPECTION_UPDATED
+    // with Status='CLOSED' — actively cancels a previously-scheduled reminder
+    // rather than silently no-op'ing.
+    if (inspection.Status === "CLOSED") {
+      await cancelUpcomingApptNotif(inspection.InspectionSk);
+      return null;
+    }
+
+    if (!inspection?.ScheduledAt) return null;
 
     // Master toggle gate — if the user has turned Upcoming Appointment
     // reminders off, do not schedule even if a caller asked us to.

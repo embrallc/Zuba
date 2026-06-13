@@ -20,7 +20,8 @@
       },
       "bundleIdentifier": "com.embrallc.ClientManagment",
       "infoPlist": {
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSCalendarsFullAccessUsageDescription": "Allow ClientManagement to view your calendars and add your scheduled inspections to your calendar."
       }
     },
     "android": {
@@ -41,7 +42,9 @@
         "android.permission.RECORD_AUDIO",
         "android.permission.CAMERA",
         "android.permission.READ_MEDIA_IMAGES",
-        "android.permission.WRITE_EXTERNAL_STORAGE"
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.READ_CALENDAR",
+        "android.permission.WRITE_CALENDAR"
       ]
     },
     "web": {
@@ -72,6 +75,12 @@
           "icon": "./assets/images/icon.png",
           "color": "#5C5CE8",
           "defaultChannel": "upcoming-appt"
+        }
+      ],
+      [
+        "expo-calendar",
+        {
+          "calendarPermission": "Allow ClientManagement to view your calendars and add your scheduled inspections to your calendar."
         }
       ]
     ],

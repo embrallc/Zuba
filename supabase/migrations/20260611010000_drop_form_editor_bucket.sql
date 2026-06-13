@@ -1,0 +1,12 @@
+-- No-op, kept for migration-history consistency.
+--
+-- The form-editor-app bucket (created in 20260611000000) was a test of
+-- serving the editor HTML from Storage. Dead end: Supabase rewrites text/html
+-- to text/plain on the shared supabase.co domain (Functions AND Storage)
+-- unless a custom-domain add-on is enabled. The editor is statically hosted
+-- (Cloudflare Pages) instead.
+--
+-- The bucket + objects were deleted via the Storage API CLI on 2026-06-11
+-- (direct SQL DELETE on storage tables is blocked by the platform):
+--   npx supabase storage rm ss:///form-editor-app --recursive --experimental
+SELECT 1;

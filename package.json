@@ -6,7 +6,11 @@
     "start": "expo start",
     "android": "expo start --android",
     "ios": "expo start --ios",
-    "web": "expo start --web"
+    "web": "expo start --web",
+    "editor:dev": "npm --prefix form-editor run dev",
+    "editor:build": "npm --prefix form-editor run build",
+    "editor:deploy": "npm run editor:build && npx wrangler pages deploy form-editor/dist --project-name=kensa-form-editor",
+    "editor:deploy-api": "npx supabase functions deploy form-editor --no-verify-jwt"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",
@@ -18,6 +22,7 @@
     "@supabase/supabase-js": "^2.105.4",
     "dayjs": "^1.11.20",
     "expo": "~54.0.33",
+    "expo-calendar": "~15.0.8",
     "expo-camera": "~17.0.10",
     "expo-constants": "~18.0.13",
     "expo-crypto": "~15.0.9",
@@ -57,6 +62,7 @@
     "react-native-safe-area-context": "~5.6.0",
     "react-native-screens": "~4.16.0",
     "react-native-web": "~0.21.0",
+    "react-native-webview": "13.15.0",
     "react-native-worklets": "0.5.1",
     "zustand": "^5.0.12"
   },

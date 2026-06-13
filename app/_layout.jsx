@@ -1,9 +1,9 @@
 import { theme } from "@theme";
 import * as Notifications from "expo-notifications";
-import { router, Stack } from "expo-router";
+import { router, Stack, usePathname } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { useEffect, useState } from "react";
-import { ActivityIndicator, View } from "react-native";
+import { ActivityIndicator, AppState, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import {
   configureReanimatedLogger,
@@ -31,18 +31,18 @@ import { syncAll } from "../utils/sync";
 // reading shared value `.value` during render — not a bug in our code.
 configureReanimatedLogger({ level: ReanimatedLogLevel.warn, strict: false });
 
-// ── RevenueCat (pending Apple Developer approval) ─────────────────────────────
-// import { useSubscriptionStore } from "../stores/useSubscriptionStore";
-// import {
-//   addCustomerInfoListener,
-//   configurePurchases,
-//   fetchCustomerInfo,
-// } from "../utils/purchases";
-// ─────────────────────────────────────────────────────────────────────────────
+import { isLocked, useSubscriptionStore } from "../stores/useSubscriptionStore";
+import {
+  addCustomerInfoListener,
+  configurePurchases,
+  fetchCustomerInfo,
+  logInPurchases,
+} from "../utils/purchases";
 
 export default function RootLayout() {
   const [ready, setReady] = useState(false);
   const [isAuthed, setIsAuthed] = useState(false);
+  const pathname = usePathname();
   const loadInspections = useInspectionStore((s) => s.load);
   const loadSettings = useSettingsStore((s) => s.loadSettings);
   const loadNotificationsFromDb = useSettingsStore(
@@ -55,9 +55,10 @@ export default function RootLayout() {
   const setLname = useSettingsStore((s) => s.setLname);
   const loadSmsTemplates = useSmsStore((s) => s.load);
 
-  // ── RevenueCat (pending Apple Developer approval) ───────────────────────────
-  // const setCustomerInfo = useSubscriptionStore((s) => s.setCustomerInfo);
-  // ───────────────────────────────────────────────────────────────────────────
+  const setCustomerInfo = useSubscriptionStore((s) => s.setCustomerInfo);
+  const subscriptionStatus = useSubscriptionStore((s) => s.status);
+  const hydrateSubscription = useSubscriptionStore((s) => s.hydrate);
+  const refreshSubscription = useSubscriptionStore((s) => s.refreshStatus);
 
   async function loadUserData(supabaseUid, sessionUser) {
     initializeDatabase(supabaseUid);
@@ -103,23 +104,30 @@ export default function RootLayout() {
     } catch (smsErr) {
       logError(smsErr, "RootLayout.loadUserData.sms");
     }
-    // ── RevenueCat (pending Apple Developer approval) ───────────────────────
-    // try {
-    //   const customerInfo = await fetchCustomerInfo();
-    //   setCustomerInfo(customerInfo);
-    // } catch (purchasesErr) {
-    //   logError(purchasesErr, "RootLayout.loadUserData.purchases");
-    // }
-    // ────────────────────────────────────────────────────────────────────────
+    // RevenueCat identity must match the Supabase uid BEFORE any paywall —
+    // it's how the webhook maps a purchase back to this org. The server
+    // status check runs in the background: the persisted verdict from
+    // hydrate() gates the boot instantly, and the fresh verdict re-routes
+    // when it lands.
+    try {
+      const customerInfo = await logInPurchases(supabaseUid);
+      if (customerInfo) setCustomerInfo(customerInfo);
+    } catch (purchasesErr) {
+      logError(purchasesErr, "RootLayout.loadUserData.purchases");
+    }
+    refreshSubscription().catch((e) =>
+      logError(e, "RootLayout.loadUserData.subscriptionStatus"),
+    );
   }
 
   useEffect(() => {
-    // ── RevenueCat (pending Apple Developer approval) ─────────────────────────
-    // configurePurchases();
-    // const purchasesListener = addCustomerInfoListener((info) => {
-    //   setCustomerInfo(info);
-    // });
-    // ─────────────────────────────────────────────────────────────────────────
+    configurePurchases();
+    const purchasesListener = addCustomerInfoListener((info) => {
+      setCustomerInfo(info);
+    });
+    hydrateSubscription().catch((e) =>
+      logError(e, "RootLayout.hydrateSubscription"),
+    );
 
     const {
       data: { subscription: authSubscription },
@@ -169,9 +177,7 @@ export default function RootLayout() {
 
     return () => {
       authSubscription.unsubscribe();
-      // ── RevenueCat (pending Apple Developer approval) ─────────────────────
-      // purchasesListener.remove();
-      // ─────────────────────────────────────────────────────────────────────
+      purchasesListener.remove();
     };
   }, []);
 
@@ -180,7 +186,34 @@ export default function RootLayout() {
   // isn't enough — an unauthenticated reload would restore the tabs screen.
   useEffect(() => {
     if (!ready) return;
-    if (!isAuthed) router.replace("/login");
+    if (!isAuthed) {
+      router.replace("/login");
+      return;
+    }
+    // Subscription gate. isLocked() trusts the SERVER verdict (persisted
+    // across launches); the only local inference is "the trial end the
+    // server reported has now passed". Unlock is symmetric: the moment a
+    // fresh status clears, the lock screen routes back into the app.
+    const locked = isLocked(subscriptionStatus);
+    if (locked && pathname !== "/locked") {
+      router.replace("/locked");
+    } else if (!locked && pathname === "/locked") {
+      router.replace("/(tabs)");
+    }
+  }, [ready, isAuthed, subscriptionStatus, pathname]);
+
+  // Re-verify whenever the app returns to the foreground — catches trial
+  // expiry / renewals / seat changes that happened while backgrounded.
+  useEffect(() => {
+    if (!ready || !isAuthed) return;
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state === "active") {
+        refreshSubscription().catch((e) =>
+          logError(e, "RootLayout.foregroundSubscriptionRefresh"),
+        );
+      }
+    });
+    return () => sub.remove();
   }, [ready, isAuthed]);
 
   // Wire db-layer events to the notification scheduler. db/inspections.js
@@ -290,6 +323,14 @@ export default function RootLayout() {
         />
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen
+          name="locked"
+          options={{
+            headerShown: false,
+            animation: "fade",
+            gestureEnabled: false,
+          }}
+        />
+        <Stack.Screen
           name="addinspection"
           options={{ headerShown: false, presentation: "modal" }}
         />
@@ -335,6 +376,14 @@ export default function RootLayout() {
         />
         <Stack.Screen
           name="allinspections"
+          options={{ headerShown: false, animation: "slide_from_right" }}
+        />
+        <Stack.Screen
+          name="archive"
+          options={{ headerShown: false, animation: "slide_from_right" }}
+        />
+        <Stack.Screen
+          name="reportviewer"
           options={{ headerShown: false, animation: "slide_from_right" }}
         />
         <Stack.Screen

@@ -11,6 +11,7 @@ import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { theme } from "@theme";
 import dayjs from "dayjs";
 import { AnimatePresence, MotiView } from "moti";
+import { useEffect } from "react";
 import {
   ActivityIndicator,
   StyleSheet,
@@ -18,6 +19,14 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import Animated, {
+  cancelAnimation,
+  Easing,
+  useAnimatedStyle,
+  useSharedValue,
+  withRepeat,
+  withTiming,
+} from "react-native-reanimated";
 
 const TRAFFIC_META = {
   light: {
@@ -73,6 +82,72 @@ function relativeUpdated(iso) {
   return h === 1 ? "1 hr ago" : `${h} hr ago`;
 }
 
+// Animated refresh control. On refresh start it springs up to an enlarged
+// size — overshooting then settling — via Moti, while a Reanimated rotation
+// loops continuously. When the refresh completes it settles to the nearest
+// full turn (so it never visibly unwinds backwards) and eases back to its
+// original size. Driven entirely off the `refreshing` flag, which is true for
+// the whole fetch (including instant cache hits).
+function RefreshButton({ refreshing, onPress }) {
+  const spin = useSharedValue(0);
+
+  useEffect(() => {
+    if (refreshing) {
+      spin.value = withRepeat(
+        withTiming(360, { duration: 750, easing: Easing.linear }),
+        -1,
+        false,
+      );
+    } else {
+      cancelAnimation(spin);
+      // Round to the nearest full rotation (≤180° of travel either way) so the
+      // icon glides to rest instead of snapping or unwinding a near-full turn,
+      // then normalize to 0 so the next spin starts clean.
+      const nearest = Math.round(spin.value / 360) * 360;
+      spin.value = withTiming(
+        nearest,
+        { duration: 360, easing: Easing.out(Easing.cubic) },
+        (finished) => {
+          if (finished) spin.value = 0;
+        },
+      );
+    }
+  }, [refreshing]);
+
+  const spinStyle = useAnimatedStyle(() => ({
+    transform: [{ rotate: `${spin.value}deg` }],
+  }));
+
+  return (
+    <MotiView
+      animate={{ scale: refreshing ? 1.22 : 1 }}
+      transition={{
+        scale: refreshing
+          ? { type: "spring", damping: 8, stiffness: 220, mass: 0.6 }
+          : { type: "timing", duration: 260, easing: Easing.out(Easing.cubic) },
+      }}
+    >
+      <TouchableOpacity
+        onPress={onPress}
+        disabled={refreshing}
+        hitSlop={theme?.layout?.hitSlop?.medium}
+        style={styles.refreshIcon}
+        activeOpacity={0.7}
+      >
+        <Animated.View style={spinStyle}>
+          <MaterialCommunityIcons
+            name="refresh"
+            size={18}
+            color={
+              refreshing ? theme?.colors?.primary : theme?.colors?.textSubtle
+            }
+          />
+        </Animated.View>
+      </TouchableOpacity>
+    </MotiView>
+  );
+}
+
 export default function MyDayDashboard({ data, loading, error, onRefresh }) {
   // Loading state — skeleton with a spinner.
   if (loading && !data) {
@@ -98,9 +173,7 @@ export default function MyDayDashboard({ data, loading, error, onRefresh }) {
             color={theme?.colors?.textFine}
           />
           <Text style={styles.errorTitle}>
-            {isPermission
-              ? "Location needed"
-              : "Couldn't load your day"}
+            {isPermission ? "Location needed" : "Couldn't load your day"}
           </Text>
           <Text style={styles.muted}>
             {isPermission
@@ -160,8 +233,9 @@ export default function MyDayDashboard({ data, loading, error, onRefresh }) {
     );
   }
 
-  const { nextStop, dailyTotals, fetchedAt, mode } = data;
-  const trafficMeta = TRAFFIC_META[nextStop.trafficLevel] ?? TRAFFIC_META.moderate;
+  const { nextStop, dailyTotals, fetchedAt, mode, summary } = data;
+  const trafficMeta =
+    TRAFFIC_META[nextStop.trafficLevel] ?? TRAFFIC_META.moderate;
   const isLate = (nextStop.lateByMinutes ?? 0) > 0;
 
   return (
@@ -190,18 +264,7 @@ export default function MyDayDashboard({ data, loading, error, onRefresh }) {
               {mode === "in-progress" ? "In progress" : "Up next"}
             </Text>
           </View>
-          <TouchableOpacity
-            onPress={onRefresh}
-            hitSlop={theme?.layout?.hitSlop?.medium}
-            style={styles.refreshIcon}
-            activeOpacity={0.7}
-          >
-            <MaterialCommunityIcons
-              name="refresh"
-              size={18}
-              color={theme?.colors?.textSubtle}
-            />
-          </TouchableOpacity>
+          <RefreshButton refreshing={loading} onPress={onRefresh} />
         </View>
 
         {/* Next stop */}
@@ -217,6 +280,24 @@ export default function MyDayDashboard({ data, loading, error, onRefresh }) {
           <Text style={styles.nextStopAddress} numberOfLines={1}>
             {nextStop.address}
           </Text>
+        )}
+
+        {/* AI briefing */}
+        {!!summary && (
+          <MotiView
+            from={{ opacity: 0, translateY: 4 }}
+            animate={{ opacity: 1, translateY: 0 }}
+            transition={{ type: "timing", duration: 320 }}
+            style={styles.summaryBox}
+          >
+            <MaterialCommunityIcons
+              name="lightbulb-on-outline"
+              size={14}
+              color={theme?.colors?.primary}
+              style={styles.summaryIcon}
+            />
+            <Text style={styles.summaryText}>{summary}</Text>
+          </MotiView>
         )}
 
         {/* Drive metrics row */}
@@ -286,7 +367,7 @@ export default function MyDayDashboard({ data, loading, error, onRefresh }) {
           <View style={styles.totalsBlock}>
             <View style={styles.totalsRow}>
               <View style={styles.totalsItem}>
-                <Text style={styles.totalsLabel}>Day Start</Text>
+                <Text style={styles.totalsLabel}>Route Start</Text>
                 <Text style={styles.totalsValue}>
                   {formatTime(dailyTotals.dayStartIso)}
                 </Text>
@@ -298,13 +379,13 @@ export default function MyDayDashboard({ data, loading, error, onRefresh }) {
                 </Text>
               </View>
               <View style={styles.totalsItem}>
-                <Text style={styles.totalsLabel}>Total Drive</Text>
+                <Text style={styles.totalsLabel}>Day Drive Time</Text>
                 <Text style={styles.totalsValue}>
                   {formatMinutes(dailyTotals.totalDriveSec)}
                 </Text>
               </View>
               <View style={styles.totalsItem}>
-                <Text style={styles.totalsLabel}>Miles</Text>
+                <Text style={styles.totalsLabel}>Daily Miles</Text>
                 <Text style={styles.totalsValue}>
                   {formatMiles(dailyTotals.totalDistanceMeters)}
                 </Text>
@@ -386,6 +467,25 @@ const styles = StyleSheet.create({
     ...(theme?.typography?.label ?? {}),
     color: theme?.colors?.textSubtle,
     marginTop: 2,
+  },
+  summaryBox: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 6,
+    marginTop: theme?.spacing?.s,
+    paddingVertical: theme?.spacing?.xs,
+    paddingHorizontal: theme?.spacing?.s,
+    borderRadius: theme?.layout?.borderRadius?.m ?? 14,
+    backgroundColor: theme?.colors?.primaryGhost ?? "rgba(92,92,232,0.10)",
+  },
+  summaryIcon: {
+    marginTop: 1,
+  },
+  summaryText: {
+    ...(theme?.typography?.label ?? {}),
+    color: theme?.colors?.text,
+    flex: 1,
+    lineHeight: 18,
   },
   metricsRow: {
     flexDirection: "row",

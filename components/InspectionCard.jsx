@@ -4,6 +4,7 @@ import dayjs from "dayjs";
 import { useRouter } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import {
+  ActivityIndicator,
   Alert,
   Linking,
   Modal,
@@ -15,6 +16,8 @@ import {
   View,
   useWindowDimensions,
 } from "react-native";
+import { TouchableOpacity as GestureTouchableOpacity } from "react-native-gesture-handler";
+import ReanimatedSwipeable from "react-native-gesture-handler/ReanimatedSwipeable";
 import Animated, {
   Easing,
   interpolate,
@@ -24,10 +27,14 @@ import Animated, {
   withSpring,
   withTiming,
 } from "react-native-reanimated";
+import { setInspectionStatus, softDeleteInspection } from "../db/inspections";
 import { logError } from "../db/logs";
 import { useDebouncedPress } from "../hooks/useDebouncedPress";
+import { useBannerStore } from "../stores/useBannerStore";
+import { useInspectionStore } from "../stores/useInspectionStore";
 import { useMapStore } from "../stores/useMapStore";
 import { useSmsStore } from "../stores/useSmsStore";
+import { generateInspectionReport } from "../utils/reports";
 
 const COMPLETE_FIELDS = [
   "FullName",
@@ -204,7 +211,11 @@ export default function InspectionCard({ inspection, onPress }) {
 
   const [smsOpen, setSmsOpen] = useState(false);
   const [anchor, setAnchor] = useState(null);
+  const [generating, setGenerating] = useState(false);
   const smsRef = useRef(null);
+  const swipeRef = useRef(null);
+  const removeFromStore = useInspectionStore((s) => s.remove);
+  const showBanner = useBannerStore((s) => s.show);
 
   const complete = isComplete(inspection);
   const address = formatAddress(inspection);
@@ -276,144 +287,307 @@ export default function InspectionCard({ inspection, onPress }) {
     }
   });
 
-  return (
-    <Animated.View style={cardStyle}>
-      <TouchableOpacity
-        onPress={onPress}
-        onPressIn={() => {
-          scale.value = withSpring(0.97, { damping: 14, stiffness: 220 });
-        }}
-        onPressOut={() => {
-          scale.value = withSpring(1, { damping: 14, stiffness: 220 });
-        }}
-        activeOpacity={1}
-        style={styles.container}
-      >
-        <View
-          style={[
-            styles.sidebar,
-            {
-              backgroundColor: complete
-                ? theme.colors.success
-                : theme.colors.warning,
-            },
-          ]}
-        />
+  const clientLabel = inspection.FullName || "Inspection";
 
-        <View style={styles.body}>
-          <View style={styles.headerRow}>
-            <Text style={styles.name} numberOfLines={1}>
-              {inspection.FullName || "Unnamed Inspection"}
-            </Text>
-            <Text style={styles.datetime}>
-              {scheduledDate}
-              {scheduledTime ? `  ${scheduledTime}` : ""}
-            </Text>
-          </View>
+  // Mark complete: flip Status → CLOSED. setInspectionStatus emits an event
+  // that cancels the reminder; removing from the store drops it out of every
+  // list/calendar view immediately. Restorable from Settings → Completed.
+  const handleComplete = useDebouncedPress(async () => {
+    swipeRef.current?.close();
+    try {
+      await setInspectionStatus(inspection.InspectionSk, "CLOSED");
+      removeFromStore(inspection.InspectionSk);
+      showBanner({
+        message: `${clientLabel} marked complete.`,
+        kind: "success",
+      });
+    } catch (e) {
+      logError(
+        e,
+        `InspectionCard.handleComplete sk=${inspection.InspectionSk}`,
+      );
+      showBanner({
+        message: "Couldn't complete that inspection.",
+        kind: "error",
+      });
+    }
+  });
 
-          {address ? (
-            <Text style={styles.address} numberOfLines={1}>
-              {address}
-            </Text>
+  // Delete: confirm, then soft-delete (_deleted = 1). Restorable from
+  // Settings → Deleted.
+  const handleDelete = useDebouncedPress(() => {
+    swipeRef.current?.close();
+    Alert.alert(
+      "Delete Inspection",
+      `Delete the inspection for ${clientLabel}? You can restore it later from Settings.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await softDeleteInspection(inspection.InspectionSk);
+              removeFromStore(inspection.InspectionSk);
+              showBanner({ message: `${clientLabel} deleted.`, kind: "info" });
+            } catch (e) {
+              logError(
+                e,
+                `InspectionCard.handleDelete sk=${inspection.InspectionSk}`,
+              );
+              showBanner({
+                message: "Couldn't delete that inspection.",
+                kind: "error",
+              });
+            }
+          },
+        },
+      ],
+    );
+  });
+
+  // Generate the report PDF. The swipe row stays open so the spinner inside
+  // the button doubles as the progress indicator; sync + server render +
+  // download can take several seconds.
+  const handleGenerateReport = useDebouncedPress(async () => {
+    if (generating) return;
+    setGenerating(true);
+    try {
+      const result = await generateInspectionReport(inspection);
+      swipeRef.current?.close();
+      showBanner({
+        message:
+          `Report ready for ${clientLabel}` +
+          (result.pageCount ? ` — ${result.pageCount} page${result.pageCount === 1 ? "" : "s"}.` : ".") +
+          (result.usedDraft ? " (Using unpublished draft template.)" : ""),
+        kind: "success",
+        duration: 6000,
+        action: {
+          label: "View",
+          onPress: () =>
+            router.push({
+              pathname: "/reportviewer",
+              params: { inspectionSk: inspection.InspectionSk },
+            }),
+        },
+      });
+    } catch (e) {
+      logError(e, `InspectionCard.handleGenerateReport sk=${inspection.InspectionSk}`);
+      showBanner({
+        message: e?.presentable ? e.message : "Couldn't generate the report.",
+        kind: "error",
+        duration: 6000,
+      });
+    } finally {
+      setGenerating(false);
+    }
+  });
+
+  const handleOpenReport = useDebouncedPress(() => {
+    swipeRef.current?.close();
+    try {
+      router.push({
+        pathname: "/reportviewer",
+        params: { inspectionSk: inspection.InspectionSk },
+      });
+    } catch (e) {
+      logError(e, `InspectionCard.handleOpenReport sk=${inspection.InspectionSk}`);
+    }
+  });
+
+  function renderRightActions() {
+    return (
+      <View style={styles.rightActions}>
+        <GestureTouchableOpacity
+          onPress={handleComplete}
+          activeOpacity={0.8}
+          style={[styles.actionCircle, styles.completeCircle]}
+        >
+          <MaterialCommunityIcons name="check-bold" size={22} color="#fff" />
+        </GestureTouchableOpacity>
+        <GestureTouchableOpacity
+          onPress={handleDelete}
+          activeOpacity={0.8}
+          style={[styles.actionCircle, styles.deleteCircle]}
+        >
+          <MaterialCommunityIcons
+            name="trash-can-outline"
+            size={22}
+            color="#fff"
+          />
+        </GestureTouchableOpacity>
+        <GestureTouchableOpacity
+          onPress={handleGenerateReport}
+          activeOpacity={0.8}
+          disabled={generating}
+          style={[styles.actionCircle, styles.reportCircle]}
+        >
+          {generating ? (
+            <ActivityIndicator size="small" color="#fff" />
           ) : (
-            <Text style={styles.addressEmpty}>No address entered</Text>
+            <MaterialCommunityIcons name="printer-outline" size={22} color="#fff" />
           )}
+        </GestureTouchableOpacity>
+        {!!inspection.LastReportPath && (
+          <GestureTouchableOpacity
+            onPress={handleOpenReport}
+            activeOpacity={0.8}
+            style={[styles.actionCircle, styles.shareCircle]}
+          >
+            <MaterialCommunityIcons name="share-variant" size={20} color="#fff" />
+          </GestureTouchableOpacity>
+        )}
+      </View>
+    );
+  }
 
-          <View style={styles.actions}>
-            {!!inspection.Phone && (
+  return (
+    <ReanimatedSwipeable
+      ref={swipeRef}
+      renderRightActions={renderRightActions}
+      rightThreshold={40}
+      overshootRight={false}
+      friction={2}
+      containerStyle={styles.swipeContainer}
+    >
+      <Animated.View style={cardStyle}>
+        <TouchableOpacity
+          onPress={onPress}
+          onPressIn={() => {
+            scale.value = withSpring(0.97, { damping: 14, stiffness: 220 });
+          }}
+          onPressOut={() => {
+            scale.value = withSpring(1, { damping: 14, stiffness: 220 });
+          }}
+          activeOpacity={1}
+          style={styles.container}
+        >
+          <View
+            style={[
+              styles.sidebar,
+              {
+                backgroundColor: complete
+                  ? theme.colors.success
+                  : theme.colors.warning,
+              },
+            ]}
+          />
+
+          <View style={styles.body}>
+            <View style={styles.headerRow}>
+              <Text style={styles.name} numberOfLines={1}>
+                {inspection.FullName || "Unnamed Inspection"}
+              </Text>
+              <Text style={styles.datetime}>
+                {scheduledDate}
+                {scheduledTime ? `  ${scheduledTime}` : ""}
+              </Text>
+            </View>
+
+            {address ? (
+              <Text style={styles.address} numberOfLines={1}>
+                {address}
+              </Text>
+            ) : (
+              <Text style={styles.addressEmpty}>No address entered</Text>
+            )}
+
+            <View style={styles.actions}>
+              {!!inspection.Phone && (
+                <TouchableOpacity
+                  ref={smsRef}
+                  onPress={handleSmsPress}
+                  hitSlop={theme.layout.hitSlop.medium}
+                  style={styles.actionBtn}
+                >
+                  <MaterialCommunityIcons
+                    name="message-text-outline"
+                    size={theme.layout.iconSize.m}
+                    color={theme.colors.primary}
+                  />
+                </TouchableOpacity>
+              )}
+
+              {!!inspection.Phone && (
+                <TouchableOpacity
+                  onPress={handleCall}
+                  hitSlop={theme.layout.hitSlop.medium}
+                  style={styles.actionBtn}
+                >
+                  <MaterialCommunityIcons
+                    name="phone-outline"
+                    size={theme.layout.iconSize.m}
+                    color={theme.colors.primary}
+                  />
+                </TouchableOpacity>
+              )}
+
+              {!!inspection.Email && (
+                <TouchableOpacity
+                  onPress={handleEmail}
+                  hitSlop={theme.layout.hitSlop.medium}
+                  style={styles.actionBtn}
+                >
+                  <MaterialCommunityIcons
+                    name="email-outline"
+                    size={theme.layout.iconSize.m}
+                    color={theme.colors.primary}
+                  />
+                </TouchableOpacity>
+              )}
+
+              {!!inspection.AddressLine1 && (
+                <TouchableOpacity
+                  onPress={handleNavigation}
+                  hitSlop={theme.layout.hitSlop.medium}
+                  style={styles.actionBtn}
+                >
+                  <MaterialCommunityIcons
+                    name="navigation-outline"
+                    size={theme.layout.iconSize.m}
+                    color={theme.colors.primary}
+                  />
+                </TouchableOpacity>
+              )}
+
+              {!!(inspection.Latitude && inspection.Longitude) && (
+                <TouchableOpacity
+                  onPress={handleMapPin}
+                  hitSlop={theme.layout.hitSlop.medium}
+                  style={styles.actionBtn}
+                >
+                  <MaterialCommunityIcons
+                    name="map-marker-outline"
+                    size={theme.layout.iconSize.m}
+                    color={theme.colors.primary}
+                  />
+                </TouchableOpacity>
+              )}
+
               <TouchableOpacity
-                ref={smsRef}
-                onPress={handleSmsPress}
+                onPress={handleOpenForm}
                 hitSlop={theme.layout.hitSlop.medium}
-                style={styles.actionBtn}
+                style={[styles.actionBtn, styles.formBtn]}
               >
                 <MaterialCommunityIcons
-                  name="message-text-outline"
+                  name="clipboard-text-outline"
                   size={theme.layout.iconSize.m}
                   color={theme.colors.primary}
                 />
               </TouchableOpacity>
-            )}
-
-            {!!inspection.Phone && (
-              <TouchableOpacity
-                onPress={handleCall}
-                hitSlop={theme.layout.hitSlop.medium}
-                style={styles.actionBtn}
-              >
-                <MaterialCommunityIcons
-                  name="phone-outline"
-                  size={theme.layout.iconSize.m}
-                  color={theme.colors.primary}
-                />
-              </TouchableOpacity>
-            )}
-
-            {!!inspection.Email && (
-              <TouchableOpacity
-                onPress={handleEmail}
-                hitSlop={theme.layout.hitSlop.medium}
-                style={styles.actionBtn}
-              >
-                <MaterialCommunityIcons
-                  name="email-outline"
-                  size={theme.layout.iconSize.m}
-                  color={theme.colors.primary}
-                />
-              </TouchableOpacity>
-            )}
-
-            {!!inspection.AddressLine1 && (
-              <TouchableOpacity
-                onPress={handleNavigation}
-                hitSlop={theme.layout.hitSlop.medium}
-                style={styles.actionBtn}
-              >
-                <MaterialCommunityIcons
-                  name="navigation-outline"
-                  size={theme.layout.iconSize.m}
-                  color={theme.colors.primary}
-                />
-              </TouchableOpacity>
-            )}
-
-            {!!(inspection.Latitude && inspection.Longitude) && (
-              <TouchableOpacity
-                onPress={handleMapPin}
-                hitSlop={theme.layout.hitSlop.medium}
-                style={styles.actionBtn}
-              >
-                <MaterialCommunityIcons
-                  name="map-marker-outline"
-                  size={theme.layout.iconSize.m}
-                  color={theme.colors.primary}
-                />
-              </TouchableOpacity>
-            )}
-
-            <TouchableOpacity
-              onPress={handleOpenForm}
-              hitSlop={theme.layout.hitSlop.medium}
-              style={[styles.actionBtn, styles.formBtn]}
-            >
-              <MaterialCommunityIcons
-                name="clipboard-text-outline"
-                size={theme.layout.iconSize.m}
-                color={theme.colors.primary}
-              />
-            </TouchableOpacity>
+            </View>
           </View>
-        </View>
-      </TouchableOpacity>
+        </TouchableOpacity>
 
-      {smsOpen && anchor && (
-        <SmsBubble
-          anchor={anchor}
-          templates={templates}
-          onClose={() => setSmsOpen(false)}
-        />
-      )}
-    </Animated.View>
+        {smsOpen && anchor && (
+          <SmsBubble
+            anchor={anchor}
+            templates={templates}
+            onClose={() => setSmsOpen(false)}
+          />
+        )}
+      </Animated.View>
+    </ReanimatedSwipeable>
   );
 }
 
@@ -527,5 +701,39 @@ const styles = StyleSheet.create({
   },
   formBtn: {
     marginLeft: "auto",
+  },
+  // Don't clip the revealed swipe actions / their shadows.
+  swipeContainer: {
+    overflow: "visible",
+  },
+  rightActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: theme?.spacing?.s,
+    paddingHorizontal: theme?.spacing?.m,
+    // Match the card's own marginBottom so the circles line up with the
+    // card body rather than the inter-card gap.
+    marginBottom: theme?.spacing?.s,
+  },
+  actionCircle: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    alignItems: "center",
+    justifyContent: "center",
+    ...theme?.shadows?.light,
+  },
+  completeCircle: {
+    backgroundColor: theme?.colors?.success,
+  },
+  deleteCircle: {
+    backgroundColor: theme?.colors?.error,
+  },
+  reportCircle: {
+    backgroundColor: theme?.colors?.primary,
+  },
+  shareCircle: {
+    backgroundColor: theme?.colors?.icon,
   },
 });

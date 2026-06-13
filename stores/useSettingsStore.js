@@ -8,11 +8,11 @@ import {
 
 const KEYS = {
   showWeekends: "settings_showWeekends",
-  cloudStorage: "settings_cloudStorage",
   userSk: "user_sk",
   apptLengthMinutes: "settings_apptLengthMinutes",
   calendarStartHour: "settings_calendarStartHour",
   notifications: "settings_notifications",
+  integrations: "settings_integrations",
 };
 
 // Default OFF until the user opts in.
@@ -20,9 +20,15 @@ const DEFAULT_NOTIFICATIONS = {
   [NOTIFICATION_NAMES.UPCOMING_APPT]: false,
 };
 
+// Map of integration name → boolean. Each represents an external service the
+// user can hook into Kensa from Settings → Integrations. All default OFF.
+const DEFAULT_INTEGRATIONS = {
+  appleCalendar: false,
+  googleCalendar: false,
+};
+
 export const useSettingsStore = create((set) => ({
   showWeekends: false,
-  cloudStorageEnabled: false,
   userSk: null,
   // Cached from session.user_metadata at login. Authoritative copy lives on
   // the cloud users row + auth.users.raw_user_meta_data; this is just for
@@ -36,6 +42,10 @@ export const useSettingsStore = create((set) => ({
   // Map of NotificationName → boolean. Mirrors the NotificationSettings rows
   // for the current user. UI screens treat absent keys as `false`.
   notifications: { ...DEFAULT_NOTIFICATIONS },
+  // Map of integration name → boolean (e.g. appleCalendar, googleCalendar).
+  // Mirrors `notifications` shape so additional integrations slot in without
+  // a store change. UI screens treat absent keys as `false`.
+  integrations: { ...DEFAULT_INTEGRATIONS },
   // Minutes before an appointment that an Upcoming Appointment reminder
   // should fire. Hard-coded for now; a Settings picker will land later.
   scheduleReminderOffsetMinutes: 60,
@@ -44,28 +54,30 @@ export const useSettingsStore = create((set) => ({
     try {
       const [
         showWeekends,
-        cloudStorage,
         userSk,
         apptLength,
         startHour,
         notifications,
+        integrations,
       ] = await Promise.all([
         AsyncStorage.getItem(KEYS.showWeekends),
-        AsyncStorage.getItem(KEYS.cloudStorage),
         AsyncStorage.getItem(KEYS.userSk),
         AsyncStorage.getItem(KEYS.apptLengthMinutes),
         AsyncStorage.getItem(KEYS.calendarStartHour),
         AsyncStorage.getItem(KEYS.notifications),
+        AsyncStorage.getItem(KEYS.integrations),
       ]);
       set({
         showWeekends: showWeekends ? JSON.parse(showWeekends) : false,
-        cloudStorageEnabled: cloudStorage ? JSON.parse(cloudStorage) : false,
         userSk: userSk ?? null,
         apptLengthMinutes: apptLength ? JSON.parse(apptLength) : 60,
         calendarStartHour: startHour ? JSON.parse(startHour) : 7,
         notifications: notifications
           ? { ...DEFAULT_NOTIFICATIONS, ...JSON.parse(notifications) }
           : { ...DEFAULT_NOTIFICATIONS },
+        integrations: integrations
+          ? { ...DEFAULT_INTEGRATIONS, ...JSON.parse(integrations) }
+          : { ...DEFAULT_INTEGRATIONS },
       });
     } catch (e) {
       logError(e, "useSettingsStore.loadSettings");
@@ -103,21 +115,24 @@ export const useSettingsStore = create((set) => ({
     }
   },
 
+  // Replace the whole integrations map (Settings → Integrations toggles call
+  // this with the full next state). Device-local — no cloud sync, since
+  // calendar/etc. integration is per-device (different calendars per phone).
+  setIntegrations: async (next) => {
+    try {
+      set({ integrations: next });
+      await AsyncStorage.setItem(KEYS.integrations, JSON.stringify(next));
+    } catch (e) {
+      logError(e, "useSettingsStore.setIntegrations");
+    }
+  },
+
   setShowWeekends: async (val) => {
     try {
       set({ showWeekends: val });
       await AsyncStorage.setItem(KEYS.showWeekends, JSON.stringify(val));
     } catch (e) {
       logError(e, `useSettingsStore.setShowWeekends val=${val}`);
-    }
-  },
-
-  setCloudStorageEnabled: async (val) => {
-    try {
-      set({ cloudStorageEnabled: val });
-      await AsyncStorage.setItem(KEYS.cloudStorage, JSON.stringify(val));
-    } catch (e) {
-      logError(e, `useSettingsStore.setCloudStorageEnabled val=${val}`);
     }
   },
 

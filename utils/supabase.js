@@ -27,6 +27,20 @@ const SecureStoreAdapter = {
       const size = 1800; // stay safely under the 2KB limit
       if (value.length <= size) {
         await SecureStore.setItemAsync(key, value);
+        // If the previous value was chunked, remove the chunk keys too —
+        // not just the marker — so stale fragments can't linger in the
+        // keychain forever.
+        const oldCount = await SecureStore.getItemAsync(`${key}.chunks`).catch(
+          () => null,
+        );
+        if (oldCount !== null && oldCount !== undefined) {
+          const n = parseInt(oldCount, 10) || 0;
+          await Promise.all(
+            Array.from({ length: n }, (_, i) =>
+              SecureStore.deleteItemAsync(`${key}.chunk.${i}`).catch(() => {}),
+            ),
+          );
+        }
         await SecureStore.deleteItemAsync(`${key}.chunks`).catch(() => {});
         return;
       }

@@ -1,11 +1,19 @@
 import * as FileSystem from "expo-file-system/legacy";
 import * as ImageManipulator from "expo-image-manipulator";
 import * as MediaLibrary from "expo-media-library";
+import { Image } from "react-native";
+import { db } from "../db/index";
 import { logError } from "../db/logs";
 import { supabase } from "./supabase";
 
-// LocalPictureURI may hold either a MediaLibrary asset id (preferred — no
-// app-sandbox storage) or a legacy file:// path from the old PHOTOS_DIR flow.
+// Photo storage model (Apple data-storage guidelines):
+//   - Capture/pick → downscale to MAX_DIMENSION + JPEG → app CACHE directory.
+//     The cloud bucket is the durable copy; the cache copy is disposable.
+//   - LocalPictureURI holds the cache file path. Legacy rows may still hold a
+//     MediaLibrary asset id (old flow saved to the user's Photos library) —
+//     resolveLocalFileUri handles both.
+//   - Retrieval is cache-first; on a miss we re-download from the bucket into
+//     the cache and re-record the path, so OS cache purges self-heal.
 function isFilePath(uri) {
   return (
     typeof uri === "string" &&
@@ -15,7 +23,8 @@ function isFilePath(uri) {
 
 export const BUCKET = "inspection-images";
 
-const MAX_DIMENSION = 1600;
+const PHOTOS_CACHE_DIR = `${FileSystem.cacheDirectory}photos/`;
+const MAX_DIMENSION = 1920;
 const COMPRESSION_QUALITY = 0.8;
 const SIGNED_URL_TTL_SECONDS = 60 * 60;
 
@@ -28,25 +37,67 @@ function base64ToUint8Array(base64) {
   return bytes;
 }
 
-// Save a temp file (from ImagePicker or the in-app camera) into the device's
-// Photos library so the user owns it like any other photo. Returns the
-// MediaLibrary asset id on success, null on failure or denied permission.
-export async function saveToPhotoLibrary(sourceUri) {
+async function ensurePhotosCacheDir() {
   try {
-    if (!sourceUri) return null;
-    const perm = await MediaLibrary.requestPermissionsAsync();
-    if (perm?.status !== "granted") {
-      console.warn(
-        `[saveToPhotoLibrary] permission ${perm?.status ?? "unknown"} — not saving`,
-      );
-      return null;
+    const info = await FileSystem.getInfoAsync(PHOTOS_CACHE_DIR);
+    if (!info.exists) {
+      await FileSystem.makeDirectoryAsync(PHOTOS_CACHE_DIR, {
+        intermediates: true,
+      });
     }
-    const asset = await MediaLibrary.createAssetAsync(sourceUri);
-    if (!asset?.id) return null;
-    console.log(`[saveToPhotoLibrary] saved assetId=${asset.id}`);
-    return asset.id;
   } catch (e) {
-    logError(e, `saveToPhotoLibrary uri=${sourceUri}`);
+    logError(e, "inspectionPhotos.ensurePhotosCacheDir");
+  }
+}
+
+function cachePathForDetail(detailSk) {
+  return `${PHOTOS_CACHE_DIR}${detailSk}.jpg`;
+}
+
+function getImageSize(uri) {
+  return new Promise((resolve) => {
+    Image.getSize(
+      uri,
+      (width, height) => resolve({ width, height }),
+      () => resolve(null),
+    );
+  });
+}
+
+// Downscale (longest side ≤ MAX_DIMENSION, never upscaled) + JPEG-compress a
+// just-captured/picked photo and park it in the app cache under the detail's
+// sk. This single pass is what both the cache AND the cloud store — roughly
+// an 80% size cut vs. raw 12MP camera output, paid once.
+// Returns the cache file path, or null on failure.
+export async function processAndCachePhoto(sourceUri, detailSk) {
+  try {
+    if (!sourceUri || !detailSk) return null;
+
+    const size = await getImageSize(sourceUri);
+    const longest = size ? Math.max(size.width, size.height) : null;
+    const actions = [];
+    if (longest && longest > MAX_DIMENSION) {
+      actions.push(
+        size.width >= size.height
+          ? { resize: { width: MAX_DIMENSION } }
+          : { resize: { height: MAX_DIMENSION } },
+      );
+    }
+
+    // Even with no resize, this pass normalizes HEIC/PNG to JPEG so the
+    // upload, report generator, and cache all speak one format.
+    const result = await ImageManipulator.manipulateAsync(sourceUri, actions, {
+      compress: COMPRESSION_QUALITY,
+      format: ImageManipulator.SaveFormat.JPEG,
+    });
+    if (!result?.uri) return null;
+
+    await ensurePhotosCacheDir();
+    const dest = cachePathForDetail(detailSk);
+    await FileSystem.moveAsync({ from: result.uri, to: dest });
+    return dest;
+  } catch (e) {
+    logError(e, `inspectionPhotos.processAndCachePhoto sk=${detailSk}`);
     return null;
   }
 }
@@ -54,7 +105,7 @@ export async function saveToPhotoLibrary(sourceUri) {
 // Translate a LocalPictureURI (asset id OR file:// path) into a URI that
 // FileSystem / ImageManipulator / <Image> can read. Returns null if the
 // underlying asset/file no longer exists.
-async function resolveLocalFileUri(localUri) {
+export async function resolveLocalFileUri(localUri) {
   if (!localUri) return null;
   if (isFilePath(localUri)) {
     const info = await FileSystem.getInfoAsync(localUri).catch((e) => {
@@ -80,14 +131,22 @@ async function resolveLocalFileUri(localUri) {
 async function compressToJpeg(localUri) {
   try {
     if (!localUri) return null;
-    const result = await ImageManipulator.manipulateAsync(
-      localUri,
-      [{ resize: { width: MAX_DIMENSION } }],
-      {
-        compress: COMPRESSION_QUALITY,
-        format: ImageManipulator.SaveFormat.JPEG,
-      },
-    );
+    // Same sizing rule as processAndCachePhoto: shrink the LONGEST side to
+    // MAX_DIMENSION, never upscale, respect portrait orientation.
+    const size = await getImageSize(localUri);
+    const longest = size ? Math.max(size.width, size.height) : null;
+    const actions = [];
+    if (longest && longest > MAX_DIMENSION) {
+      actions.push(
+        size.width >= size.height
+          ? { resize: { width: MAX_DIMENSION } }
+          : { resize: { height: MAX_DIMENSION } },
+      );
+    }
+    const result = await ImageManipulator.manipulateAsync(localUri, actions, {
+      compress: COMPRESSION_QUALITY,
+      format: ImageManipulator.SaveFormat.JPEG,
+    });
     return result?.uri ?? null;
   } catch (e) {
     logError(e, `utils/inspectionPhotos.compressToJpeg uri=${localUri}`);
@@ -121,17 +180,22 @@ export async function uploadInspectionPhoto({
       return null;
     }
 
-    const compressedUri = await compressToJpeg(fileUri);
-    if (!compressedUri) return null;
+    // Files in our photo cache were already downscaled + JPEG'd by
+    // processAndCachePhoto — re-compressing would degrade them for nothing.
+    // Anything else (legacy MediaLibrary assets, stray files) gets the full
+    // treatment before upload.
+    const alreadyProcessed = fileUri.startsWith(PHOTOS_CACHE_DIR);
+    const uploadUri = alreadyProcessed ? fileUri : await compressToJpeg(fileUri);
+    if (!uploadUri) return null;
 
     let bytes;
     try {
-      const base64 = await FileSystem.readAsStringAsync(compressedUri, {
+      const base64 = await FileSystem.readAsStringAsync(uploadUri, {
         encoding: FileSystem.EncodingType.Base64,
       });
       bytes = base64ToUint8Array(base64);
     } catch (e) {
-      logError(e, `uploadInspectionPhoto read compressed uri=${compressedUri}`);
+      logError(e, `uploadInspectionPhoto read uri=${uploadUri}`);
       return null;
     }
 
@@ -141,8 +205,11 @@ export async function uploadInspectionPhoto({
       upsert: true,
     });
 
-    // Best-effort cleanup of the temp compressed file
-    FileSystem.deleteAsync(compressedUri, { idempotent: true }).catch(() => {});
+    // Best-effort cleanup of the temp compressed file (never the cache copy —
+    // that's the display source).
+    if (!alreadyProcessed) {
+      FileSystem.deleteAsync(uploadUri, { idempotent: true }).catch(() => {});
+    }
 
     if (error) {
       console.warn(
@@ -159,34 +226,65 @@ export async function uploadInspectionPhoto({
   }
 }
 
-// Pick the best URI for displaying a photo. Returns null if neither
-// the local file nor a signed cloud URL is available.
-export async function resolvePhotoUri({ localUri, cloudUri }) {
+// Pick the best URI for displaying a photo: cache first; on a miss pull the
+// cloud copy back INTO the cache (and re-record the path when detailSk is
+// given) so the next open is instant and free. Falls back to a signed URL if
+// the re-cache write fails; null when nothing is available.
+export async function resolvePhotoUri({ localUri, cloudUri, detailSk }) {
   try {
     if (localUri) {
       const fileUri = await resolveLocalFileUri(localUri);
-      if (fileUri) {
-        console.log(`[resolvePhotoUri] LOCAL ${fileUri}`);
-        return fileUri;
-      }
+      if (fileUri) return fileUri;
     }
     if (cloudUri) {
       const { data, error } = await supabase.storage
         .from(BUCKET)
         .createSignedUrl(cloudUri, SIGNED_URL_TTL_SECONDS);
       if (error) {
-        console.warn(`[resolvePhotoUri] CLOUD-ERROR cloud=${cloudUri} msg=${error.message}`);
         logError(error, `resolvePhotoUri cloud=${cloudUri}`);
         return null;
       }
-      console.log(`[resolvePhotoUri] CLOUD ${cloudUri}`);
-      return data?.signedUrl ?? null;
+      const signedUrl = data?.signedUrl ?? null;
+      if (!signedUrl) return null;
+
+      if (detailSk) {
+        try {
+          await ensurePhotosCacheDir();
+          const dest = cachePathForDetail(detailSk);
+          const dl = await FileSystem.downloadAsync(signedUrl, dest);
+          if (dl?.status === 200) {
+            // Record the fresh cache path. Deliberately no Synced/_version
+            // bump — the path is device-local display state, not synced data
+            // (same contract as setCloudPictureURI).
+            await db.runAsync(
+              `UPDATE InspectionDetail SET LocalPictureURI = ? WHERE InspectionDetailSk = ?`,
+              [dest, detailSk],
+            );
+            return dest;
+          }
+        } catch (e) {
+          logError(e, `resolvePhotoUri recache sk=${detailSk}`);
+        }
+      }
+      return signedUrl;
     }
-    console.warn(`[resolvePhotoUri] NONE — no local or cloud URI`);
     return null;
   } catch (e) {
     logError(e, `resolvePhotoUri local=${localUri} cloud=${cloudUri}`);
     return null;
+  }
+}
+
+// Best-effort delete of a photo's cache copy. Called alongside
+// deleteInspectionPhoto when a detail row is deleted.
+export async function deleteCachedPhoto(detailSk) {
+  try {
+    if (!detailSk) return;
+    await FileSystem.deleteAsync(cachePathForDetail(detailSk), {
+      idempotent: true,
+    });
+  } catch (_e) {
+    // cache file may simply not exist — nothing to surface
   }
 }
 

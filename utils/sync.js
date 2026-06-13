@@ -2,7 +2,7 @@ import dayjs from "dayjs";
 import { db } from "../db/index";
 import { logError } from "../db/logs";
 import { useInspectionStore } from "../stores/useInspectionStore";
-import { uploadInspectionPhoto } from "./inspectionPhotos";
+import { resolveLocalFileUri, uploadInspectionPhoto } from "./inspectionPhotos";
 import { supabase } from "./supabase";
 
 function cloudInspectionToStoreObj(r) {
@@ -29,9 +29,47 @@ function cloudInspectionToStoreObj(r) {
   };
 }
 
+// PostgREST caps any single response at 1000 rows. Without paging, rows past
+// the cap silently vanish from a pull — and the prune phase would then DELETE
+// their local copies. Ordered by primary key so pages are stable across
+// requests; throws on any page error so the caller's seen-set is never
+// partial.
+const PULL_PAGE_SIZE = 1000;
+
+async function fetchAllUserRows(table, pkColumn, userId) {
+  const all = [];
+  for (let from = 0; ; from += PULL_PAGE_SIZE) {
+    const { data, error } = await supabase
+      .from(table)
+      .select("*")
+      .eq("user_id", userId)
+      .order(pkColumn, { ascending: true })
+      .range(from, from + PULL_PAGE_SIZE - 1);
+    if (error) throw error;
+    all.push(...(data ?? []));
+    if (!data || data.length < PULL_PAGE_SIZE) break;
+  }
+  return all;
+}
+
+// PostgREST reports an RLS write rejection as 42501. The expected cause here
+// is a row that was reassigned to a teammate while this device still held an
+// unsynced edit — it's no longer ours to write. The caller marks it Synced
+// so it stops retrying forever; the next pull won't return it for us, so the
+// normal prune path removes the local copy. If a 42501 ever came from a
+// policy misconfig instead, the row WOULD still be returned by our pull and
+// nothing gets deleted — safe in both directions.
+function isRlsDenied(e) {
+  return e?.code === "42501" || /row-level security/i.test(e?.message ?? "");
+}
+
 // ─── PUSH ─────────────────────────────────────────────────────────────────────
 // For each table: query Synced = 0, upsert to Supabase, mark Synced = 1 on success.
 // user_id is the Supabase auth UID (session.user.id) — required for cloud RLS.
+//
+// Synced = 1 is only written when the row is still byte-identical to what we
+// pushed (same _lastChangedAt / UpdatedAt) — an edit made WHILE the upsert
+// was in flight keeps the row dirty so the next sync pushes it.
 
 async function pushInspections(userId) {
   const rows = db.getAllSync(`SELECT * FROM Inspections WHERE Synced = 0`);
@@ -67,11 +105,21 @@ async function pushInspections(userId) {
       );
       if (error) throw error;
       await db.runAsync(
-        `UPDATE Inspections SET Synced = 1 WHERE InspectionSk = ?`,
-        [r.InspectionSk],
+        `UPDATE Inspections SET Synced = 1
+         WHERE InspectionSk = ? AND IFNULL(_lastChangedAt, 0) = ?`,
+        [r.InspectionSk, r._lastChangedAt ?? 0],
       );
     } catch (e) {
-      logError(e, `sync/pushInspections:${r?.InspectionSk ?? "unknown"}`);
+      if (isRlsDenied(e)) {
+        await db
+          .runAsync(`UPDATE Inspections SET Synced = 1 WHERE InspectionSk = ?`, [
+            r.InspectionSk,
+          ])
+          .catch(() => {});
+        logError(e, `sync/pushInspections:rls-denied ${r?.InspectionSk}`);
+      } else {
+        logError(e, `sync/pushInspections:${r?.InspectionSk ?? "unknown"}`);
+      }
     }
   }
 }
@@ -101,14 +149,28 @@ async function pushInspectionDescriptions(userId) {
       );
       if (error) throw error;
       await db.runAsync(
-        `UPDATE InspectionDescription SET Synced = 1 WHERE InspectionDescriptionSk = ?`,
-        [r.InspectionDescriptionSk],
+        `UPDATE InspectionDescription SET Synced = 1
+         WHERE InspectionDescriptionSk = ? AND IFNULL(_lastChangedAt, 0) = ?`,
+        [r.InspectionDescriptionSk, r._lastChangedAt ?? 0],
       );
     } catch (e) {
-      logError(
-        e,
-        `sync/pushInspectionDescriptions:${r?.InspectionDescriptionSk ?? "unknown"}`,
-      );
+      if (isRlsDenied(e)) {
+        await db
+          .runAsync(
+            `UPDATE InspectionDescription SET Synced = 1 WHERE InspectionDescriptionSk = ?`,
+            [r.InspectionDescriptionSk],
+          )
+          .catch(() => {});
+        logError(
+          e,
+          `sync/pushInspectionDescriptions:rls-denied ${r?.InspectionDescriptionSk}`,
+        );
+      } else {
+        logError(
+          e,
+          `sync/pushInspectionDescriptions:${r?.InspectionDescriptionSk ?? "unknown"}`,
+        );
+      }
     }
   }
 }
@@ -142,7 +204,19 @@ async function pushInspectionDetails(userId) {
 
       // Upload the photo if we have a local copy and no cloud key yet.
       // Skip deleted rows — no point uploading something we're tombstoning.
-      const needsUpload = !cloudUri && r.LocalPictureURI && !r._deleted;
+      // A LocalPictureURI whose underlying file no longer exists is
+      // unrecoverable — treat it as "nothing to upload" so the row doesn't
+      // retry on every sync forever.
+      let localFileUri = null;
+      if (!cloudUri && r.LocalPictureURI && !r._deleted) {
+        localFileUri = await resolveLocalFileUri(r.LocalPictureURI);
+        if (!localFileUri) {
+          console.warn(
+            `[sync] detail ${r.InspectionDetailSk}: local photo file gone — nothing to upload`,
+          );
+        }
+      }
+      const needsUpload = !!localFileUri;
       if (needsUpload && !orgSk) {
         console.warn(
           `[sync] detail ${r.InspectionDetailSk}: skipping upload — no OrgSk`,
@@ -179,9 +253,16 @@ async function pushInspectionDetails(userId) {
             `[sync] detail ${r.InspectionDetailSk}: upload returned null`,
           );
         }
-        // If upload failed, cloudUri stays null. Row will still upsert (so
-        // notes/markup/deletes propagate), and the next syncAll retries.
+        // If upload failed, cloudUri stays null. Row still upserts below (so
+        // notes/markup/deletes propagate) but stays Synced = 0 — see
+        // uploadPending — so the next syncAll actually retries the photo.
       }
+
+      // A photo that still needs uploading (upload failed, or no OrgSk yet)
+      // must keep the row dirty. Marking it synced would mean the upload is
+      // never retried — and once the OS purges the cache copy, the photo
+      // would be gone everywhere.
+      const uploadPending = needsUpload && !cloudUri;
 
       const { error } = await supabase.from("inspection_details").upsert(
         {
@@ -200,15 +281,31 @@ async function pushInspectionDetails(userId) {
       );
       if (error) throw error;
 
-      await db.runAsync(
-        `UPDATE InspectionDetail SET Synced = 1 WHERE InspectionDetailSk = ?`,
-        [r.InspectionDetailSk],
-      );
+      if (!uploadPending) {
+        await db.runAsync(
+          `UPDATE InspectionDetail SET Synced = 1
+           WHERE InspectionDetailSk = ? AND IFNULL(_lastChangedAt, 0) = ?`,
+          [r.InspectionDetailSk, r._lastChangedAt ?? 0],
+        );
+      }
     } catch (e) {
-      logError(
-        e,
-        `sync/pushInspectionDetails:${r?.InspectionDetailSk ?? "unknown"}`,
-      );
+      if (isRlsDenied(e)) {
+        await db
+          .runAsync(
+            `UPDATE InspectionDetail SET Synced = 1 WHERE InspectionDetailSk = ?`,
+            [r.InspectionDetailSk],
+          )
+          .catch(() => {});
+        logError(
+          e,
+          `sync/pushInspectionDetails:rls-denied ${r?.InspectionDetailSk}`,
+        );
+      } else {
+        logError(
+          e,
+          `sync/pushInspectionDetails:${r?.InspectionDetailSk ?? "unknown"}`,
+        );
+      }
     }
   }
 }
@@ -232,8 +329,9 @@ async function pushSectionTemplates(userId) {
       );
       if (error) throw error;
       await db.runAsync(
-        `UPDATE SectionTemplate SET Synced = 1 WHERE SectionTemplateSk = ?`,
-        [r.SectionTemplateSk],
+        `UPDATE SectionTemplate SET Synced = 1
+         WHERE SectionTemplateSk = ? AND IFNULL(UpdatedAt, '') = ?`,
+        [r.SectionTemplateSk, r.UpdatedAt ?? ""],
       );
     } catch (e) {
       logError(
@@ -264,8 +362,9 @@ async function pushSmsTemplates(userId) {
       );
       if (error) throw error;
       await db.runAsync(
-        `UPDATE SmsTemplate SET Synced = 1 WHERE SmsTemplateSk = ?`,
-        [r.SmsTemplateSk],
+        `UPDATE SmsTemplate SET Synced = 1
+         WHERE SmsTemplateSk = ? AND IFNULL(UpdatedAt, '') = ?`,
+        [r.SmsTemplateSk, r.UpdatedAt ?? ""],
       );
     } catch (e) {
       logError(e, `sync/pushSmsTemplates:${r?.SmsTemplateSk ?? "unknown"}`);
@@ -295,11 +394,21 @@ async function pushSmsStatus(userId) {
       );
       if (error) throw error;
       await db.runAsync(
-        `UPDATE SmsStatus SET Synced = 1 WHERE SmsStatusSk = ?`,
-        [r.SmsStatusSk],
+        `UPDATE SmsStatus SET Synced = 1
+         WHERE SmsStatusSk = ? AND IFNULL(_lastChangedAt, 0) = ?`,
+        [r.SmsStatusSk, r._lastChangedAt ?? 0],
       );
     } catch (e) {
-      logError(e, `sync/pushSmsStatus:${r?.SmsStatusSk ?? "unknown"}`);
+      if (isRlsDenied(e)) {
+        await db
+          .runAsync(`UPDATE SmsStatus SET Synced = 1 WHERE SmsStatusSk = ?`, [
+            r.SmsStatusSk,
+          ])
+          .catch(() => {});
+        logError(e, `sync/pushSmsStatus:rls-denied ${r?.SmsStatusSk}`);
+      } else {
+        logError(e, `sync/pushSmsStatus:${r?.SmsStatusSk ?? "unknown"}`);
+      }
     }
   }
 }
@@ -319,11 +428,7 @@ async function pushSmsStatus(userId) {
 // Tables without _version (SectionTemplate, SmsTemplate) use UpdatedAt.
 
 async function pullInspections(userId) {
-  const { data, error } = await supabase
-    .from("inspections")
-    .select("*")
-    .eq("user_id", userId);
-  if (error) throw error;
+  const data = await fetchAllUserRows("inspections", "inspection_sk", userId);
 
   const seen = new Set();
   const store = useInspectionStore.getState();
@@ -364,7 +469,10 @@ async function pullInspections(userId) {
             1,
           ],
         );
-        if (!r._deleted) {
+        // Mirror getAllInspections' active-set rule: a CLOSED (completed) or
+        // deleted row stays in SQLite but must not enter the in-memory store
+        // that feeds the calendar/list views.
+        if (!r._deleted && (r.status ?? "OPEN") !== "CLOSED") {
           store.add(cloudInspectionToStoreObj(r));
         }
       } else if ((r._version ?? 1) > (local._version ?? 1)) {
@@ -395,7 +503,9 @@ async function pullInspections(userId) {
             r.inspection_sk,
           ],
         );
-        if (r._deleted) {
+        // A row that became deleted OR completed (CLOSED) on another device
+        // must leave the active store; otherwise mirror the update.
+        if (r._deleted || (r.status ?? "OPEN") === "CLOSED") {
           store.remove(r.inspection_sk);
         } else {
           store.update(cloudInspectionToStoreObj(r));
@@ -409,11 +519,11 @@ async function pullInspections(userId) {
 }
 
 async function pullInspectionDescriptions(userId) {
-  const { data, error } = await supabase
-    .from("inspection_descriptions")
-    .select("*")
-    .eq("user_id", userId);
-  if (error) throw error;
+  const data = await fetchAllUserRows(
+    "inspection_descriptions",
+    "inspection_description_sk",
+    userId,
+  );
 
   const seen = new Set();
   for (const r of data ?? []) {
@@ -472,11 +582,11 @@ async function pullInspectionDescriptions(userId) {
 }
 
 async function pullInspectionDetails(userId) {
-  const { data, error } = await supabase
-    .from("inspection_details")
-    .select("*")
-    .eq("user_id", userId);
-  if (error) throw error;
+  const data = await fetchAllUserRows(
+    "inspection_details",
+    "inspection_detail_sk",
+    userId,
+  );
 
   const seen = new Set();
   for (const r of data ?? []) {
@@ -541,11 +651,11 @@ async function pullSectionTemplates(userId) {
   // Templates are per-user; explicitly scope to self so an owner whose RLS
   // can see other users' rows doesn't accidentally import their templates
   // into local SQLite.
-  const { data, error } = await supabase
-    .from("section_templates")
-    .select("*")
-    .eq("user_id", userId);
-  if (error) throw error;
+  const data = await fetchAllUserRows(
+    "section_templates",
+    "section_template_sk",
+    userId,
+  );
 
   const seen = new Set();
   for (const r of data ?? []) {
@@ -590,11 +700,7 @@ async function pullSectionTemplates(userId) {
 }
 
 async function pullSmsTemplates(userId) {
-  const { data, error } = await supabase
-    .from("sms_templates")
-    .select("*")
-    .eq("user_id", userId);
-  if (error) throw error;
+  const data = await fetchAllUserRows("sms_templates", "sms_template_sk", userId);
 
   const seen = new Set();
   for (const r of data ?? []) {
@@ -637,11 +743,7 @@ async function pullSmsTemplates(userId) {
 }
 
 async function pullSmsStatus(userId) {
-  const { data, error } = await supabase
-    .from("sms_status")
-    .select("*")
-    .eq("user_id", userId);
-  if (error) throw error;
+  const data = await fetchAllUserRows("sms_status", "sms_status_sk", userId);
 
   const seen = new Set();
   for (const r of data ?? []) {
@@ -725,8 +827,23 @@ function pruneTable(table, skColumn, seen, onRemove, hasDeleted = true) {
 // ─── MAIN ─────────────────────────────────────────────────────────────────────
 // Call on app open (after auth check) and after login.
 // Fire-and-forget: caller does not need to await.
+//
+// Re-entrancy: boot fires syncAll twice (init + onAuthStateChange), and
+// pull-to-refresh / report generation can overlap either. Two interleaved
+// runs could prune rows the other just pushed, so concurrent callers share
+// the one in-flight run instead of starting another.
 
-export async function syncAll() {
+let syncInFlight = null;
+
+export function syncAll() {
+  if (syncInFlight) return syncInFlight;
+  syncInFlight = doSyncAll().finally(() => {
+    syncInFlight = null;
+  });
+  return syncInFlight;
+}
+
+async function doSyncAll() {
   try {
     console.log("[sync] syncAll starting");
     const {
@@ -807,12 +924,14 @@ export async function syncAll() {
         },
       ],
     ];
+    let pullFailures = 0;
     for (const [name, fn] of pullSteps) {
       try {
         console.log(`[sync] starting ${name}`);
         await fn();
         console.log(`[sync] done ${name}`);
       } catch (e) {
+        pullFailures++;
         console.error(`[sync] ERROR in ${name}:`, e?.message);
         logError(e, `sync/${name}`);
       }
@@ -822,6 +941,17 @@ export async function syncAll() {
     // Child-first so deletes don't violate FK constraints. The inspection
     // store mirror is kept in sync via the onRemove callback for the
     // top-level inspections prune.
+    //
+    // HARD GATE: prune compares local rows against the pulled seen-sets, so
+    // it must only run when EVERY pull completed. A failed pull leaves its
+    // set empty — pruning against that would delete the user's entire local
+    // mirror (e.g. any sync attempted while offline).
+    if (pullFailures > 0) {
+      console.warn(
+        `[sync] skipping prune — ${pullFailures} pull step(s) failed`,
+      );
+      return;
+    }
     try {
       const store = useInspectionStore.getState();
       pruneTable("InspectionDetail", "InspectionDetailSk", detailSks);

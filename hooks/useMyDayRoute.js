@@ -82,6 +82,9 @@ export function useMyDayRoute({ enabled = true } = {}) {
             apptLengthMinutes,
             localDateStart: startOfDay,
             localDateEnd: endOfDay,
+            // Lets the Edge Function phrase local clock times in the briefing
+            // without needing the user's timezone database.
+            tzOffsetMinutes: dayjs().utcOffset(),
           },
         });
 
