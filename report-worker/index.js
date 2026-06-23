@@ -9,13 +9,16 @@ import {
   signReport,
   uploadReport,
 } from "./lib/jobs.js";
-import { getUserFromJwt } from "./lib/supabase.js";
+import { getUserFromJwt, isConfigured } from "./lib/supabase.js";
 
 const app = express();
 app.use(express.json({ limit: "1mb" }));
 
-// Cloud Run health check.
-app.get("/health", (_req, res) => res.status(200).json({ ok: true }));
+// Health check — also surfaces whether the Supabase creds are wired, so a
+// misconfigured deploy is obvious at a glance instead of crash-looping.
+app.get("/health", (_req, res) =>
+  res.status(200).json({ ok: true, configured: isConfigured }),
+);
 
 // POST /api/generate-report
 // Body: { jobId, inspectionId, orgId }   Header: Authorization: Bearer <user JWT>
@@ -26,6 +29,14 @@ app.get("/health", (_req, res) => res.status(200).json({ ok: true }));
 // --no-cpu-throttling, otherwise CPU is frozen after the response and the
 // background work never finishes.
 app.post("/api/generate-report", async (req, res) => {
+  // 0. Config guard — clear 503 instead of a cryptic crash if creds are unset.
+  if (!isConfigured) {
+    return res.status(503).json({
+      error: "server_misconfigured",
+      detail: "SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not set on the worker",
+    });
+  }
+
   // 1. Validate body.
   const { jobId, inspectionId, orgId } = req.body ?? {};
   if (!jobId || !inspectionId || !orgId) {
