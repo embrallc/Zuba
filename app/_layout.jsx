@@ -16,9 +16,12 @@ import { getAllInspections } from "../db/inspections";
 import { logError } from "../db/logs";
 import { getSmsTemplates } from "../db/smsTemplates";
 import { getLocalUser, getOrCreateUser, pullSelfUser } from "../db/users";
+import { useCalendarStore } from "../stores/useCalendarStore";
 import { useInspectionStore } from "../stores/useInspectionStore";
 import { useSettingsStore } from "../stores/useSettingsStore";
 import { useSmsStore } from "../stores/useSmsStore";
+import { runPull, startCalendarSync } from "../utils/calendarSync";
+import { setupGlobalErrorHandler } from "../utils/globalErrorHandler";
 import {
   cancelUpcomingApptNotif,
   getUpcomingApptTapRoute,
@@ -30,6 +33,10 @@ import { syncAll } from "../utils/sync";
 // Suppress strict-mode warning triggered by third-party libraries (e.g. calendar-kit)
 // reading shared value `.value` during render — not a bug in our code.
 configureReanimatedLogger({ level: ReanimatedLogLevel.warn, strict: false });
+
+// Install the global error/rejection capture as early as possible (module load,
+// before the component mounts) so any boot-time failure is printed + logged.
+setupGlobalErrorHandler();
 
 import { isLocked, useSubscriptionStore } from "../stores/useSubscriptionStore";
 import {
@@ -93,6 +100,14 @@ export default function RootLayout() {
       .catch((e) => logError(e, "RootLayout.pullSelfUser"));
 
     await loadSettings();
+    // Device-local calendar-sync config (mints a stable deviceId on first run).
+    // MUST NOT block inspection loading — wrap so a calendar-config failure can
+    // never abort the rest of boot (schedule + sync).
+    try {
+      await useCalendarStore.getState().load();
+    } catch (calErr) {
+      logError(calErr, "RootLayout.loadUserData.calendarConfig");
+    }
     // SQLite is the source of truth for notification toggles — overwrite the
     // AsyncStorage-hydrated map with whatever loadSettings just put in place.
     await loadNotificationsFromDb(userSk);
@@ -206,11 +221,18 @@ export default function RootLayout() {
   // expiry / renewals / seat changes that happened while backgrounded.
   useEffect(() => {
     if (!ready || !isAuthed) return;
+    // Initial catch-up pull on entering the authed app (config is loaded by
+    // loadUserData before `ready` flips true). Cheap no-op when sync is off.
+    runPull().catch((e) => logError(e, "RootLayout.initialCalendarPull"));
     const sub = AppState.addEventListener("change", (state) => {
       if (state === "active") {
         refreshSubscription().catch((e) =>
           logError(e, "RootLayout.foregroundSubscriptionRefresh"),
         );
+        // Calendar has no change-notification API — poll for events an
+        // assistant added/edited/deleted while we were backgrounded. Self-gates
+        // on the calendar config, so this is a cheap no-op when sync is off.
+        runPull().catch((e) => logError(e, "RootLayout.foregroundCalendarPull"));
       }
     });
     return () => sub.remove();
@@ -245,6 +267,15 @@ export default function RootLayout() {
       unsubUpdate();
       unsubDelete();
     };
+  }, []);
+
+  // Wire db-layer events to the calendar sync engine (Zuba → calendar). Like
+  // the notification subscriber, mount once and let the engine self-gate on the
+  // calendar config (enabled / push / chosen calendar). The matching
+  // calendar → Zuba direction is the foreground poll (runPull) above.
+  useEffect(() => {
+    const stop = startCalendarSync();
+    return stop;
   }, []);
 
   // Notification tap routing. Two paths handled here:
@@ -339,6 +370,14 @@ export default function RootLayout() {
           options={{ headerShown: false, animation: "slide_from_right" }}
         />
         <Stack.Screen
+          name="payments-settings"
+          options={{ headerShown: false, animation: "slide_from_right" }}
+        />
+        <Stack.Screen
+          name="payments"
+          options={{ headerShown: false, animation: "slide_from_right" }}
+        />
+        <Stack.Screen
           name="map"
           options={{ headerShown: false, animation: "slide_from_right" }}
         />
@@ -355,15 +394,15 @@ export default function RootLayout() {
           options={{ headerShown: false, animation: "slide_from_bottom" }}
         />
         <Stack.Screen
-          name="sectiontemplates"
-          options={{ headerShown: false, animation: "slide_from_right" }}
-        />
-        <Stack.Screen
           name="smstemplates"
           options={{ headerShown: false, animation: "slide_from_right" }}
         />
         <Stack.Screen
           name="notifications"
+          options={{ headerShown: false, animation: "slide_from_right" }}
+        />
+        <Stack.Screen
+          name="calendarsettings"
           options={{ headerShown: false, animation: "slide_from_right" }}
         />
         <Stack.Screen
@@ -385,14 +424,6 @@ export default function RootLayout() {
         <Stack.Screen
           name="reportviewer"
           options={{ headerShown: false, animation: "slide_from_right" }}
-        />
-        <Stack.Screen
-          name="photonote"
-          options={{
-            headerShown: false,
-            presentation: "transparentModal",
-            animation: "slide_from_bottom",
-          }}
         />
       </Stack>
       {/* Global drop-down notification banner. Sits above every screen so

@@ -33,8 +33,12 @@ import { useDebouncedPress } from "../hooks/useDebouncedPress";
 import { useBannerStore } from "../stores/useBannerStore";
 import { useInspectionStore } from "../stores/useInspectionStore";
 import { useMapStore } from "../stores/useMapStore";
+import { useSettingsStore } from "../stores/useSettingsStore";
 import { useSmsStore } from "../stores/useSmsStore";
+import { reconcileInspection } from "../utils/autoComms";
 import { generateInspectionReport } from "../utils/reports";
+import { pushInspection, pushInspectionForm } from "../utils/sync";
+import RequestPaymentSheet from "./RequestPaymentSheet";
 
 const COMPLETE_FIELDS = [
   "FullName",
@@ -212,10 +216,12 @@ export default function InspectionCard({ inspection, onPress }) {
   const [smsOpen, setSmsOpen] = useState(false);
   const [anchor, setAnchor] = useState(null);
   const [generating, setGenerating] = useState(false);
+  const [payOpen, setPayOpen] = useState(false);
   const smsRef = useRef(null);
   const swipeRef = useRef(null);
   const removeFromStore = useInspectionStore((s) => s.remove);
   const showBanner = useBannerStore((s) => s.show);
+  const userProfile = useSettingsStore((s) => s.userProfile);
 
   const complete = isComplete(inspection);
   const address = formatAddress(inspection);
@@ -301,6 +307,18 @@ export default function InspectionCard({ inspection, onPress }) {
         message: `${clientLabel} marked complete.`,
         kind: "success",
       });
+      // Push the CLOSED status AND the walkthrough answers (so the server has
+      // fresh form data to render), THEN nudge the reconciler so it snapshots
+      // the org policy and auto-sends/holds the report. The form push must land
+      // before the reconcile, or generate-report renders from stale cloud
+      // answers (header only, blank sections). Fire-and-forget — the cron sweep
+      // backstops if the device is offline or this is interrupted.
+      Promise.all([
+        pushInspection(inspection.InspectionSk),
+        pushInspectionForm(inspection.InspectionSk),
+      ])
+        .then(() => reconcileInspection(inspection.InspectionSk))
+        .catch(() => {});
     } catch (e) {
       logError(
         e,
@@ -395,6 +413,12 @@ export default function InspectionCard({ inspection, onPress }) {
     }
   });
 
+  // Request payment: open the reusable amount/link sheet.
+  const handleRequestPaymentPress = useDebouncedPress(() => {
+    swipeRef.current?.close();
+    setPayOpen(true);
+  });
+
   function renderRightActions() {
     return (
       <View style={styles.rightActions}>
@@ -437,6 +461,13 @@ export default function InspectionCard({ inspection, onPress }) {
             <MaterialCommunityIcons name="share-variant" size={20} color="#fff" />
           </GestureTouchableOpacity>
         )}
+        <GestureTouchableOpacity
+          onPress={handleRequestPaymentPress}
+          activeOpacity={0.8}
+          style={[styles.actionCircle, styles.payCircle]}
+        >
+          <MaterialCommunityIcons name="currency-usd" size={22} color="#fff" />
+        </GestureTouchableOpacity>
       </View>
     );
   }
@@ -577,6 +608,21 @@ export default function InspectionCard({ inspection, onPress }) {
               </TouchableOpacity>
             </View>
           </View>
+
+          {inspection.PaymentState && inspection.PaymentState !== "none" ? (
+            <View style={styles.ribbonWrap} pointerEvents="none">
+              <View
+                style={[
+                  styles.ribbon,
+                  inspection.Paid ? styles.ribbonPaid : styles.ribbonBilled,
+                ]}
+              >
+                <Text style={styles.ribbonText}>
+                  {inspection.Paid ? "PAID" : "BILLED"}
+                </Text>
+              </View>
+            </View>
+          ) : null}
         </TouchableOpacity>
 
         {smsOpen && anchor && (
@@ -586,6 +632,20 @@ export default function InspectionCard({ inspection, onPress }) {
             onClose={() => setSmsOpen(false)}
           />
         )}
+
+        <RequestPaymentSheet
+          visible={payOpen}
+          onClose={() => setPayOpen(false)}
+          inspectionSk={inspection.InspectionSk}
+          clientName={inspection.FullName}
+          userProfile={userProfile}
+          onSuccess={() =>
+            showBanner({
+              message: `Payment link ready for ${clientLabel}.`,
+              kind: "success",
+            })
+          }
+        />
       </Animated.View>
     </ReanimatedSwipeable>
   );
@@ -735,5 +795,37 @@ const styles = StyleSheet.create({
   },
   shareCircle: {
     backgroundColor: theme?.colors?.icon,
+  },
+  payCircle: {
+    backgroundColor: theme?.colors?.warning,
+  },
+  // ─── Payment status corner ribbon ───
+  // The card container clips overflow, so a 45° band pinned to the top-right
+  // reads as a folded corner ribbon. pointerEvents none so it never eats taps.
+  ribbonWrap: {
+    position: "absolute",
+    top: 0,
+    right: 0,
+    width: 82,
+    height: 82,
+    overflow: "hidden",
+  },
+  ribbon: {
+    position: "absolute",
+    top: 13,
+    right: -26,
+    width: 110,
+    paddingVertical: 3,
+    alignItems: "center",
+    transform: [{ rotate: "45deg" }],
+    ...theme?.shadows?.light,
+  },
+  ribbonBilled: { backgroundColor: theme?.colors?.warning },
+  ribbonPaid: { backgroundColor: theme?.colors?.success },
+  ribbonText: {
+    color: "#fff",
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 1,
   },
 });

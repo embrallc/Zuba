@@ -14,6 +14,7 @@ import {
   Platform,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   TouchableOpacity,
@@ -50,6 +51,9 @@ const EMAIL_DOMAINS = [
   "aol.com",
 ];
 
+// Loose, good-enough email shape check (same spirit as the server's validEmails).
+const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+
 export default function AddInspectionScreen() {
   const router = useRouter();
   const { inspectionSk, prefilledAt } = useLocalSearchParams();
@@ -61,6 +65,7 @@ export default function AddInspectionScreen() {
   const allInspections = useInspectionStore((s) => s.inspections);
   const userSk = useSettingsStore((s) => s.userSk);
   const apptLengthMinutes = useSettingsStore((s) => s.apptLengthMinutes);
+  const apptReminderDefault = useSettingsStore((s) => s.apptReminderSmsEnabled);
 
   const existing = isEditing ? getById(inspectionSk) : null;
 
@@ -73,16 +78,88 @@ export default function AddInspectionScreen() {
   const [showTimePicker, setShowTimePicker] = useState(false);
   const [saving, setSaving] = useState(false);
 
+  // Day-before client SMS reminder for THIS inspection. New inspections inherit
+  // the global "Text appointment reminder" default; editing shows the stored
+  // value. The reminder job reads this flag (HasApptReminder) on the synced row.
+  const [hasApptReminder, setHasApptReminder] = useState(() =>
+    existing ? !!existing.HasApptReminder : !!apptReminderDefault,
+  );
+
   const [form, setForm] = useState({
     FullName: existing?.FullName ?? "",
     Phone: existing?.Phone ?? "",
-    Email: existing?.Email ?? "",
     AddressLine1: existing?.AddressLine1 ?? "",
     AddressLine2: existing?.AddressLine2 ?? "",
     City: existing?.City ?? "",
     State: existing?.State ?? "",
     ZipCode: existing?.ZipCode ?? "",
   });
+
+  // Report recipients. Each entry is { email, report, invoice } — the two flags
+  // pick which messages that address gets. The first entry is the primary: it
+  // mirrors the legacy Email column (so the report viewer / card actions keep
+  // working) and is the default invoice recipient (the payer). Seeded from the
+  // existing row's Email + ReportRecipients, tolerating both the new object form
+  // { report:[], invoice:[] } and the legacy array form.
+  const initialRecipients = useMemo(() => {
+    const order = [];
+    const byKey = new Map(); // lowercased email -> entry
+    const ensure = (e) => {
+      const v = (e ?? "").trim();
+      if (!v) return null;
+      const k = v.toLowerCase();
+      if (!byKey.has(k)) {
+        const entry = { email: v, report: false, invoice: false };
+        byKey.set(k, entry);
+        order.push(entry);
+      }
+      return byKey.get(k);
+    };
+
+    const primary = ensure(existing?.Email);
+    let parsed = null;
+    try {
+      parsed = JSON.parse(existing?.ReportRecipients || "null");
+    } catch (_) {}
+
+    if (parsed && !Array.isArray(parsed) && typeof parsed === "object") {
+      // New object form.
+      (parsed.report ?? []).forEach((e) => {
+        const r = ensure(e);
+        if (r) r.report = true;
+      });
+      (parsed.invoice ?? []).forEach((e) => {
+        const r = ensure(e);
+        if (r) r.invoice = true;
+      });
+    } else if (Array.isArray(parsed)) {
+      // Legacy: everyone got the report; the payer (primary) got the invoice.
+      parsed.forEach((item) => {
+        const r = ensure(typeof item === "string" ? item : item?.email);
+        if (r) r.report = true;
+      });
+      if (primary) primary.invoice = true;
+    }
+
+    // A primary with no flags yet (fresh row, or it wasn't in the stored lists)
+    // gets the smart default: report + invoice.
+    if (primary && !primary.report && !primary.invoice) {
+      primary.report = true;
+      primary.invoice = true;
+    }
+    // Keep the primary first.
+    if (primary) {
+      const i = order.indexOf(primary);
+      if (i > 0) {
+        order.splice(i, 1);
+        order.unshift(primary);
+      }
+    }
+    return order;
+  }, [existing]);
+  const [recipients, setRecipients] = useState(initialRecipients);
+  const [emailDraft, setEmailDraft] = useState("");
+  const [emailError, setEmailError] = useState(false);
 
   const [geo, setGeo] = useState({
     Latitude: existing?.Latitude ?? null,
@@ -217,12 +294,36 @@ export default function AddInspectionScreen() {
       }
     }
 
+    // Fold in any email still sitting in the input (typed but not "+"-added) so
+    // it isn't silently dropped on Save (smart default: report on, invoice only
+    // if it would be the first/payer).
+    let finalRecipients = recipients;
+    const pending = emailDraft.trim();
+    if (
+      pending &&
+      EMAIL_RE.test(pending) &&
+      !recipients.some((x) => x.email.toLowerCase() === pending.toLowerCase())
+    ) {
+      finalRecipients = [
+        ...recipients,
+        { email: pending, report: true, invoice: recipients.length === 0 },
+      ];
+    }
+
     const data = {
       ...form,
+      // Primary email mirrors the first recipient (back-compat with the rest of
+      // the app); the per-channel subscriptions drive the report/invoice fan-out.
+      Email: finalRecipients[0]?.email ?? "",
+      ReportRecipients: JSON.stringify({
+        report: finalRecipients.filter((r) => r.report).map((r) => r.email),
+        invoice: finalRecipients.filter((r) => r.invoice).map((r) => r.email),
+      }),
       Summary: existing?.Summary ?? "",
       ScheduledAt: dayjs(scheduledAt).toISOString(),
       Latitude: lat,
       Longitude: lng,
+      HasApptReminder: hasApptReminder ? 1 : 0,
     };
 
     try {
@@ -299,20 +400,58 @@ export default function AddInspectionScreen() {
   }
 
   // Email domain autocomplete: once the user types "@", show common domains
-  // filtered by whatever partial domain they've typed. Suggestions hide once
-  // the partial matches a domain exactly.
+  // filtered by whatever partial domain they've typed. Operates on the draft so
+  // the OS keyboard's own "@" domain suggestions are left untouched.
   const emailSuggestions = useMemo(() => {
-    const at = form.Email.indexOf("@");
+    const at = emailDraft.indexOf("@");
     if (at < 0) return [];
-    const partial = form.Email.slice(at + 1).toLowerCase();
+    const partial = emailDraft.slice(at + 1).toLowerCase();
     if (EMAIL_DOMAINS.includes(partial)) return [];
     return EMAIL_DOMAINS.filter((d) => d.startsWith(partial));
-  }, [form.Email]);
+  }, [emailDraft]);
 
   function applyEmailDomain(domain) {
-    const at = form.Email.indexOf("@");
-    const local = at >= 0 ? form.Email.slice(0, at) : form.Email;
-    set("Email", `${local}@${domain}`);
+    const at = emailDraft.indexOf("@");
+    const local = at >= 0 ? emailDraft.slice(0, at) : emailDraft;
+    setEmailDraft(`${local}@${domain}`);
+  }
+
+  // Commit the draft as a recipient: validate, de-dupe, clear the input, keep the
+  // keyboard up. Smart default — everyone gets the report; only the first (the
+  // payer) gets the invoice by default. Either can be toggled per row.
+  function commitEmail() {
+    const v = emailDraft.trim();
+    if (!v) return;
+    if (!EMAIL_RE.test(v)) {
+      setEmailError(true);
+      return;
+    }
+    setRecipients((prev) => {
+      if (prev.some((x) => x.email.toLowerCase() === v.toLowerCase())) return prev;
+      return [...prev, { email: v, report: true, invoice: prev.length === 0 }];
+    });
+    setEmailDraft("");
+    setEmailError(false);
+  }
+  function removeRecipient(email) {
+    setRecipients((prev) => prev.filter((x) => x.email !== email));
+  }
+  // Toggle whether a recipient gets the report or the invoice.
+  function toggleChannel(email, channel) {
+    setRecipients((prev) =>
+      prev.map((x) =>
+        x.email === email ? { ...x, [channel]: !x[channel] } : x,
+      ),
+    );
+  }
+  // Tap the email text to pull it back into the input for a quick fix. No-op
+  // while the input already holds a half-typed value, so we never drop either.
+  function editRecipient(email) {
+    if (emailDraft.trim()) return;
+    setRecipients((prev) => prev.filter((x) => x.email !== email));
+    setEmailDraft(email);
+    setEmailError(false);
+    inputRefs.current.Email?.focus();
   }
 
   return (
@@ -380,21 +519,134 @@ export default function AddInspectionScreen() {
           </Field>
 
           <Field label="Email">
-            <TextInput
-              ref={refFor("Email")}
-              onFocus={onFocusFor("Email")}
-              style={styles.input}
-              value={form.Email}
-              onChangeText={(v) => set("Email", v)}
-              placeholder="jane@example.com"
-              placeholderTextColor={theme.colors.textFine}
-              keyboardType="email-address"
-              autoCapitalize="none"
-              returnKeyType="next"
-              onSubmitEditing={focusNext}
-              autoCorrect={false}
-              autoComplete="email"
-            />
+            {/* Committed recipients — each row toggles report / invoice. The
+                first is the primary (starred): mirrors the Email column + the
+                default invoice recipient. */}
+            {recipients.length > 0 ? (
+              <View style={styles.recipientList}>
+                <AnimatePresence>
+                  {recipients.map((r, i) => (
+                    <MotiView
+                      key={r.email}
+                      from={{ opacity: 0, translateY: -6 }}
+                      animate={{ opacity: 1, translateY: 0 }}
+                      exit={{ opacity: 0, scale: 0.9 }}
+                      transition={{ type: "spring", damping: 18, stiffness: 220 }}
+                    >
+                      <View style={styles.recipientRow}>
+                        <TouchableOpacity
+                          style={styles.recipientEmailWrap}
+                          onPress={() => editRecipient(r.email)}
+                          activeOpacity={0.6}
+                        >
+                          {i === 0 ? (
+                            <MaterialCommunityIcons
+                              name="star"
+                              size={12}
+                              color={theme.colors.primary}
+                              style={{ marginRight: 4 }}
+                            />
+                          ) : null}
+                          <Text
+                            style={styles.recipientEmailText}
+                            numberOfLines={1}
+                          >
+                            {r.email}
+                          </Text>
+                        </TouchableOpacity>
+
+                        <ChannelToggle
+                          icon="file-document-outline"
+                          active={r.report}
+                          onPress={() => toggleChannel(r.email, "report")}
+                        />
+                        <ChannelToggle
+                          icon="currency-usd"
+                          active={r.invoice}
+                          onPress={() => toggleChannel(r.email, "invoice")}
+                        />
+                        <TouchableOpacity
+                          onPress={() => removeRecipient(r.email)}
+                          hitSlop={theme.layout.hitSlop.small}
+                          style={styles.recipientRemove}
+                        >
+                          <MaterialCommunityIcons
+                            name="close-circle"
+                            size={18}
+                            color={theme.colors.textFine}
+                          />
+                        </TouchableOpacity>
+                      </View>
+                    </MotiView>
+                  ))}
+                </AnimatePresence>
+
+                <View style={styles.recipientLegend}>
+                  <MaterialCommunityIcons
+                    name="file-document-outline"
+                    size={12}
+                    color={theme.colors.textSubtle}
+                  />
+                  <Text style={styles.recipientLegendText}>report</Text>
+                  <MaterialCommunityIcons
+                    name="currency-usd"
+                    size={12}
+                    color={theme.colors.textSubtle}
+                    style={{ marginLeft: theme.spacing.s }}
+                  />
+                  <Text style={styles.recipientLegendText}>
+                    invoice · tap to toggle
+                  </Text>
+                </View>
+              </View>
+            ) : null}
+
+            {/* Draft input + add button. */}
+            <View style={styles.emailInputRow}>
+              <TextInput
+                ref={refFor("Email")}
+                onFocus={onFocusFor("Email")}
+                style={[
+                  styles.input,
+                  styles.emailInput,
+                  emailError && styles.inputError,
+                ]}
+                value={emailDraft}
+                onChangeText={(v) => {
+                  setEmailDraft(v);
+                  if (emailError) setEmailError(false);
+                }}
+                placeholder={
+                  recipients.length ? "Add another email" : "jane@example.com"
+                }
+                placeholderTextColor={theme.colors.textFine}
+                keyboardType="email-address"
+                autoCapitalize="none"
+                autoCorrect={false}
+                autoComplete="email"
+                returnKeyType="done"
+                onSubmitEditing={commitEmail}
+                blurOnSubmit={false}
+              />
+              <TouchableOpacity
+                style={[
+                  styles.addEmailBtn,
+                  !emailDraft.trim() && styles.addEmailBtnDisabled,
+                ]}
+                onPress={commitEmail}
+                disabled={!emailDraft.trim()}
+                activeOpacity={0.85}
+              >
+                <MaterialCommunityIcons name="plus" size={22} color="#fff" />
+              </TouchableOpacity>
+            </View>
+
+            {emailError ? (
+              <Text style={styles.emailErrorText}>
+                That doesn&apos;t look like a valid email.
+              </Text>
+            ) : null}
+
             <AnimatePresence>
               {emailSuggestions.length > 0 ? (
                 <MotiView
@@ -424,6 +676,13 @@ export default function AddInspectionScreen() {
                 </MotiView>
               ) : null}
             </AnimatePresence>
+
+            {recipients.length > 0 ? (
+              <Text style={styles.recipientHint}>
+                {recipients.filter((r) => r.report).length} get the report ·{" "}
+                {recipients.filter((r) => r.invoice).length} get the invoice
+              </Text>
+            ) : null}
           </Field>
 
           <Text style={styles.sectionLabel}>SCHEDULE</Text>
@@ -466,6 +725,29 @@ export default function AddInspectionScreen() {
               />
             )}
           </Field>
+
+          <Text style={styles.sectionLabel}>REMINDER</Text>
+
+          <View style={styles.reminderRow}>
+            <View style={styles.reminderText}>
+              <Text style={styles.reminderLabel}>
+                Text reminder the day before
+              </Text>
+              <Text style={styles.reminderDescription}>
+                Send this client an automated SMS the day before their
+                inspection. Defaults to your global setting.
+              </Text>
+            </View>
+            <Switch
+              value={hasApptReminder}
+              onValueChange={setHasApptReminder}
+              trackColor={{
+                false: theme.colors.input,
+                true: theme.colors.primary,
+              }}
+              thumbColor="#fff"
+            />
+          </View>
 
           <Text style={styles.sectionLabel}>LOCATION</Text>
 
@@ -616,6 +898,24 @@ function Field({ label, required, children }) {
   );
 }
 
+// A small per-recipient channel switch (report / invoice). Filled = subscribed.
+function ChannelToggle({ icon, active, onPress }) {
+  return (
+    <TouchableOpacity
+      style={[styles.channelToggle, active && styles.channelToggleActive]}
+      onPress={onPress}
+      activeOpacity={0.7}
+      hitSlop={theme.layout.hitSlop.small}
+    >
+      <MaterialCommunityIcons
+        name={icon}
+        size={16}
+        color={active ? "#fff" : theme.colors.textFine}
+      />
+    </TouchableOpacity>
+  );
+}
+
 const fieldStyles = StyleSheet.create({
   container: {
     marginBottom: theme.spacing.m,
@@ -677,6 +977,28 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: theme.spacing.s,
   },
+  reminderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: theme.colors.cardBackground,
+    borderRadius: theme.layout.borderRadius.s,
+    borderWidth: theme.layout.borderWidth.base,
+    borderColor: theme.colors.input,
+    paddingHorizontal: theme.spacing.m,
+    paddingVertical: theme.spacing.s,
+  },
+  reminderText: {
+    flex: 1,
+    marginRight: theme.spacing.m,
+  },
+  reminderLabel: {
+    ...theme.typography.body,
+  },
+  reminderDescription: {
+    ...theme.typography.caption,
+    color: theme.colors.textSubtle,
+    marginTop: 2,
+  },
   emailSuggestionRow: {
     paddingTop: theme.spacing.xs,
     paddingBottom: theme.spacing.xs,
@@ -694,6 +1016,95 @@ const styles = StyleSheet.create({
   emailChipText: {
     ...theme.typography.caption,
     color: theme.colors.primary,
+  },
+  emailInputRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing.s,
+  },
+  emailInput: {
+    flex: 1,
+  },
+  inputError: {
+    borderColor: theme.colors.warning,
+  },
+  addEmailBtn: {
+    width: 42,
+    height: 42,
+    borderRadius: theme.layout.borderRadius.s,
+    backgroundColor: theme.colors.primary,
+    alignItems: "center",
+    justifyContent: "center",
+    ...theme.shadows.light,
+  },
+  addEmailBtnDisabled: {
+    opacity: theme.layout.opacity.disabled,
+  },
+  emailErrorText: {
+    ...theme.typography.caption,
+    color: theme.colors.warning,
+    marginTop: theme.spacing.xs,
+  },
+  recipientList: {
+    marginBottom: theme.spacing.s,
+    gap: theme.spacing.xs,
+  },
+  recipientRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing.xs,
+    backgroundColor: theme.colors.cardBackground,
+    borderWidth: theme.layout.borderWidth.base,
+    borderColor: theme.colors.input,
+    borderRadius: theme.layout.borderRadius.s,
+    paddingLeft: theme.spacing.s,
+    paddingRight: theme.spacing.xs,
+    paddingVertical: theme.spacing.xs,
+  },
+  recipientEmailWrap: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 2,
+  },
+  recipientEmailText: {
+    ...theme.typography.caption,
+    color: theme.colors.text,
+    flexShrink: 1,
+  },
+  recipientRemove: {
+    paddingLeft: theme.spacing.xs,
+  },
+  channelToggle: {
+    width: 30,
+    height: 30,
+    borderRadius: theme.layout.borderRadius.s,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: theme.layout.borderWidth.base,
+    borderColor: theme.colors.input,
+    backgroundColor: theme.colors.mainBackground,
+  },
+  channelToggleActive: {
+    backgroundColor: theme.colors.primary,
+    borderColor: theme.colors.primary,
+  },
+  recipientLegend: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    marginTop: 2,
+    paddingHorizontal: theme.spacing.xs,
+  },
+  recipientLegendText: {
+    ...theme.typography.caption,
+    color: theme.colors.textSubtle,
+    fontSize: 11,
+  },
+  recipientHint: {
+    ...theme.typography.caption,
+    color: theme.colors.textSubtle,
+    marginTop: theme.spacing.xs,
   },
   geoConfirmRow: {
     flexDirection: "row",

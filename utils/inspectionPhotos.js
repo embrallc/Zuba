@@ -2,7 +2,6 @@ import * as FileSystem from "expo-file-system/legacy";
 import * as ImageManipulator from "expo-image-manipulator";
 import * as MediaLibrary from "expo-media-library";
 import { Image } from "react-native";
-import { db } from "../db/index";
 import { logError } from "../db/logs";
 import { supabase } from "./supabase";
 
@@ -227,9 +226,10 @@ export async function uploadInspectionPhoto({
 }
 
 // Pick the best URI for displaying a photo: cache first; on a miss pull the
-// cloud copy back INTO the cache (and re-record the path when detailSk is
-// given) so the next open is instant and free. Falls back to a signed URL if
-// the re-cache write fails; null when nothing is available.
+// cloud copy back INTO the cache so the next open is instant and free. Falls
+// back to a signed URL if the re-cache fails; null when nothing is available.
+// `detailSk` is the photo id; the cache path is derived from it, so re-caching
+// lands on the same deterministic path the photo ref already points at.
 export async function resolvePhotoUri({ localUri, cloudUri, detailSk }) {
   try {
     if (localUri) {
@@ -253,17 +253,13 @@ export async function resolvePhotoUri({ localUri, cloudUri, detailSk }) {
           const dest = cachePathForDetail(detailSk);
           const dl = await FileSystem.downloadAsync(signedUrl, dest);
           if (dl?.status === 200) {
-            // Record the fresh cache path. Deliberately no Synced/_version
-            // bump — the path is device-local display state, not synced data
-            // (same contract as setCloudPictureURI).
-            await db.runAsync(
-              `UPDATE InspectionDetail SET LocalPictureURI = ? WHERE InspectionDetailSk = ?`,
-              [dest, detailSk],
-            );
+            // Re-cached to the photo's deterministic path so the next open is
+            // instant. The path lives on the photo ref in the answers JSON, not
+            // a DB row, so there's nothing to write back here.
             return dest;
           }
         } catch (e) {
-          logError(e, `resolvePhotoUri recache sk=${detailSk}`);
+          logError(e, `resolvePhotoUri recache id=${detailSk}`);
         }
       }
       return signedUrl;

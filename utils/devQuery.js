@@ -5,7 +5,7 @@ import { db } from "../db/index";
  *
  * Usage (anywhere in the app):
  *   import { devQuery } from "../utils/devQuery";
- *   devQuery("SELECT * FROM InspectionDetail WHERE _deleted = 0");
+ *   devQuery("SELECT * FROM InspectionForm WHERE _deleted = 0");
  *   devQuery("SELECT * FROM Inspections WHERE InspectionSk = ?", ["some-uuid"]);
  */
 export async function devQuery(sql, params = []) {

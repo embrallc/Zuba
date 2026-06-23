@@ -16,7 +16,7 @@ import * as MailComposer from "expo-mail-composer";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import * as Sharing from "expo-sharing";
 import * as SMS from "expo-sms";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Linking,
@@ -27,11 +27,17 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { getInspectionById } from "../db/inspections";
 import { logError } from "../db/logs";
 import { useDebouncedPress } from "../hooks/useDebouncedPress";
 import { useBannerStore } from "../stores/useBannerStore";
 import { useInspectionStore } from "../stores/useInspectionStore";
-import { getOrRestoreReport, reportFileName } from "../utils/reports";
+import {
+  generateInspectionReport,
+  getOrRestoreReport,
+  reportFileName,
+} from "../utils/reports";
+import { isWorkerConfigured, startCloudReport } from "../utils/reportJobs";
 
 let WebView = null;
 try {
@@ -43,14 +49,46 @@ try {
 export default function ReportViewerScreen() {
   const router = useRouter();
   const { inspectionSk } = useLocalSearchParams();
-  const inspection = useInspectionStore((s) => s.inspections[inspectionSk]);
+  const storeInspection = useInspectionStore((s) => s.inspections[inspectionSk]);
   const showBanner = useBannerStore((s) => s.show);
+
+  // Completed/archived inspections aren't in the active store — fall back to
+  // SQLite so the Archive's "Report" action resolves them. undefined = still
+  // looking up, null = genuinely not found.
+  const [dbInspection, setDbInspection] = useState(undefined);
+  useEffect(() => {
+    if (storeInspection) return;
+    let alive = true;
+    getInspectionById(inspectionSk).then((row) => {
+      if (alive) setDbInspection(row ?? null);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [storeInspection, inspectionSk]);
+  const inspection = storeInspection ?? dbInspection ?? null;
+  const loadingInspection = !storeInspection && dbInspection === undefined;
 
   // 'checking' | 'ready' | 'missing'
   const [fileState, setFileState] = useState("checking");
   const [path, setPath] = useState(null);
+  const [generating, setGenerating] = useState(false);
+
+  // Cloud Run report pipeline (beta) — separate from the on-device generate
+  // above. Proves the app → Cloud Run → Storage → Realtime loop end to end.
+  const [cloudStatus, setCloudStatus] = useState("idle"); // idle|pending|processing|completed|failed
+  const [cloudUrl, setCloudUrl] = useState(null);
+  const [cloudError, setCloudError] = useState(null);
+  const cloudUnsubRef = useRef(null);
+  useEffect(
+    () => () => {
+      if (cloudUnsubRef.current) cloudUnsubRef.current();
+    },
+    [],
+  );
 
   useEffect(() => {
+    if (!inspection) return; // wait for the store/SQLite lookup to resolve
     let alive = true;
     (async () => {
       // Cache-first; if the OS purged the cache, this re-pulls the stored
@@ -63,22 +101,81 @@ export default function ReportViewerScreen() {
     return () => {
       alive = false;
     };
-  }, [inspection?.LastReportPath]);
+  }, [inspection?.InspectionSk, inspection?.LastReportPath]);
+
+  const handleGenerate = useDebouncedPress(async () => {
+    if (generating || !inspection) return;
+    setGenerating(true);
+    try {
+      const result = await generateInspectionReport(inspection);
+      setPath(result.path);
+      setFileState("ready");
+      showBanner({ message: "Report generated.", kind: "success" });
+    } catch (e) {
+      logError(e, `ReportViewer.handleGenerate sk=${inspectionSk}`);
+      showBanner({
+        message: e?.presentable ? e.message : "Couldn't generate the report.",
+        kind: "error",
+      });
+    } finally {
+      setGenerating(false);
+    }
+  });
+
+  const cloudBusy = cloudStatus === "pending" || cloudStatus === "processing";
+  const handleCloudGenerate = useDebouncedPress(async () => {
+    if (!inspection || cloudBusy) return;
+    // Tear down any prior subscription before starting a new job.
+    if (cloudUnsubRef.current) {
+      cloudUnsubRef.current();
+      cloudUnsubRef.current = null;
+    }
+    setCloudUrl(null);
+    setCloudError(null);
+    setCloudStatus("pending");
+    try {
+      const { unsubscribe } = await startCloudReport(inspection, (row) => {
+        if (row?.status) setCloudStatus(row.status);
+        if (row?.report_url) setCloudUrl(row.report_url);
+        if (row?.error) setCloudError(row.error);
+      });
+      cloudUnsubRef.current = unsubscribe;
+    } catch (e) {
+      logError(e, `ReportViewer.handleCloudGenerate sk=${inspectionSk}`);
+      setCloudStatus("failed");
+      setCloudError(e?.message ?? "Couldn't start the cloud report.");
+    }
+  });
 
   const canPreview = Platform.OS === "ios" && !!WebView;
 
   const handleEmail = useDebouncedPress(async () => {
     try {
-      const available = await MailComposer.isAvailableAsync();
-      if (!available) {
-        showBanner({ message: "No email account is set up on this device.", kind: "warning" });
+      // Preferred path: the native mail composer pre-fills the recipient,
+      // subject, body, and attaches the PDF.
+      if (await MailComposer.isAvailableAsync()) {
+        await MailComposer.composeAsync({
+          recipients: inspection.Email ? [inspection.Email] : undefined,
+          subject: `Inspection Report — ${inspection.AddressLine1 || inspection.FullName || ""}`,
+          body: `Hi ${inspection.FullName || "there"},\n\nAttached is your inspection report.\n\nThank you!`,
+          attachments: [path],
+        });
         return;
       }
-      await MailComposer.composeAsync({
-        recipients: [inspection.Email],
-        subject: `Inspection Report — ${inspection.AddressLine1 || inspection.FullName || ""}`,
-        body: `Hi ${inspection.FullName || "there"},\n\nAttached is your inspection report.\n\nThank you!`,
-        attachments: [path],
+      // No native mail UI (Apple Mail not configured, or the user emails via
+      // Gmail/Outlook). Fall back to the OS share sheet so they can still pick a
+      // mail app and send the PDF rather than dead-ending.
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(path, {
+          mimeType: "application/pdf",
+          UTI: "com.adobe.pdf",
+          dialogTitle: "Email report",
+        });
+        return;
+      }
+      showBanner({
+        message: "No email or sharing option is available on this device.",
+        kind: "warning",
       });
     } catch (e) {
       logError(e, `ReportViewer.handleEmail sk=${inspectionSk}`);
@@ -131,6 +228,15 @@ export default function ReportViewerScreen() {
   const hasEmail = !!inspection?.Email;
   const hasPhone = !!inspection?.Phone;
 
+  if (loadingInspection) {
+    return (
+      <SafeAreaView style={styles.safe}>
+        <Nav router={router} title="Report" />
+        <Center spinner text="Opening…" />
+      </SafeAreaView>
+    );
+  }
+
   if (!inspection) {
     return (
       <SafeAreaView style={styles.safe}>
@@ -157,12 +263,35 @@ export default function ReportViewerScreen() {
       )}
 
       {fileState === "missing" && (
-        <Center
-          icon="file-alert-outline"
-          text={
-            "No report is available for this inspection.\nSwipe its card and tap the printer button to generate one — or check your connection and reopen this screen."
-          }
-        />
+        <View style={styles.center}>
+          <MaterialCommunityIcons
+            name="file-alert-outline"
+            size={40}
+            color={theme?.colors?.textFine}
+          />
+          <Text style={styles.centerText}>
+            No report has been generated for this inspection yet.
+          </Text>
+          <TouchableOpacity
+            style={[styles.genBtn, generating && { opacity: 0.6 }]}
+            onPress={handleGenerate}
+            disabled={generating}
+            activeOpacity={0.8}
+          >
+            {generating ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <>
+                <MaterialCommunityIcons
+                  name="file-document-outline"
+                  size={18}
+                  color="#fff"
+                />
+                <Text style={styles.shareBtnText}>Generate report</Text>
+              </>
+            )}
+          </TouchableOpacity>
+        </View>
       )}
 
       {fileState === "ready" &&
@@ -231,6 +360,55 @@ export default function ReportViewerScreen() {
           </TouchableOpacity>
         </View>
       )}
+
+      {isWorkerConfigured() && (
+        <View style={styles.cloudCard}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.cloudTitle}>Cloud report (beta)</Text>
+            <Text
+              style={[
+                styles.cloudStatusText,
+                cloudStatus === "failed" && { color: theme?.colors?.error },
+              ]}
+              numberOfLines={2}
+            >
+              {cloudStatusLabel(cloudStatus, cloudError)}
+            </Text>
+          </View>
+          {cloudStatus === "completed" && cloudUrl ? (
+            <TouchableOpacity
+              style={styles.cloudBtn}
+              onPress={() => Linking.openURL(cloudUrl).catch(() => {})}
+              activeOpacity={0.8}
+            >
+              <MaterialCommunityIcons name="open-in-new" size={16} color="#fff" />
+              <Text style={styles.cloudBtnText}>View</Text>
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity
+              style={[styles.cloudBtn, cloudBusy && { opacity: 0.6 }]}
+              onPress={handleCloudGenerate}
+              disabled={cloudBusy}
+              activeOpacity={0.8}
+            >
+              {cloudBusy ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <>
+                  <MaterialCommunityIcons
+                    name="cloud-upload-outline"
+                    size={16}
+                    color="#fff"
+                  />
+                  <Text style={styles.cloudBtnText}>
+                    {cloudStatus === "failed" ? "Retry" : "Generate"}
+                  </Text>
+                </>
+              )}
+            </TouchableOpacity>
+          )}
+        </View>
+      )}
     </SafeAreaView>
   );
 }
@@ -257,6 +435,21 @@ function Nav({ router, title, subtitle }) {
       <View style={{ width: theme?.layout?.iconSize?.l }} />
     </View>
   );
+}
+
+function cloudStatusLabel(status, error) {
+  switch (status) {
+    case "pending":
+      return "Queued…";
+    case "processing":
+      return "Generating on the server…";
+    case "completed":
+      return "Ready — tap View";
+    case "failed":
+      return error ? `Failed: ${error}` : "Failed";
+    default:
+      return "Generate a fresh report on the server";
+  }
 }
 
 function Center({ icon, text, spinner }) {
@@ -357,5 +550,51 @@ const styles = StyleSheet.create({
   },
   saveBtnText: {
     color: theme?.colors?.primary,
+  },
+  genBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: theme?.spacing?.xs,
+    backgroundColor: theme?.colors?.primary,
+    borderRadius: theme?.layout?.borderRadius?.full,
+    paddingVertical: theme?.spacing?.s,
+    paddingHorizontal: theme?.spacing?.l,
+    marginTop: theme?.spacing?.s,
+  },
+  cloudCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme?.spacing?.m,
+    paddingHorizontal: theme?.spacing?.m,
+    paddingVertical: theme?.spacing?.s,
+    backgroundColor: theme?.colors?.cardBackground,
+    borderTopWidth: theme?.layout?.borderWidth?.thin,
+    borderTopColor: theme?.colors?.input,
+  },
+  cloudTitle: {
+    ...(theme?.typography?.bodyBold ?? {}),
+    fontSize: 14,
+  },
+  cloudStatusText: {
+    ...(theme?.typography?.caption ?? {}),
+    color: theme?.colors?.textSubtle,
+    marginTop: 1,
+  },
+  cloudBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: theme?.spacing?.xs,
+    minWidth: 96,
+    backgroundColor: theme?.colors?.primary,
+    borderRadius: theme?.layout?.borderRadius?.full,
+    paddingVertical: theme?.spacing?.s,
+    paddingHorizontal: theme?.spacing?.m,
+  },
+  cloudBtnText: {
+    ...(theme?.typography?.bodyBold ?? {}),
+    color: "#fff",
+    fontSize: 14,
   },
 });

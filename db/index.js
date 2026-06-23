@@ -37,16 +37,6 @@ export function initializeDatabase(userId) {
       CreatedAt INTEGER
     );
 
-    CREATE TABLE IF NOT EXISTS SectionTemplate (
-        SectionTemplateSk TEXT PRIMARY KEY NOT NULL,
-        UserSk TEXT NOT NULL,
-        Name TEXT NOT NULL,
-        Position INTEGER NOT NULL DEFAULT 0,
-        CreatedAt TEXT NOT NULL,
-        UpdatedAt TEXT NOT NULL,
-        Synced INTEGER NOT NULL DEFAULT 0
-      );
-
     CREATE TABLE IF NOT EXISTS Organizations (
       OrgSk     TEXT PRIMARY KEY NOT NULL,
       OrgName   TEXT,
@@ -85,8 +75,17 @@ export function initializeDatabase(userId) {
       Longitude REAL,
       Latitude REAL,
       Status TEXT DEFAULT 'OPEN',
+      HasApptReminder INTEGER NOT NULL DEFAULT 0,
+      ApptReminderStatus TEXT DEFAULT 'PENDING',
+      PaymentState TEXT NOT NULL DEFAULT 'none',
+      ReportState TEXT NOT NULL DEFAULT 'pending',
+      Paid INTEGER NOT NULL DEFAULT 0,
+      ReportRecipients TEXT NOT NULL DEFAULT '[]',
       LastReportPath TEXT,
       LastReportAt INTEGER,
+      CalendarEventId TEXT,
+      CalendarOwnerDeviceId TEXT,
+      CalendarSnapshot TEXT,
       _version INTEGER DEFAULT 1,
       _lastChangedAt INTEGER,
       _deleted BOOLEAN DEFAULT 0,
@@ -94,39 +93,36 @@ export function initializeDatabase(userId) {
       FOREIGN KEY (UserSk) REFERENCES Users (UserSk)
     );
 
-    CREATE TABLE IF NOT EXISTS InspectionDescription (
-      InspectionDescriptionSk TEXT PRIMARY KEY NOT NULL,
-      InspectionSk TEXT NOT NULL,
-      Description TEXT,
-      Notes TEXT,
-      Position INTEGER DEFAULT 0,
-      SeverityLevel TEXT DEFAULT NULL,
-      _version INTEGER DEFAULT 1,
-      _lastChangedAt INTEGER,
-      _deleted BOOLEAN DEFAULT 0,
-      Synced INTEGER NOT NULL DEFAULT 0,
-      FOREIGN KEY (InspectionSk) REFERENCES Inspections (InspectionSk)
-    );
-
-    CREATE TABLE IF NOT EXISTS InspectionDetail (
-      InspectionDetailSk TEXT PRIMARY KEY NOT NULL,
-      InspectionDescriptionSk TEXT NOT NULL,
-      LocalPictureURI TEXT,
-      CloudPictureURI TEXT,
-      PictureNote TEXT,
-      PictureMarkup TEXT,
-      _version INTEGER DEFAULT 1,
-      _lastChangedAt INTEGER,
-      _deleted BOOLEAN DEFAULT 0,
-      Synced INTEGER NOT NULL DEFAULT 0,
-      FOREIGN KEY (InspectionDescriptionSk) REFERENCES InspectionDescription (InspectionDescriptionSk)
-    );
-
     CREATE TABLE IF NOT EXISTS DayCache (
       CacheKey TEXT PRIMARY KEY NOT NULL,
       Value TEXT NOT NULL,
       ExpiresAt INTEGER NOT NULL,
       CreatedAt INTEGER NOT NULL
+    );
+
+    -- Local cache of the org's PUBLISHED walkthrough template. Pull-only for
+    -- everyone (members never push; the owner's authoritative copy is the
+    -- cloud walkthrough_templates row), so no Synced column.
+    CREATE TABLE IF NOT EXISTS WalkthroughTemplate (
+      OrgSk            TEXT PRIMARY KEY NOT NULL,
+      PublishedSchema  TEXT,
+      PublishedVersion INTEGER NOT NULL DEFAULT 0,
+      UpdatedAt        INTEGER
+    );
+
+    -- Per-inspection walkthrough form, 1:1 with Inspections. SchemaSnapshot
+    -- freezes the template at create time; Answers is the filled JSON. Replaces
+    -- InspectionDescription + InspectionDetail.
+    CREATE TABLE IF NOT EXISTS InspectionForm (
+      InspectionSk    TEXT PRIMARY KEY NOT NULL,
+      SchemaSnapshot  TEXT,
+      Answers         TEXT NOT NULL DEFAULT '{}',
+      TemplateVersion INTEGER NOT NULL DEFAULT 0,
+      _version        INTEGER DEFAULT 1,
+      _lastChangedAt  INTEGER,
+      _deleted        BOOLEAN DEFAULT 0,
+      Synced          INTEGER NOT NULL DEFAULT 0,
+      FOREIGN KEY (InspectionSk) REFERENCES Inspections (InspectionSk)
     );
 
     CREATE TABLE IF NOT EXISTS SmsTemplate (
@@ -167,30 +163,19 @@ export function initializeDatabase(userId) {
     );
   `);
 
-  // Patch existing databases — CREATE TABLE IF NOT EXISTS won't modify them
+  // Patch existing databases — CREATE TABLE IF NOT EXISTS won't modify them.
+  // Phase 6 cutover: drop the legacy relational form tables from any dev DB
+  // that still has them. InspectionDetail (child) before InspectionDescription
+  // to satisfy foreign_keys = ON; SectionTemplate is independent. Their data
+  // moved to the InspectionForm JSON document model.
   try {
-    _db.execSync(
-      `ALTER TABLE InspectionDescription ADD COLUMN Position INTEGER DEFAULT 0`,
-    );
+    _db.execSync(`DROP TABLE IF EXISTS InspectionDetail`);
   } catch (_) {}
   try {
-    _db.execSync(`ALTER TABLE InspectionDescription ADD COLUMN Notes TEXT`);
+    _db.execSync(`DROP TABLE IF EXISTS InspectionDescription`);
   } catch (_) {}
   try {
-    _db.execSync(
-      `ALTER TABLE InspectionDescription ADD COLUMN SeverityLevel TEXT DEFAULT NULL`,
-    );
-  } catch (_) {}
-  try {
-    _db.execSync(`CREATE TABLE IF NOT EXISTS SectionTemplate (
-      SectionTemplateSk TEXT PRIMARY KEY NOT NULL,
-      UserSk TEXT NOT NULL,
-      Name TEXT NOT NULL,
-      Position INTEGER NOT NULL DEFAULT 0,
-      CreatedAt TEXT NOT NULL,
-      UpdatedAt TEXT NOT NULL,
-      Synced INTEGER NOT NULL DEFAULT 0
-    )`);
+    _db.execSync(`DROP TABLE IF EXISTS SectionTemplate`);
   } catch (_) {}
   try {
     _db.execSync(`CREATE TABLE IF NOT EXISTS SmsTemplate (
@@ -265,15 +250,59 @@ export function initializeDatabase(userId) {
   try {
     _db.execSync(`ALTER TABLE Inspections ADD COLUMN LastReportAt INTEGER`);
   } catch (_) {}
+  // Client appointment-reminder fields (synced). HasApptReminder is seeded from
+  // the global "Text appointment reminder" setting at create time and overridable
+  // per inspection; ApptReminderStatus is the day-before send tracker the reminder
+  // job flips PENDING -> SENT.
   try {
     _db.execSync(
-      `ALTER TABLE InspectionDetail RENAME COLUMN PictureURI TO LocalPictureURI`,
+      `ALTER TABLE Inspections ADD COLUMN HasApptReminder INTEGER NOT NULL DEFAULT 0`,
     );
   } catch (_) {}
   try {
     _db.execSync(
-      `ALTER TABLE InspectionDetail ADD COLUMN CloudPictureURI TEXT`,
+      `ALTER TABLE Inspections ADD COLUMN ApptReminderStatus TEXT DEFAULT 'PENDING'`,
     );
+  } catch (_) {}
+  // Stripe Connect (Phase 0): synced per-inspection payment/report rollup state +
+  // multi-recipient report-email array. PaymentState/ReportState/Paid are written
+  // by the cloud reconciler/webhook and pulled down (the device never pushes
+  // them); ReportRecipients is device-editable.
+  try {
+    _db.execSync(
+      `ALTER TABLE Inspections ADD COLUMN PaymentState TEXT NOT NULL DEFAULT 'none'`,
+    );
+  } catch (_) {}
+  try {
+    _db.execSync(
+      `ALTER TABLE Inspections ADD COLUMN ReportState TEXT NOT NULL DEFAULT 'pending'`,
+    );
+  } catch (_) {}
+  try {
+    _db.execSync(
+      `ALTER TABLE Inspections ADD COLUMN Paid INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch (_) {}
+  try {
+    _db.execSync(
+      `ALTER TABLE Inspections ADD COLUMN ReportRecipients TEXT NOT NULL DEFAULT '[]'`,
+    );
+  } catch (_) {}
+  // Calendar two-way sync (synced, device-editable like ReportRecipients).
+  // CalendarEventId = the owner device's local event id; CalendarOwnerDeviceId =
+  // which Zuba device manages the event (single-writer guard); CalendarSnapshot =
+  // last-synced {title,start,end,location,notes,lastModified} JSON for diff +
+  // conflict resolution + loop prevention.
+  try {
+    _db.execSync(`ALTER TABLE Inspections ADD COLUMN CalendarEventId TEXT`);
+  } catch (_) {}
+  try {
+    _db.execSync(
+      `ALTER TABLE Inspections ADD COLUMN CalendarOwnerDeviceId TEXT`,
+    );
+  } catch (_) {}
+  try {
+    _db.execSync(`ALTER TABLE Inspections ADD COLUMN CalendarSnapshot TEXT`);
   } catch (_) {}
   try {
     _db.execSync(`CREATE TABLE IF NOT EXISTS SmsStatus (
@@ -288,6 +317,29 @@ export function initializeDatabase(userId) {
       _deleted      BOOLEAN DEFAULT 0,
       Synced        INTEGER NOT NULL DEFAULT 0,
       UNIQUE(InspectionSk, SmsTemplateSk),
+      FOREIGN KEY (InspectionSk) REFERENCES Inspections (InspectionSk)
+    )`);
+  } catch (_) {}
+
+  // Patch in walkthrough-form tables for existing databases.
+  try {
+    _db.execSync(`CREATE TABLE IF NOT EXISTS WalkthroughTemplate (
+      OrgSk            TEXT PRIMARY KEY NOT NULL,
+      PublishedSchema  TEXT,
+      PublishedVersion INTEGER NOT NULL DEFAULT 0,
+      UpdatedAt        INTEGER
+    )`);
+  } catch (_) {}
+  try {
+    _db.execSync(`CREATE TABLE IF NOT EXISTS InspectionForm (
+      InspectionSk    TEXT PRIMARY KEY NOT NULL,
+      SchemaSnapshot  TEXT,
+      Answers         TEXT NOT NULL DEFAULT '{}',
+      TemplateVersion INTEGER NOT NULL DEFAULT 0,
+      _version        INTEGER DEFAULT 1,
+      _lastChangedAt  INTEGER,
+      _deleted        BOOLEAN DEFAULT 0,
+      Synced          INTEGER NOT NULL DEFAULT 0,
       FOREIGN KEY (InspectionSk) REFERENCES Inspections (InspectionSk)
     )`);
   } catch (_) {}
@@ -311,9 +363,7 @@ export function initializeDatabase(userId) {
     "Organizations",
     "Users",
     "Inspections",
-    "InspectionDescription",
-    "InspectionDetail",
-    "SectionTemplate",
+    "InspectionForm",
     "SmsTemplate",
     "SmsStatus",
     "NotificationSettings",

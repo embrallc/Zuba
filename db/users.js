@@ -78,17 +78,39 @@ export async function updateUserName(userSk, { fname, lname }) {
 export async function getOrCreateUser(supabaseUid, orgSk, userProfile) {
   try {
     const now = dayjs().valueOf();
+    // OrgSk is NOT NULL locally. If org_sk is ever missing from the session,
+    // `INSERT OR IGNORE` would SILENTLY skip the row (OR IGNORE swallows the
+    // NOT NULL violation) — and then EVERY inspection's `UserSk -> Users` FK
+    // fails on the next pull, leaving the schedule empty with no error. Coalesce
+    // to '' so the parent row always exists; pullSelfUser backfills the real
+    // org_sk from the cloud moments later.
+    const safeOrgSk = orgSk ?? "";
     await db.runAsync(
       `INSERT OR IGNORE INTO Users (UserSk, UserId, OrgSk, UserProfile, Role, _version, _lastChangedAt, _deleted)
        VALUES (?, ?, ?, ?, 'user', 1, ?, 0)`,
-      [supabaseUid, supabaseUid, orgSk, userProfile, now],
+      [supabaseUid, supabaseUid, safeOrgSk, userProfile, now],
     );
     // Keep the local cache in sync with auth metadata on every login —
     // role/org may have changed cloud-side since the row was first inserted.
+    // COALESCE so a null incoming org_sk never wipes a good stored one.
     await db.runAsync(
-      `UPDATE Users SET UserProfile = ?, OrgSk = ? WHERE UserId = ?`,
-      [userProfile, orgSk, supabaseUid],
+      `UPDATE Users SET UserProfile = ?, OrgSk = COALESCE(?, OrgSk) WHERE UserId = ?`,
+      [userProfile, orgSk ?? null, supabaseUid],
     );
+    // Verify the parent row actually exists — if it somehow doesn't, surface it
+    // loudly rather than letting inspections silently fail to sync.
+    const row = await db.getFirstAsync(
+      `SELECT UserSk FROM Users WHERE UserId = ?`,
+      [supabaseUid],
+    );
+    if (!row) {
+      logError(
+        new Error(
+          `Users row missing after upsert (orgSk=${orgSk ?? "null"}) — inspections will fail their FK`,
+        ),
+        "db/users.getOrCreateUser:verify",
+      );
+    }
     await AsyncStorage.setItem(USER_SK_KEY, supabaseUid);
     return supabaseUid;
   } catch (e) {

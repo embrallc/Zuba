@@ -1,6 +1,12 @@
 import { useRef, useState } from "react";
-import { FORM_BINDINGS, bindingByKey } from "../../../shared/formBindings";
 import { uploadAsset } from "../api";
+import {
+  bindingByKey,
+  bindingGroups,
+  bindingMisplaced,
+  photoBindings,
+} from "../bindings";
+import { repeatableSections } from "../../../shared/walkthroughToReport";
 import { useEditorStore } from "../store";
 
 const SWATCHES = [
@@ -113,6 +119,9 @@ function BandPanel({ band }) {
   const deleteSelection = useEditorStore((s) => s.deleteSelection);
   const select = useEditorStore((s) => s.select);
   const reorderShape = useEditorStore((s) => s.reorderShape);
+  const walkthroughSchema = useEditorStore((s) => s.walkthroughSchema);
+
+  const repeatables = repeatableSections(walkthroughSchema);
 
   return (
     <>
@@ -136,17 +145,51 @@ function BandPanel({ band }) {
           onChange={(kind) =>
             updateBand(band.id, {
               kind,
-              repeat: kind === "repeatable" ? { collection: "sections" } : null,
+              // Default a new repeating band to the first walkthrough
+              // repeatable section, if any.
+              repeat:
+                kind === "repeatable"
+                  ? { sectionId: repeatables[0]?.id ?? null }
+                  : null,
             })
           }
         />
       </div>
       {band.kind === "repeatable" && (
-        <p className="muted">
-          Stamped once per walkthrough section in the generated report —
-          Basement, Roof, Foundation each get their own copy with their own
-          data.
-        </p>
+        <>
+          <div className="row">
+            <label>Repeats over</label>
+            <select
+              value={band.repeat?.sectionId ?? ""}
+              onChange={(e) =>
+                updateBand(band.id, { repeat: { sectionId: e.target.value || null } })
+              }
+            >
+              <option value="">— pick a section —</option>
+              {repeatables.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.title || "Section"}
+                </option>
+              ))}
+            </select>
+          </div>
+          {repeatables.length === 0 ? (
+            <p className="warn">
+              Your walkthrough form has no repeating sections yet. Add one in the
+              Walkthrough Form designer, then this band can stamp it out.
+            </p>
+          ) : !band.repeat?.sectionId ? (
+            <p className="warn">
+              Pick which walkthrough section this repeats over, or its fields
+              will be blank in reports.
+            </p>
+          ) : (
+            <p className="muted">
+              Stamped once per "{repeatables.find((s) => s.id === band.repeat.sectionId)?.title ?? "section"}"
+              the inspector adds — each with its own data.
+            </p>
+          )}
+        </>
       )}
       <Num
         label="Min height"
@@ -355,8 +398,11 @@ function ImageUpload({ el, update }) {
 }
 
 function ElementPanel({ band, el, update }) {
-  const meta = el.binding ? bindingByKey(el.binding) : null;
-  const invalid = !!meta && meta.scope === "section" && band.kind !== "repeatable";
+  const walkthroughSchema = useEditorStore((s) => s.walkthroughSchema);
+  const groups = bindingGroups(walkthroughSchema);
+  const photoOpts = photoBindings(walkthroughSchema);
+  const meta = el.binding ? bindingByKey(el.binding, walkthroughSchema) : null;
+  const invalid = bindingMisplaced(meta, band);
 
   return (
     <>
@@ -373,9 +419,9 @@ function ElementPanel({ band, el, update }) {
       </h2>
       {invalid && (
         <div className="warn">
-          "{meta.label}" repeats per walkthrough section, but this is a static
-          section. Move it into a Repeating Section or it will be blank in
-          reports.
+          "{meta.label}" comes from the "{meta.sectionTitle}" walkthrough
+          section. Put it in a band that repeats over "{meta.sectionTitle}", or
+          it will be blank in reports.
         </div>
       )}
       <FrameRows node={el} update={update} />
@@ -388,12 +434,12 @@ function ElementPanel({ band, el, update }) {
               value={el.binding ?? ""}
               onChange={(e) => {
                 const key = e.target.value || null;
-                const f = key ? bindingByKey(key) : null;
+                const f = key ? bindingByKey(key, walkthroughSchema) : null;
                 update({ binding: key, label: f?.label ?? "Blank line" });
               }}
             >
               <option value="">None (blank line)</option>
-              {FORM_BINDINGS.groups.map((g) => (
+              {groups.map((g) => (
                 <optgroup key={g.id} label={g.label}>
                   {g.fields.map((f) => (
                     <option key={f.key} value={f.key}>
@@ -486,6 +532,32 @@ function ElementPanel({ band, el, update }) {
       {el.type === "photoGrid" && (
         <>
           <div className="row">
+            <label>Photos from</label>
+            <select
+              value={el.binding ?? ""}
+              onChange={(e) => update({ binding: e.target.value || null })}
+            >
+              <option value="">— pick a photo field —</option>
+              {photoOpts.map((p) => (
+                <option key={p.key} value={p.key}>
+                  {p.sectionTitle} · {p.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          {photoOpts.length === 0 && (
+            <p className="warn">
+              Add a Photos field to your walkthrough form, then this grid can
+              show them.
+            </p>
+          )}
+          {el.binding && bindingMisplaced(meta, band) && (
+            <p className="warn">
+              These photos come from "{meta?.sectionTitle}". Put this grid in a
+              band that repeats over it.
+            </p>
+          )}
+          <div className="row">
             <label>Columns</label>
             <Seg
               options={[
@@ -521,8 +593,8 @@ function ElementPanel({ band, el, update }) {
             />
           </div>
           <p className="muted">
-            Fills with each section's photos at generation time, growing rows
-            as needed.
+            Fills with the chosen field's photos at generation time, growing
+            rows as needed.
           </p>
         </>
       )}

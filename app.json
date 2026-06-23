@@ -21,7 +21,8 @@
       "bundleIdentifier": "com.embrallc.ClientManagment",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
-        "NSCalendarsFullAccessUsageDescription": "Allow ClientManagement to view your calendars and add your scheduled inspections to your calendar."
+        "NSCalendarsFullAccessUsageDescription": "Allow ClientManagement to view your calendars and add your scheduled inspections to your calendar.",
+        "NSCalendarsWriteOnlyAccessUsageDescription": "Allow ClientManagement to add your scheduled inspections to your calendar."
       }
     },
     "android": {

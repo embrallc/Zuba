@@ -1,9 +1,46 @@
 import dayjs from "dayjs";
 import { db } from "../db/index";
 import { logError } from "../db/logs";
+import { cacheTemplate } from "../db/walkthroughForms";
 import { useInspectionStore } from "../stores/useInspectionStore";
-import { resolveLocalFileUri, uploadInspectionPhoto } from "./inspectionPhotos";
+import { uploadInspectionPhoto } from "./inspectionPhotos";
 import { supabase } from "./supabase";
+
+// The caller's org_sk — needed for the photo storage path and the walkthrough
+// template pull. Read from the local Users mirror.
+function getOrgSk(userId) {
+  try {
+    const row = db.getFirstSync(`SELECT OrgSk FROM Users WHERE UserId = ?`, [
+      userId,
+    ]);
+    return row?.OrgSk ?? null;
+  } catch (e) {
+    logError(e, "sync/getOrgSk");
+    return null;
+  }
+}
+
+// Local CalendarSnapshot is a JSON string (or null); the cloud column is jsonb.
+// Parse defensively so a malformed snapshot can't fail the whole upsert.
+function snapshotForCloud(str) {
+  if (!str) return null;
+  try {
+    return JSON.parse(str);
+  } catch (_) {
+    return null;
+  }
+}
+
+// Cloud calendar_snapshot (jsonb object, or already a string) → local TEXT.
+function snapshotForLocal(obj) {
+  if (obj == null) return null;
+  if (typeof obj === "string") return obj;
+  try {
+    return JSON.stringify(obj);
+  } catch (_) {
+    return null;
+  }
+}
 
 function cloudInspectionToStoreObj(r) {
   return {
@@ -22,6 +59,17 @@ function cloudInspectionToStoreObj(r) {
     Longitude: r.longitude ?? null,
     Latitude: r.latitude ?? null,
     Status: r.status ?? "OPEN",
+    HasApptReminder: r.has_appt_reminder ? 1 : 0,
+    ApptReminderStatus: r.appt_reminder_status ?? "PENDING",
+    PaymentState: r.payment_state ?? "none",
+    ReportState: r.report_state ?? "pending",
+    Paid: r.paid ? 1 : 0,
+    ReportRecipients: JSON.stringify(r.report_recipients ?? []),
+    CalendarEventId: r.calendar_event_id ?? null,
+    CalendarOwnerDeviceId: r.calendar_owner_device_id ?? null,
+    CalendarSnapshot: r.calendar_snapshot
+      ? JSON.stringify(r.calendar_snapshot)
+      : null,
     _version: r._version ?? 1,
     _lastChangedAt: r._last_changed_at ?? null,
     _deleted: r._deleted ? 1 : 0,
@@ -97,6 +145,12 @@ async function pushInspections(userId) {
           longitude: r.Longitude ?? null,
           latitude: r.Latitude ?? null,
           status: r.Status ?? "OPEN",
+          has_appt_reminder: !!r.HasApptReminder,
+          appt_reminder_status: r.ApptReminderStatus ?? "PENDING",
+          report_recipients: JSON.parse(r.ReportRecipients || "[]"),
+          calendar_event_id: r.CalendarEventId ?? null,
+          calendar_owner_device_id: r.CalendarOwnerDeviceId ?? null,
+          calendar_snapshot: snapshotForCloud(r.CalendarSnapshot),
           _version: r._version ?? 1,
           _last_changed_at: r._lastChangedAt ?? null,
           _deleted: !!r._deleted,
@@ -124,220 +178,68 @@ async function pushInspections(userId) {
   }
 }
 
-async function pushInspectionDescriptions(userId) {
-  const rows = db.getAllSync(
-    `SELECT * FROM InspectionDescription WHERE Synced = 0`,
-  );
-  if (!rows.length) return;
-
-  for (const r of rows) {
-    try {
-      const { error } = await supabase.from("inspection_descriptions").upsert(
-        {
-          inspection_description_sk: r.InspectionDescriptionSk,
-          inspection_sk: r.InspectionSk,
-          user_id: userId,
-          description: r.Description ?? null,
-          notes: r.Notes ?? null,
-          position: r.Position ?? 0,
-          severity_level: r.SeverityLevel ?? null,
-          _version: r._version ?? 1,
-          _last_changed_at: r._lastChangedAt ?? null,
-          _deleted: !!r._deleted,
-        },
-        { onConflict: "inspection_description_sk" },
-      );
-      if (error) throw error;
-      await db.runAsync(
-        `UPDATE InspectionDescription SET Synced = 1
-         WHERE InspectionDescriptionSk = ? AND IFNULL(_lastChangedAt, 0) = ?`,
-        [r.InspectionDescriptionSk, r._lastChangedAt ?? 0],
-      );
-    } catch (e) {
-      if (isRlsDenied(e)) {
-        await db
-          .runAsync(
-            `UPDATE InspectionDescription SET Synced = 1 WHERE InspectionDescriptionSk = ?`,
-            [r.InspectionDescriptionSk],
-          )
-          .catch(() => {});
-        logError(
-          e,
-          `sync/pushInspectionDescriptions:rls-denied ${r?.InspectionDescriptionSk}`,
-        );
-      } else {
-        logError(
-          e,
-          `sync/pushInspectionDescriptions:${r?.InspectionDescriptionSk ?? "unknown"}`,
-        );
-      }
-    }
-  }
-}
-
-async function pushInspectionDetails(userId) {
-  const rows = db.getAllSync(`SELECT * FROM InspectionDetail WHERE Synced = 0`);
-  console.log(`[sync] pushInspectionDetails: ${rows.length} dirty row(s)`);
-  if (!rows.length) return;
-
-  // OrgSk is part of the cloud bucket path. Pull once for the whole batch.
-  let orgSk = null;
+// Targeted single-row push for immediacy — e.g. right after marking an inspection
+// complete or requesting payment, so the server's state is current without waiting
+// for the next syncAll. Mirrors pushInspections' upsert payload + RLS-denied
+// handling; like pushInspections it deliberately OMITS the server-owned
+// payment_state / report_state / paid columns so the device can't clobber them.
+export async function pushInspection(sk) {
   try {
-    const userRow = db.getFirstSync(
-      `SELECT OrgSk FROM Users WHERE UserId = ?`,
-      [userId],
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    const userId = session?.user?.id;
+    if (!userId) return;
+    const r = db.getFirstSync(
+      `SELECT * FROM Inspections WHERE InspectionSk = ?`,
+      [sk],
     );
-    orgSk = userRow?.OrgSk ?? null;
+    if (!r) return;
+    const { error } = await supabase.from("inspections").upsert(
+      {
+        inspection_sk: r.InspectionSk,
+        user_id: userId,
+        full_name: r.FullName ?? null,
+        summary: r.Summary ?? null,
+        address_line1: r.AddressLine1 ?? null,
+        address_line2: r.AddressLine2 ?? null,
+        city: r.City ?? null,
+        state: r.State ?? null,
+        zip_code: r.ZipCode ?? null,
+        scheduled_at: r.ScheduledAt ?? null,
+        phone: r.Phone ?? null,
+        email: r.Email ?? null,
+        longitude: r.Longitude ?? null,
+        latitude: r.Latitude ?? null,
+        status: r.Status ?? "OPEN",
+        has_appt_reminder: !!r.HasApptReminder,
+        appt_reminder_status: r.ApptReminderStatus ?? "PENDING",
+        report_recipients: JSON.parse(r.ReportRecipients || "[]"),
+        calendar_event_id: r.CalendarEventId ?? null,
+        calendar_owner_device_id: r.CalendarOwnerDeviceId ?? null,
+        calendar_snapshot: snapshotForCloud(r.CalendarSnapshot),
+        _version: r._version ?? 1,
+        _last_changed_at: r._lastChangedAt ?? null,
+        _deleted: !!r._deleted,
+      },
+      { onConflict: "inspection_sk" },
+    );
+    if (error) throw error;
+    await db.runAsync(
+      `UPDATE Inspections SET Synced = 1
+       WHERE InspectionSk = ? AND IFNULL(_lastChangedAt, 0) = ?`,
+      [r.InspectionSk, r._lastChangedAt ?? 0],
+    );
   } catch (e) {
-    logError(e, "sync/pushInspectionDetails:lookupOrgSk");
-  }
-  if (!orgSk) {
-    console.warn(
-      `[sync] pushInspectionDetails: OrgSk missing for userId=${userId} — photo uploads will be SKIPPED`,
-    );
-  }
-
-  // Per-row push: each row may need a Storage upload before the DB upsert.
-  for (const r of rows) {
-    try {
-      let cloudUri = r.CloudPictureURI ?? null;
-
-      // Upload the photo if we have a local copy and no cloud key yet.
-      // Skip deleted rows — no point uploading something we're tombstoning.
-      // A LocalPictureURI whose underlying file no longer exists is
-      // unrecoverable — treat it as "nothing to upload" so the row doesn't
-      // retry on every sync forever.
-      let localFileUri = null;
-      if (!cloudUri && r.LocalPictureURI && !r._deleted) {
-        localFileUri = await resolveLocalFileUri(r.LocalPictureURI);
-        if (!localFileUri) {
-          console.warn(
-            `[sync] detail ${r.InspectionDetailSk}: local photo file gone — nothing to upload`,
-          );
-        }
-      }
-      const needsUpload = !!localFileUri;
-      if (needsUpload && !orgSk) {
-        console.warn(
-          `[sync] detail ${r.InspectionDetailSk}: skipping upload — no OrgSk`,
-        );
-      }
-      if (needsUpload && orgSk) {
-        console.log(
-          `[sync] detail ${r.InspectionDetailSk}: uploading local=${r.LocalPictureURI}`,
-        );
-        const uploaded = await uploadInspectionPhoto({
-          localUri: r.LocalPictureURI,
-          orgSk,
-          userId,
-          detailSk: r.InspectionDetailSk,
-        });
-        if (uploaded) {
-          console.log(
-            `[sync] detail ${r.InspectionDetailSk}: uploaded → ${uploaded}`,
-          );
-          cloudUri = uploaded;
-          try {
-            await db.runAsync(
-              `UPDATE InspectionDetail SET CloudPictureURI = ? WHERE InspectionDetailSk = ?`,
-              [cloudUri, r.InspectionDetailSk],
-            );
-          } catch (e) {
-            logError(
-              e,
-              `sync/pushInspectionDetails:saveCloudUri ${r.InspectionDetailSk}`,
-            );
-          }
-        } else {
-          console.warn(
-            `[sync] detail ${r.InspectionDetailSk}: upload returned null`,
-          );
-        }
-        // If upload failed, cloudUri stays null. Row still upserts below (so
-        // notes/markup/deletes propagate) but stays Synced = 0 — see
-        // uploadPending — so the next syncAll actually retries the photo.
-      }
-
-      // A photo that still needs uploading (upload failed, or no OrgSk yet)
-      // must keep the row dirty. Marking it synced would mean the upload is
-      // never retried — and once the OS purges the cache copy, the photo
-      // would be gone everywhere.
-      const uploadPending = needsUpload && !cloudUri;
-
-      const { error } = await supabase.from("inspection_details").upsert(
-        {
-          inspection_detail_sk: r.InspectionDetailSk,
-          inspection_description_sk: r.InspectionDescriptionSk,
-          user_id: userId,
-          local_picture_uri: r.LocalPictureURI ?? null,
-          cloud_picture_uri: cloudUri,
-          picture_note: r.PictureNote ?? null,
-          picture_markup: r.PictureMarkup ?? null,
-          _version: r._version ?? 1,
-          _last_changed_at: r._lastChangedAt ?? null,
-          _deleted: !!r._deleted,
-        },
-        { onConflict: "inspection_detail_sk" },
-      );
-      if (error) throw error;
-
-      if (!uploadPending) {
-        await db.runAsync(
-          `UPDATE InspectionDetail SET Synced = 1
-           WHERE InspectionDetailSk = ? AND IFNULL(_lastChangedAt, 0) = ?`,
-          [r.InspectionDetailSk, r._lastChangedAt ?? 0],
-        );
-      }
-    } catch (e) {
-      if (isRlsDenied(e)) {
-        await db
-          .runAsync(
-            `UPDATE InspectionDetail SET Synced = 1 WHERE InspectionDetailSk = ?`,
-            [r.InspectionDetailSk],
-          )
-          .catch(() => {});
-        logError(
-          e,
-          `sync/pushInspectionDetails:rls-denied ${r?.InspectionDetailSk}`,
-        );
-      } else {
-        logError(
-          e,
-          `sync/pushInspectionDetails:${r?.InspectionDetailSk ?? "unknown"}`,
-        );
-      }
-    }
-  }
-}
-
-async function pushSectionTemplates(userId) {
-  const rows = db.getAllSync(`SELECT * FROM SectionTemplate WHERE Synced = 0`);
-  if (!rows.length) return;
-
-  for (const r of rows) {
-    try {
-      const { error } = await supabase.from("section_templates").upsert(
-        {
-          section_template_sk: r.SectionTemplateSk,
-          user_id: userId,
-          name: r.Name,
-          position: r.Position ?? 0,
-          created_at: r.CreatedAt,
-          updated_at: r.UpdatedAt,
-        },
-        { onConflict: "section_template_sk" },
-      );
-      if (error) throw error;
-      await db.runAsync(
-        `UPDATE SectionTemplate SET Synced = 1
-         WHERE SectionTemplateSk = ? AND IFNULL(UpdatedAt, '') = ?`,
-        [r.SectionTemplateSk, r.UpdatedAt ?? ""],
-      );
-    } catch (e) {
-      logError(
-        e,
-        `sync/pushSectionTemplates:${r?.SectionTemplateSk ?? "unknown"}`,
-      );
+    if (isRlsDenied(e)) {
+      await db
+        .runAsync(`UPDATE Inspections SET Synced = 1 WHERE InspectionSk = ?`, [
+          sk,
+        ])
+        .catch(() => {});
+      logError(e, `sync/pushInspection:rls-denied ${sk}`);
+    } else {
+      logError(e, `sync/pushInspection:${sk}`);
     }
   }
 }
@@ -425,7 +327,7 @@ async function pushSmsStatus(userId) {
 // inspection to a teammate).
 //
 // Conflict rule: if cloud _version > local _version → update local.
-// Tables without _version (SectionTemplate, SmsTemplate) use UpdatedAt.
+// Tables without _version (SmsTemplate) use UpdatedAt.
 
 async function pullInspections(userId) {
   const data = await fetchAllUserRows("inspections", "inspection_sk", userId);
@@ -437,7 +339,7 @@ async function pullInspections(userId) {
     seen.add(r.inspection_sk);
     try {
       const local = db.getFirstSync(
-        `SELECT _version FROM Inspections WHERE InspectionSk = ?`,
+        `SELECT _version, PaymentState, ReportState, Paid FROM Inspections WHERE InspectionSk = ?`,
         [r.inspection_sk],
       );
       if (!local) {
@@ -445,8 +347,11 @@ async function pullInspections(userId) {
           `INSERT OR IGNORE INTO Inspections
            (InspectionSk, UserSk, FullName, Summary, AddressLine1, AddressLine2, City, State,
             ZipCode, ScheduledAt, Phone, Email, Longitude, Latitude, Status,
+            HasApptReminder, ApptReminderStatus,
+            PaymentState, ReportState, Paid, ReportRecipients,
+            CalendarEventId, CalendarOwnerDeviceId, CalendarSnapshot,
             _version, _lastChangedAt, _deleted, Synced)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
           [
             r.inspection_sk,
             r.user_id,
@@ -463,6 +368,15 @@ async function pullInspections(userId) {
             r.longitude,
             r.latitude,
             r.status ?? "OPEN",
+            r.has_appt_reminder ? 1 : 0,
+            r.appt_reminder_status ?? "PENDING",
+            r.payment_state ?? "none",
+            r.report_state ?? "pending",
+            r.paid ? 1 : 0,
+            JSON.stringify(r.report_recipients ?? []),
+            r.calendar_event_id ?? null,
+            r.calendar_owner_device_id ?? null,
+            snapshotForLocal(r.calendar_snapshot),
             r._version ?? 1,
             r._last_changed_at,
             r._deleted ? 1 : 0,
@@ -475,11 +389,44 @@ async function pullInspections(userId) {
         if (!r._deleted && (r.status ?? "OPEN") !== "CLOSED") {
           store.add(cloudInspectionToStoreObj(r));
         }
-      } else if ((r._version ?? 1) > (local._version ?? 1)) {
+      } else {
+        // Server-owned rollup columns (payment/report) are authoritative on the
+        // cloud — the device never writes them — so sync them on EVERY pull,
+        // regardless of the _version gate (which only guards device-owned
+        // fields). This recovers a 'requested'/'paid'/'sent' that a _version
+        // collision (a device push that rolled _version back) would otherwise
+        // strand locally.
+        const cloudPay = r.payment_state ?? "none";
+        const cloudRep = r.report_state ?? "pending";
+        const cloudPaid = r.paid ? 1 : 0;
+        if (
+          cloudPay !== local.PaymentState ||
+          cloudRep !== local.ReportState ||
+          cloudPaid !== (local.Paid ?? 0)
+        ) {
+          await db.runAsync(
+            `UPDATE Inspections SET PaymentState=?, ReportState=?, Paid=? WHERE InspectionSk=?`,
+            [cloudPay, cloudRep, cloudPaid, r.inspection_sk],
+          );
+          const curr = useInspectionStore.getState().getById(r.inspection_sk);
+          if (curr) {
+            useInspectionStore.getState().update({
+              ...curr,
+              PaymentState: cloudPay,
+              ReportState: cloudRep,
+              Paid: cloudPaid,
+            });
+          }
+        }
+
+        if ((r._version ?? 1) > (local._version ?? 1)) {
         await db.runAsync(
           `UPDATE Inspections SET
            UserSk=?, FullName=?, Summary=?, AddressLine1=?, AddressLine2=?, City=?, State=?,
            ZipCode=?, ScheduledAt=?, Phone=?, Email=?, Longitude=?, Latitude=?, Status=?,
+           HasApptReminder=?, ApptReminderStatus=?,
+           PaymentState=?, ReportState=?, Paid=?, ReportRecipients=?,
+           CalendarEventId=?, CalendarOwnerDeviceId=?, CalendarSnapshot=?,
            _version=?, _lastChangedAt=?, _deleted=?, Synced=1
            WHERE InspectionSk=?`,
           [
@@ -497,6 +444,15 @@ async function pullInspections(userId) {
             r.longitude,
             r.latitude,
             r.status ?? "OPEN",
+            r.has_appt_reminder ? 1 : 0,
+            r.appt_reminder_status ?? "PENDING",
+            r.payment_state ?? "none",
+            r.report_state ?? "pending",
+            r.paid ? 1 : 0,
+            JSON.stringify(r.report_recipients ?? []),
+            r.calendar_event_id ?? null,
+            r.calendar_owner_device_id ?? null,
+            snapshotForLocal(r.calendar_snapshot),
             r._version ?? 1,
             r._last_changed_at,
             r._deleted ? 1 : 0,
@@ -508,192 +464,16 @@ async function pullInspections(userId) {
         if (r._deleted || (r.status ?? "OPEN") === "CLOSED") {
           store.remove(r.inspection_sk);
         } else {
-          store.update(cloudInspectionToStoreObj(r));
+          // Preserve device-local fields the cloud row doesn't carry
+          // (LastReportPath/LastReportAt) so a pull never drops the cached
+          // report PDF reference from the in-memory object.
+          const prev = useInspectionStore.getState().getById(r.inspection_sk);
+          store.update({ ...(prev || {}), ...cloudInspectionToStoreObj(r) });
+        }
         }
       }
     } catch (e) {
       logError(e, `sync/pullInspections:${r?.inspection_sk ?? "unknown"}`);
-    }
-  }
-  return seen;
-}
-
-async function pullInspectionDescriptions(userId) {
-  const data = await fetchAllUserRows(
-    "inspection_descriptions",
-    "inspection_description_sk",
-    userId,
-  );
-
-  const seen = new Set();
-  for (const r of data ?? []) {
-    seen.add(r.inspection_description_sk);
-    try {
-      const local = db.getFirstSync(
-        `SELECT _version FROM InspectionDescription WHERE InspectionDescriptionSk = ?`,
-        [r.inspection_description_sk],
-      );
-      if (!local) {
-        await db.runAsync(
-          `INSERT OR IGNORE INTO InspectionDescription
-           (InspectionDescriptionSk, InspectionSk, Description, Notes, Position, SeverityLevel,
-            _version, _lastChangedAt, _deleted, Synced)
-           VALUES (?,?,?,?,?,?,?,?,?,?)`,
-          [
-            r.inspection_description_sk,
-            r.inspection_sk,
-            r.description,
-            r.notes,
-            r.position ?? 0,
-            r.severity_level ?? null,
-            r._version ?? 1,
-            r._last_changed_at,
-            r._deleted ? 1 : 0,
-            1,
-          ],
-        );
-      } else if ((r._version ?? 1) > (local._version ?? 1)) {
-        await db.runAsync(
-          `UPDATE InspectionDescription SET
-           InspectionSk=?, Description=?, Notes=?, Position=?, SeverityLevel=?,
-           _version=?, _lastChangedAt=?, _deleted=?, Synced=1
-           WHERE InspectionDescriptionSk=?`,
-          [
-            r.inspection_sk,
-            r.description,
-            r.notes,
-            r.position ?? 0,
-            r.severity_level ?? null,
-            r._version ?? 1,
-            r._last_changed_at,
-            r._deleted ? 1 : 0,
-            r.inspection_description_sk,
-          ],
-        );
-      }
-    } catch (e) {
-      logError(
-        e,
-        `sync/pullInspectionDescriptions:${r?.inspection_description_sk ?? "unknown"}`,
-      );
-    }
-  }
-  return seen;
-}
-
-async function pullInspectionDetails(userId) {
-  const data = await fetchAllUserRows(
-    "inspection_details",
-    "inspection_detail_sk",
-    userId,
-  );
-
-  const seen = new Set();
-  for (const r of data ?? []) {
-    seen.add(r.inspection_detail_sk);
-    try {
-      const local = db.getFirstSync(
-        `SELECT _version FROM InspectionDetail WHERE InspectionDetailSk = ?`,
-        [r.inspection_detail_sk],
-      );
-      if (!local) {
-        // Mirror the cloud row directly. LocalPictureURI may point to a path
-        // that doesn't exist on this device — resolvePhotoUri handles that
-        // by falling back to a signed cloud URL.
-        await db.runAsync(
-          `INSERT OR IGNORE INTO InspectionDetail
-           (InspectionDetailSk, InspectionDescriptionSk, LocalPictureURI, CloudPictureURI, PictureNote, PictureMarkup,
-            _version, _lastChangedAt, _deleted, Synced)
-           VALUES (?,?,?,?,?,?,?,?,?,?)`,
-          [
-            r.inspection_detail_sk,
-            r.inspection_description_sk,
-            r.local_picture_uri ?? null,
-            r.cloud_picture_uri ?? null,
-            r.picture_note ?? null,
-            r.picture_markup ?? null,
-            r._version ?? 1,
-            r._last_changed_at,
-            r._deleted ? 1 : 0,
-            1,
-          ],
-        );
-      } else if ((r._version ?? 1) > (local._version ?? 1)) {
-        await db.runAsync(
-          `UPDATE InspectionDetail SET
-           InspectionDescriptionSk=?, LocalPictureURI=?, CloudPictureURI=?, PictureNote=?, PictureMarkup=?,
-           _version=?, _lastChangedAt=?, _deleted=?, Synced=1
-           WHERE InspectionDetailSk=?`,
-          [
-            r.inspection_description_sk,
-            r.local_picture_uri ?? null,
-            r.cloud_picture_uri ?? null,
-            r.picture_note,
-            r.picture_markup,
-            r._version ?? 1,
-            r._last_changed_at,
-            r._deleted ? 1 : 0,
-            r.inspection_detail_sk,
-          ],
-        );
-      }
-    } catch (e) {
-      logError(
-        e,
-        `sync/pullInspectionDetails:${r?.inspection_detail_sk ?? "unknown"}`,
-      );
-    }
-  }
-  return seen;
-}
-
-async function pullSectionTemplates(userId) {
-  // Templates are per-user; explicitly scope to self so an owner whose RLS
-  // can see other users' rows doesn't accidentally import their templates
-  // into local SQLite.
-  const data = await fetchAllUserRows(
-    "section_templates",
-    "section_template_sk",
-    userId,
-  );
-
-  const seen = new Set();
-  for (const r of data ?? []) {
-    seen.add(r.section_template_sk);
-    try {
-      const local = db.getFirstSync(
-        `SELECT UpdatedAt FROM SectionTemplate WHERE SectionTemplateSk = ?`,
-        [r.section_template_sk],
-      );
-      if (!local) {
-        await db.runAsync(
-          `INSERT OR IGNORE INTO SectionTemplate
-           (SectionTemplateSk, UserSk, Name, Position, CreatedAt, UpdatedAt, Synced)
-           VALUES (?,?,?,?,?,?,?)`,
-          [
-            r.section_template_sk,
-            r.user_id,
-            r.name,
-            r.position ?? 0,
-            r.created_at,
-            r.updated_at,
-            1,
-          ],
-        );
-      } else if (
-        dayjs(r.updated_at).valueOf() > dayjs(local.UpdatedAt).valueOf()
-      ) {
-        await db.runAsync(
-          `UPDATE SectionTemplate SET Name=?, Position=?, UpdatedAt=?, Synced=1
-           WHERE SectionTemplateSk=?`,
-          [r.name, r.position ?? 0, r.updated_at, r.section_template_sk],
-        );
-      }
-    } catch (e) {
-      logError(
-        e,
-        `sync/pullSectionTemplates:${r?.section_template_sk ?? "unknown"}`,
-      );
     }
   }
   return seen;
@@ -794,6 +574,261 @@ async function pullSmsStatus(userId) {
   return seen;
 }
 
+// ─── WALKTHROUGH FORMS (new model) ──────────────────────────────────────────
+// inspection_forms is the 1:1 { schema_snapshot, answers } document that
+// replaces inspection_descriptions + inspection_details. Photos live in
+// Storage as before; their refs live INSIDE the answers JSON, so the upload
+// pass walks the answers rather than a Detail table.
+
+// A photo field's answer is an ARRAY OF OBJECTS (each a PhotoRef). A checkbox
+// answer is an array of STRINGS (option ids). That difference is enough to
+// tell them apart without consulting the schema.
+function looksLikePhotoArray(value) {
+  return (
+    Array.isArray(value) &&
+    value.some((el) => el && typeof el === "object" && "id" in el)
+  );
+}
+
+// Walk the answers object and upload any photo whose local copy isn't in the
+// cloud yet. Mutates each ref in place (sets cloudUri). Returns whether the
+// answers changed (so we persist the new cloudUris) and whether any upload is
+// still pending (so the row stays dirty and retries instead of being marked
+// Synced before its photo actually reached Storage).
+async function uploadAnswerPhotos(answers, { orgSk, userId }) {
+  let changed = false;
+  let pending = false;
+  const sections = answers?.sections;
+  if (!sections || typeof sections !== "object") return { changed, pending };
+  for (const sec of Object.values(sections)) {
+    for (const inst of sec?.instances ?? []) {
+      const fields = inst?.fields;
+      if (!fields || typeof fields !== "object") continue;
+      for (const value of Object.values(fields)) {
+        if (!looksLikePhotoArray(value)) continue;
+        for (const ref of value) {
+          if (!ref || typeof ref !== "object") continue;
+          if (ref.cloudUri || !ref.localUri) continue;
+          if (!orgSk) {
+            pending = true;
+            continue;
+          }
+          const uploaded = await uploadInspectionPhoto({
+            localUri: ref.localUri,
+            orgSk,
+            userId,
+            detailSk: ref.id,
+          });
+          if (uploaded) {
+            ref.cloudUri = uploaded;
+            changed = true;
+          } else {
+            pending = true; // upload failed — retry next sync
+          }
+        }
+      }
+    }
+  }
+  return { changed, pending };
+}
+
+// Push ONE InspectionForm row (the 1:1 walkthrough { schema_snapshot, answers }
+// document) to the cloud: upload any pending answer photos, persist their new
+// cloudUris locally, then upsert the document. Marks the row Synced unless a
+// photo upload is still pending (so it retries on a later sync). Shared by the
+// full-sync loop and the single-row pushInspectionForm(sk).
+async function pushOneInspectionForm(r, userId, orgSk) {
+  try {
+    let answers;
+    try {
+      answers = r.Answers ? JSON.parse(r.Answers) : { sections: {} };
+    } catch (_) {
+      answers = { sections: {} };
+    }
+    let schemaSnapshot = null;
+    try {
+      schemaSnapshot = r.SchemaSnapshot ? JSON.parse(r.SchemaSnapshot) : null;
+    } catch (_) {
+      schemaSnapshot = null;
+    }
+
+    // Upload pending photos first (skip for tombstoned rows). cloudUris
+    // written into `answers` get persisted locally so we never re-upload.
+    let uploadPending = false;
+    if (!r._deleted) {
+      const { changed, pending } = await uploadAnswerPhotos(answers, {
+        orgSk,
+        userId,
+      });
+      uploadPending = pending;
+      if (changed) {
+        try {
+          await db.runAsync(
+            `UPDATE InspectionForm SET Answers = ? WHERE InspectionSk = ?`,
+            [JSON.stringify(answers), r.InspectionSk],
+          );
+        } catch (e) {
+          logError(
+            e,
+            `sync/pushOneInspectionForm:saveCloudUris ${r.InspectionSk}`,
+          );
+        }
+      }
+    }
+
+    const { error } = await supabase.from("inspection_forms").upsert(
+      {
+        inspection_sk: r.InspectionSk,
+        user_id: userId,
+        template_version: r.TemplateVersion ?? 0,
+        schema_snapshot: schemaSnapshot,
+        answers,
+        _version: r._version ?? 1,
+        _last_changed_at: r._lastChangedAt ?? null,
+        _deleted: !!r._deleted,
+      },
+      { onConflict: "inspection_sk" },
+    );
+    if (error) throw error;
+
+    // A row with a still-pending photo stays dirty so the upload retries.
+    if (!uploadPending) {
+      await db.runAsync(
+        `UPDATE InspectionForm SET Synced = 1
+         WHERE InspectionSk = ? AND IFNULL(_lastChangedAt, 0) = ?`,
+        [r.InspectionSk, r._lastChangedAt ?? 0],
+      );
+    }
+    return { ok: true, pending: uploadPending };
+  } catch (e) {
+    if (isRlsDenied(e)) {
+      await db
+        .runAsync(
+          `UPDATE InspectionForm SET Synced = 1 WHERE InspectionSk = ?`,
+          [r.InspectionSk],
+        )
+        .catch(() => {});
+      logError(e, `sync/pushOneInspectionForm:rls-denied ${r.InspectionSk}`);
+    } else {
+      logError(e, `sync/pushOneInspectionForm:${r?.InspectionSk ?? "unknown"}`);
+    }
+    return { ok: false, pending: true };
+  }
+}
+
+async function pushInspectionForms(userId) {
+  const rows = db.getAllSync(`SELECT * FROM InspectionForm WHERE Synced = 0`);
+  if (!rows.length) return;
+  const orgSk = getOrgSk(userId);
+  for (const r of rows) {
+    await pushOneInspectionForm(r, userId, orgSk);
+  }
+}
+
+// Single-row variant called right after marking an inspection complete, so the
+// walkthrough answers reach the cloud BEFORE the reconciler asks generate-report
+// to render the PDF. Without it, an auto-sent report renders from stale/empty
+// cloud answers (header fields present, all sections blank) until the next full
+// sync. Pushes regardless of the Synced flag — the cloud copy can lag a
+// just-saved edit, and the upsert is idempotent.
+export async function pushInspectionForm(sk) {
+  try {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    const userId = session?.user?.id;
+    if (!userId) return;
+    const r = db.getFirstSync(
+      `SELECT * FROM InspectionForm WHERE InspectionSk = ?`,
+      [sk],
+    );
+    if (!r) return;
+    await pushOneInspectionForm(r, userId, getOrgSk(userId));
+  } catch (e) {
+    logError(e, `sync/pushInspectionForm:${sk}`);
+  }
+}
+
+async function pullInspectionForms(userId) {
+  const data = await fetchAllUserRows(
+    "inspection_forms",
+    "inspection_sk",
+    userId,
+  );
+  const seen = new Set();
+  for (const r of data) {
+    seen.add(r.inspection_sk);
+    try {
+      const local = db.getFirstSync(
+        `SELECT _version FROM InspectionForm WHERE InspectionSk = ?`,
+        [r.inspection_sk],
+      );
+      const answersStr = JSON.stringify(r.answers ?? { sections: {} });
+      const schemaStr = r.schema_snapshot
+        ? JSON.stringify(r.schema_snapshot)
+        : null;
+      if (!local) {
+        await db.runAsync(
+          `INSERT OR IGNORE INTO InspectionForm
+             (InspectionSk, SchemaSnapshot, Answers, TemplateVersion, _version, _lastChangedAt, _deleted, Synced)
+           VALUES (?,?,?,?,?,?,?,1)`,
+          [
+            r.inspection_sk,
+            schemaStr,
+            answersStr,
+            r.template_version ?? 0,
+            r._version ?? 1,
+            r._last_changed_at,
+            r._deleted ? 1 : 0,
+          ],
+        );
+      } else if ((r._version ?? 1) > (local._version ?? 1)) {
+        await db.runAsync(
+          `UPDATE InspectionForm SET
+             SchemaSnapshot=?, Answers=?, TemplateVersion=?, _version=?, _lastChangedAt=?, _deleted=?, Synced=1
+           WHERE InspectionSk=?`,
+          [
+            schemaStr,
+            answersStr,
+            r.template_version ?? 0,
+            r._version ?? 1,
+            r._last_changed_at,
+            r._deleted ? 1 : 0,
+            r.inspection_sk,
+          ],
+        );
+      }
+    } catch (e) {
+      logError(
+        e,
+        `sync/pullInspectionForms:${r?.inspection_sk ?? "unknown"}`,
+      );
+    }
+  }
+  return seen;
+}
+
+// Pull-only: cache the org's PUBLISHED walkthrough template so new
+// inspections can snapshot it (Phase 4) and walkthroughs render offline. RLS
+// lets any org member SELECT their org's row.
+async function pullWalkthroughTemplate(userId) {
+  const orgSk = getOrgSk(userId);
+  if (!orgSk) return;
+  const { data, error } = await supabase
+    .from("walkthrough_templates")
+    .select("published_schema, published_version")
+    .eq("org_sk", orgSk)
+    .maybeSingle();
+  if (error) throw error;
+  if (data?.published_schema) {
+    await cacheTemplate(
+      orgSk,
+      data.published_schema,
+      data.published_version ?? 0,
+    );
+  }
+}
+
 // ─── PRUNE ────────────────────────────────────────────────────────────────────
 // After the pull phase, delete any locally-synced rows whose SK isn't in the
 // cloud's response for this user. This is how reassign-away propagates — the
@@ -859,9 +894,7 @@ async function doSyncAll() {
     // FK order: parent tables before children
     const pushSteps = [
       ["pushInspections", () => pushInspections(userId)],
-      ["pushInspectionDescriptions", () => pushInspectionDescriptions(userId)],
-      ["pushInspectionDetails", () => pushInspectionDetails(userId)],
-      ["pushSectionTemplates", () => pushSectionTemplates(userId)],
+      ["pushInspectionForms", () => pushInspectionForms(userId)],
       ["pushSmsTemplates", () => pushSmsTemplates(userId)],
       ["pushSmsStatus", () => pushSmsStatus(userId)],
     ];
@@ -881,9 +914,7 @@ async function doSyncAll() {
     // pull returns the set of SKs the cloud attributes to this user, which
     // the prune phase below uses to delete locally-stale rows.
     let inspectionSks = new Set();
-    let descriptionSks = new Set();
-    let detailSks = new Set();
-    let sectionTplSks = new Set();
+    let inspectionFormSks = new Set();
     let smsTplSks = new Set();
     let smsStatusSks = new Set();
     const pullSteps = [
@@ -894,21 +925,15 @@ async function doSyncAll() {
         },
       ],
       [
-        "pullInspectionDescriptions",
+        "pullInspectionForms",
         async () => {
-          descriptionSks = await pullInspectionDescriptions(userId);
+          inspectionFormSks = await pullInspectionForms(userId);
         },
       ],
       [
-        "pullInspectionDetails",
+        "pullWalkthroughTemplate",
         async () => {
-          detailSks = await pullInspectionDetails(userId);
-        },
-      ],
-      [
-        "pullSectionTemplates",
-        async () => {
-          sectionTplSks = await pullSectionTemplates(userId);
+          await pullWalkthroughTemplate(userId);
         },
       ],
       [
@@ -954,23 +979,12 @@ async function doSyncAll() {
     }
     try {
       const store = useInspectionStore.getState();
-      pruneTable("InspectionDetail", "InspectionDetailSk", detailSks);
-      pruneTable(
-        "InspectionDescription",
-        "InspectionDescriptionSk",
-        descriptionSks,
-      );
+      // InspectionForm is 1:1 child of Inspections — prune before the parent.
+      pruneTable("InspectionForm", "InspectionSk", inspectionFormSks);
       pruneTable("Inspections", "InspectionSk", inspectionSks, (sk) =>
         store.remove(sk),
       );
       pruneTable("SmsStatus", "SmsStatusSk", smsStatusSks);
-      pruneTable(
-        "SectionTemplate",
-        "SectionTemplateSk",
-        sectionTplSks,
-        null,
-        false,
-      );
       pruneTable("SmsTemplate", "SmsTemplateSk", smsTplSks, null, false);
     } catch (e) {
       logError(e, "sync/prune");

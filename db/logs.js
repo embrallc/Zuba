@@ -8,6 +8,21 @@ export async function insertLog({
   stackTrace,
   context,
 }) {
+  // Always surface to the Metro/device console too — until cloud log sync
+  // lands (pre-launch), this is the only way failures are visible in real
+  // time instead of being buried in the AppLogs table.
+  const tag = context ? `[${context}]` : "[app]";
+  try {
+    if (level === "error") {
+      console.error(tag, message ?? "", stackTrace ? `\n${stackTrace}` : "");
+    } else if (level === "warn") {
+      console.warn(tag, message ?? "");
+    } else {
+      console.log(tag, message ?? "");
+    }
+  } catch {
+    // console must never crash logging
+  }
   try {
     const sk = Crypto.randomUUID();
     const now = dayjs().valueOf();

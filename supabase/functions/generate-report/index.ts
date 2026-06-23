@@ -30,6 +30,11 @@ import {
   StandardFonts,
   rgb,
 } from "https://esm.sh/pdf-lib@1.17.1";
+// Keystone shared with the browser editor: turns a walkthrough template into a
+// report layout. Used here as the zero-config fallback when an org never opens
+// the report designer. SEVERITY_LEVELS gives the canonical severity colors.
+import { walkthroughToReport } from "../../../shared/walkthroughToReport.js";
+import { SEVERITY_LEVELS } from "../../../shared/walkthroughSchema.js";
 
 declare const Deno: { env: { get(name: string): string | undefined } };
 
@@ -123,7 +128,13 @@ function formatDate(iso: string | null, tzOffsetMin: number, withTime: boolean) 
 }
 
 function severityColor(value: string): string | null {
-  const v = value.toLowerCase();
+  const v = (value ?? "").toLowerCase();
+  // Canonical scale first (label or key match), then a loose legacy fallback.
+  for (const lvl of SEVERITY_LEVELS) {
+    if (lvl.label.toLowerCase() === v || lvl.key.toLowerCase() === v) {
+      return lvl.color;
+    }
+  }
   if (/(low|good|minor|ok)/.test(v)) return "#16A34A";
   if (/(med|moderate|fair)/.test(v)) return "#D97706";
   if (/(high|severe|critical|major|poor)/.test(v)) return "#DC2626";
@@ -151,11 +162,18 @@ function roundedRectPath(w: number, h: number, r: number): string {
 // mechanically via camelCase→snake_case so new fields added to the bindings
 // config work here with zero generator changes.
 
+type FieldMeta = {
+  sectionId: string;
+  sectionKind: string;
+  type: string; // text|toggle|radio|checkbox|severity|photo|heading
+  label: string;
+  options: { id: string; label: string }[] | null;
+};
+
+// A walkthrough section INSTANCE being stamped (one per repeatable instance).
 type SectionScope = {
-  description: string | null;
-  notes: string | null;
-  severity_level: string | null;
-  photos: { path: string; caption: string }[];
+  sectionId: string;
+  fields: Record<string, unknown>;
 };
 
 type Ctx = {
@@ -163,7 +181,67 @@ type Ctx = {
   inspectorName: string;
   orgName: string;
   tzOffsetMin: number;
+  fieldIndex: Map<string, FieldMeta>;
+  // For wt.* bindings placed in STATIC bands: the single instance of each
+  // static walkthrough section, keyed by section id.
+  staticInstances: Map<string, { fields: Record<string, unknown> }>;
 };
+
+// Render a stored answer value to display text per its field type. Choice
+// fields resolve option ids → labels; toggles → Yes/No; severity → its label.
+function formatFieldValue(meta: FieldMeta, value: unknown): string {
+  if (value == null) return "";
+  switch (meta.type) {
+    case "toggle":
+      return value === true ? "Yes" : value === false ? "No" : "";
+    case "radio":
+      return (meta.options ?? []).find((o) => o.id === value)?.label ?? "";
+    case "checkbox":
+      if (!Array.isArray(value)) return "";
+      return value
+        .map((id) => (meta.options ?? []).find((o) => o.id === id)?.label)
+        .filter(Boolean)
+        .join(", ");
+    case "severity":
+      // deno-lint-ignore no-explicit-any
+      return SEVERITY_LEVELS.find((l: any) => l.key === value)?.label ?? String(value);
+    default:
+      return typeof value === "string" ? value : String(value);
+  }
+}
+
+// The walkthrough field a binding points at (wt.<fieldId>), or null.
+function bindingFieldMeta(
+  binding: string | null | undefined,
+  ctx: Ctx,
+): FieldMeta | null {
+  if (typeof binding === "string" && binding.startsWith("wt.")) {
+    return ctx.fieldIndex.get(binding.slice(3)) ?? null;
+  }
+  return null;
+}
+
+// The raw value behind a wt.* binding in the current scope (repeatable
+// instance) or its home static section.
+function wtValue(fId: string, meta: FieldMeta, ctx: Ctx, scope: SectionScope | null): unknown {
+  if (scope && scope.sectionId === meta.sectionId) return scope.fields?.[fId];
+  if (meta.sectionKind === "static") {
+    return ctx.staticInstances.get(meta.sectionId)?.fields?.[fId];
+  }
+  return undefined;
+}
+
+// PhotoRefs (with a cloud copy) behind a photo-field binding.
+// deno-lint-ignore no-explicit-any
+function resolvePhotoRefs(binding: string | null | undefined, ctx: Ctx, scope: SectionScope | null): any[] {
+  const meta = bindingFieldMeta(binding, ctx);
+  if (!meta || meta.type !== "photo") return [];
+  const value = wtValue((binding as string).slice(3), meta, ctx, scope);
+  if (!Array.isArray(value)) return [];
+  // PhotoRefs are stored in the answers JSON with camelCase keys.
+  // deno-lint-ignore no-explicit-any
+  return value.filter((p: any) => p && typeof p === "object" && p.id && p.cloudUri);
+}
 
 function resolveBinding(key: string, ctx: Ctx, scope: SectionScope | null): string {
   if (key === "report.generatedDate") {
@@ -183,11 +261,11 @@ function resolveBinding(key: string, ctx: Ctx, scope: SectionScope | null): stri
     const v = ctx.inspection[col];
     return v == null ? "" : String(v);
   }
-  if (key.startsWith("section.")) {
-    if (!scope) return "";
-    if (key === "section.name") return scope.description ?? "";
-    if (key === "section.notes") return scope.notes ?? "";
-    if (key === "section.severity") return scope.severity_level ?? "";
+  if (key.startsWith("wt.")) {
+    const fId = key.slice(3);
+    const meta = ctx.fieldIndex.get(fId);
+    if (!meta) return "";
+    return formatFieldValue(meta, wtValue(fId, meta, ctx, scope));
   }
   return "";
 }
@@ -329,7 +407,7 @@ function layoutBand(
   ctx: Ctx,
   scope: SectionScope | null,
   fonts: Fonts,
-  photosBySection: Map<string, EmbeddedPhoto[]>,
+  embeddedById: Map<string, EmbeddedPhoto>,
 ): { items: Item[]; heightPx: number } {
   const designedBandH = (() => {
     let maxY = 0;
@@ -397,9 +475,12 @@ function layoutBand(
         neededH: el.frame.h,
       });
     } else if (el.type === "photoGrid") {
-      const photos = scope
-        ? (photosBySection.get((scope as unknown as { sk: string }).sk) ?? [])
-        : [];
+      // Resolve the bound photo field's PhotoRefs (current instance or its
+      // home static section), then map to already-embedded images by id.
+      const refs = resolvePhotoRefs(el.binding, ctx, scope);
+      const photos = refs
+        .map((r) => embeddedById.get(r.id))
+        .filter((p): p is EmbeddedPhoto => !!p);
       const m = photoTileMetrics(el.frame, style);
       const rows = photos.length === 0 ? 0 : Math.ceil(photos.length / m.cols);
       const neededH = rows === 0 ? 0 : rows * m.tileH + (rows - 1) * m.gap;
@@ -494,16 +575,23 @@ serve(async (req) => {
       return json({ error: "server_misconfigured" }, 500);
     }
 
-    // 1. Auth
+    // 1. Auth. Normal calls carry a user JWT (only the owner may render their
+    // inspection). Trusted server-to-server calls (the reconcile/send-report
+    // EFs) pass the service-role key as the bearer → internal mode: skip the
+    // user lookup and derive the owner from the inspection row itself.
     const authHeader = req.headers.get("Authorization") ?? "";
     const jwt = authHeader.replace(/^Bearer\s+/i, "");
     if (!jwt) return json({ error: "missing_token" }, 401);
-    const anonClient = createClient(supabaseUrl, anonKey, {
-      global: { headers: { Authorization: `Bearer ${jwt}` } },
-    });
-    const { data: userData, error: userErr } = await anonClient.auth.getUser();
-    if (userErr || !userData?.user) return json({ error: "invalid_token" }, 401);
-    const userId = userData.user.id;
+    const internal = jwt === serviceKey;
+    let userId: string | null = null;
+    if (!internal) {
+      const anonClient = createClient(supabaseUrl, anonKey, {
+        global: { headers: { Authorization: `Bearer ${jwt}` } },
+      });
+      const { data: userData, error: userErr } = await anonClient.auth.getUser();
+      if (userErr || !userData?.user) return json({ error: "invalid_token" }, 401);
+      userId = userData.user.id;
+    }
 
     const body = await req.json().catch(() => ({}));
     const inspectionSk = body?.inspectionSk;
@@ -523,7 +611,8 @@ serve(async (req) => {
       .eq("inspection_sk", inspectionSk)
       .maybeSingle();
     if (inspErr || !inspection) return json({ error: "not_found" }, 404);
-    if (inspection.user_id !== userId) return json({ error: "forbidden" }, 403);
+    if (internal) userId = inspection.user_id;
+    else if (inspection.user_id !== userId) return json({ error: "forbidden" }, 403);
 
     // Retrieval mode: the device's cached copy was purged — hand back a fresh
     // signed URL for the newest stored PDF. No re-render, no photo downloads.
@@ -571,58 +660,91 @@ serve(async (req) => {
       orgName = org?.org_name ?? "";
     }
 
-    // 3. Template — published is the contract; draft is the courtesy fallback
-    // so a brand-new org isn't dead-ended before their first Publish.
+    // 3. Walkthrough form — this inspection's frozen schema snapshot + answers.
+    const { data: formRow } = await admin
+      .from("inspection_forms")
+      .select("schema_snapshot, answers")
+      .eq("inspection_sk", inspectionSk)
+      .maybeSingle();
+    // deno-lint-ignore no-explicit-any
+    const wtSchema: any = formRow?.schema_snapshot ?? null;
+    // deno-lint-ignore no-explicit-any
+    const answers: any = formRow?.answers ?? { sections: {} };
+
+    // Index every walkthrough field, and grab the single instance of each
+    // static section (so wt.* bindings in static bands resolve).
+    const fieldIndex = new Map<string, FieldMeta>();
+    const staticInstances = new Map<string, { fields: Record<string, unknown> }>();
+    for (const sec of wtSchema?.sections ?? []) {
+      for (const f of sec.fields ?? []) {
+        fieldIndex.set(f.id, {
+          sectionId: sec.id,
+          sectionKind: sec.kind,
+          type: f.type,
+          label: f.label,
+          options: f.config?.options ?? null,
+        });
+      }
+      if (sec.kind === "static") {
+        const inst = answers?.sections?.[sec.id]?.instances?.[0];
+        if (inst) staticInstances.set(sec.id, { fields: inst.fields ?? {} });
+      }
+    }
+
+    // 4. Report layout — the org's published report is the contract; draft is a
+    // courtesy. If there's none (or only a LEGACY one using the old section.*
+    // model), auto-build a report straight from the walkthrough so an owner who
+    // never opens the report designer still gets a polished PDF.
     const { data: tpl } = await admin
       .from("form_templates")
       .select("draft_schema, published_schema")
       .eq("org_sk", orgSk)
       .maybeSingle();
-    const schema = tpl?.published_schema ?? tpl?.draft_schema ?? null;
+    // deno-lint-ignore no-explicit-any
+    let schema: any = tpl?.published_schema ?? tpl?.draft_schema ?? null;
+    // deno-lint-ignore no-explicit-any
+    const isLegacy = (schema?.bands ?? []).some((b: any) => b?.repeat?.collection);
+    let autoBuilt = false;
+    if ((!schema?.bands?.length || isLegacy) && wtSchema?.sections?.length) {
+      schema = walkthroughToReport(wtSchema);
+      autoBuilt = true;
+    }
     if (!schema?.bands?.length) {
       return json(
         {
           error: "no_template",
-          message:
-            "No report template found. Design one in Settings → Form Builder, then publish it.",
+          message: wtSchema
+            ? "No report layout found. Publish your walkthrough form in the Form Builder."
+            : "Fill out this inspection's walkthrough first, then generate the report.",
         },
         422,
       );
     }
-    const usedDraft = !tpl?.published_schema;
+    const usedDraft = !autoBuilt && !tpl?.published_schema;
 
-    // 4. Sections + photos
-    const { data: sectionRows } = await admin
-      .from("inspection_descriptions")
-      .select("inspection_description_sk, description, notes, severity_level, position")
-      .eq("inspection_sk", inspectionSk)
-      .eq("_deleted", false)
-      .order("position", { ascending: true });
-    const sections = sectionRows ?? [];
-
-    // Only fetch photo rows if any repeatable band actually renders a grid.
+    // 5. Collect the photos the answers reference — only if the layout shows a
+    // photo grid. PhotoRefs live inside the answers JSON (camelCase keys).
     const templateHasPhotoGrid = schema.bands.some(
       // deno-lint-ignore no-explicit-any
       (b: any) => (b.elements ?? []).some((e: any) => e.type === "photoGrid"),
     );
-
-    const photoRows: {
-      inspection_description_sk: string;
-      cloud_picture_uri: string;
-      picture_note: string | null;
-    }[] = [];
-    if (templateHasPhotoGrid && sections.length > 0) {
-      const { data } = await admin
-        .from("inspection_details")
-        .select("inspection_description_sk, cloud_picture_uri, picture_note, _last_changed_at")
-        .in(
-          "inspection_description_sk",
-          sections.map((s) => s.inspection_description_sk),
-        )
-        .eq("_deleted", false)
-        .not("cloud_picture_uri", "is", null)
-        .order("_last_changed_at", { ascending: true });
-      photoRows.push(...(data ?? []));
+    // deno-lint-ignore no-explicit-any
+    const photoRefs: any[] = [];
+    if (templateHasPhotoGrid) {
+      for (const sec of Object.values(answers?.sections ?? {})) {
+        // deno-lint-ignore no-explicit-any
+        for (const inst of (sec as any)?.instances ?? []) {
+          for (const val of Object.values(inst?.fields ?? {})) {
+            if (Array.isArray(val)) {
+              for (const p of val) {
+                if (p && typeof p === "object" && p.id && p.cloudUri) {
+                  photoRefs.push(p);
+                }
+              }
+            }
+          }
+        }
+      }
     }
 
     // 5. PDF setup + photo embedding
@@ -634,10 +756,10 @@ serve(async (req) => {
       boldItalic: await pdf.embedFont(StandardFonts.HelveticaBoldOblique),
     };
 
-    const photosBySection = new Map<string, EmbeddedPhoto[]>();
+    const embeddedById = new Map<string, EmbeddedPhoto>();
     let imageBytes = 0;
     let skippedPhotos = 0;
-    for (const row of photoRows) {
+    for (const ref of photoRefs) {
       if (imageBytes > MAX_IMAGE_BYTES) {
         skippedPhotos++;
         continue;
@@ -645,23 +767,21 @@ serve(async (req) => {
       try {
         const { data: blob, error: dlErr } = await admin.storage
           .from(PHOTO_BUCKET)
-          .download(row.cloud_picture_uri);
+          .download(ref.cloudUri);
         if (dlErr || !blob) throw dlErr ?? new Error("empty download");
         const bytes = new Uint8Array(await blob.arrayBuffer());
         imageBytes += bytes.length;
         const isPng = bytes[0] === 0x89 && bytes[1] === 0x50;
         const img = isPng ? await pdf.embedPng(bytes) : await pdf.embedJpg(bytes);
-        const list = photosBySection.get(row.inspection_description_sk) ?? [];
-        list.push({
+        embeddedById.set(ref.id, {
           ref: img,
           w: img.width,
           h: img.height,
-          caption: row.picture_note ?? "",
+          caption: ref.note ?? "",
         });
-        photosBySection.set(row.inspection_description_sk, list);
       } catch (e) {
         skippedPhotos++;
-        logError("photo_embed_failed", e, { path: row.cloud_picture_uri });
+        logError("photo_embed_failed", e, { path: ref.cloudUri });
       }
     }
 
@@ -672,6 +792,8 @@ serve(async (req) => {
       inspectorName: [profile?.fname, profile?.lname].filter(Boolean).join(" "),
       orgName,
       tzOffsetMin,
+      fieldIndex,
+      staticInstances,
     };
 
     type Placed = { item: Item; absY: number };
@@ -679,20 +801,19 @@ serve(async (req) => {
     let cursorY = 0;
 
     for (const band of schema.bands) {
+      // Repeatable bands stamp once per filled instance of the walkthrough
+      // section they're bound to; static bands render once (scope = null).
+      const repeatSectionId = band.repeat?.sectionId;
       const scopes: (SectionScope | null)[] =
-        band.kind === "repeatable"
-          ? sections.map((s) => ({
-              sk: s.inspection_description_sk,
-              description: s.description,
-              notes: s.notes,
-              severity_level: s.severity_level,
-              photos: [],
+        band.kind === "repeatable" && repeatSectionId
+          ? (answers?.sections?.[repeatSectionId]?.instances ?? []).map(
               // deno-lint-ignore no-explicit-any
-            }) as any)
+              (inst: any) => ({ sectionId: repeatSectionId, fields: inst.fields ?? {} }),
+            )
           : [null];
 
       for (const scope of scopes) {
-        const { items, heightPx } = layoutBand(band, ctx, scope, fonts, photosBySection);
+        const { items, heightPx } = layoutBand(band, ctx, scope, fonts, embeddedById);
 
         // Keep-together: if the band fits a page but not the remaining space,
         // start it on the next page.
@@ -881,7 +1002,7 @@ serve(async (req) => {
         let fieldColor = baseColor;
         if (
           item.kind === "field" &&
-          item.data.binding === "section.severity" &&
+          bindingFieldMeta(item.data.binding, ctx)?.type === "severity" &&
           (baseColor === "#111827" || !style.color)
         ) {
           const firstText = item.data.lines?.[0]?.words?.map((w: Word) => w.text).join(" ") ?? "";
@@ -1068,8 +1189,9 @@ serve(async (req) => {
       inspectionSk,
       pageCount,
       sizeBytes: pdfBytes.length,
-      photos: photoRows.length - skippedPhotos,
+      photos: photoRefs.length - skippedPhotos,
       skippedPhotos,
+      autoBuilt,
       usedDraft,
     });
 

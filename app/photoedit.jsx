@@ -1,12 +1,12 @@
 // Photo markup editor.
 //
-// Entered from the pencil chip on each inspection-detail thumbnail. Loads the
-// underlying photo, overlays a Skia canvas, and lets the inspector freehand-
-// draw / arrow / box / circle / line across the image to flag defects.
+// Entered from the pencil action on a walkthrough photo. Loads the underlying
+// photo, overlays a Skia canvas, and lets the inspector freehand-draw / arrow /
+// box / circle / line across the image to flag defects.
 //
-// Markup is stored as a JSON string on `InspectionDetail.PictureMarkup` (and
-// `picture_markup` on the cloud). Coordinates are normalized to [0,1] of the
-// canvas so the same markup renders correctly on any screen size.
+// The markup JSON is handed back to the walkthrough form via usePhotoMarkupStore
+// and stored on the photo ref inside the inspection's answers. Coordinates are
+// normalized to [0,1] of the canvas so it renders correctly at any size.
 
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import {
@@ -31,8 +31,8 @@ import {
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import { runOnJS } from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { updateDetail } from "../db/inspectionForm";
 import { logError } from "../db/logs";
+import { usePhotoMarkupStore } from "../stores/usePhotoWorkflow";
 
 const COLORS = [
   "#FF3B30", // red
@@ -74,7 +74,7 @@ function parseInitialMarkup(json) {
 
 export default function PhotoEditScreen() {
   const router = useRouter();
-  const { detailSk, uri, initialMarkup } = useLocalSearchParams();
+  const { uri, initialMarkup, target } = useLocalSearchParams();
   const screen = useWindowDimensions();
 
   // Canvas size: full screen width, height derived from the photo's natural
@@ -283,10 +283,12 @@ export default function PhotoEditScreen() {
         committed.length > 0
           ? JSON.stringify({ v: 1, strokes: committed })
           : null;
-      await updateDetail(detailSk, { pictureMarkup: json });
+      // Hand the markup back to the walkthrough form; the photo lives on a ref
+      // inside the inspection's answers JSON, keyed by `target` (the photo id).
+      usePhotoMarkupStore.getState().setResult({ photoId: target, markup: json });
       router.back();
     } catch (e) {
-      logError(e, `PhotoEditScreen.handleSave sk=${detailSk}`);
+      logError(e, `PhotoEditScreen.handleSave target=${target}`);
     } finally {
       setSaving(false);
     }

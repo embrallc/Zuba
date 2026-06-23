@@ -19,6 +19,7 @@ import {
 import { Guard } from "../components/Guard";
 import { getAllInspections } from "../db/inspections";
 import { logError } from "../db/logs";
+import { getOrgTimezone, setOrgTimezone } from "../db/organizations";
 import { updateUserName } from "../db/users";
 import { useInspectionStore } from "../stores/useInspectionStore";
 import { useSettingsStore } from "../stores/useSettingsStore";
@@ -60,12 +61,19 @@ export default function SettingsScreen() {
   const setCalendarStartHour = useSettingsStore((s) => s.setCalendarStartHour);
   const userProfile = useSettingsStore((s) => s.userProfile);
   const userSk = useSettingsStore((s) => s.userSk);
+  const orgSk = useSettingsStore((s) => s.orgSk);
   const fname = useSettingsStore((s) => s.fname);
   const lname = useSettingsStore((s) => s.lname);
   const setFname = useSettingsStore((s) => s.setFname);
   const setLname = useSettingsStore((s) => s.setLname);
-  const integrations = useSettingsStore((s) => s.integrations);
-  const setIntegrations = useSettingsStore((s) => s.setIntegrations);
+  const aiRewriteEnabled = useSettingsStore((s) => s.aiRewriteEnabled);
+  const setAiRewriteEnabled = useSettingsStore((s) => s.setAiRewriteEnabled);
+  const apptReminderSmsEnabled = useSettingsStore(
+    (s) => s.apptReminderSmsEnabled,
+  );
+  const setApptReminderSmsEnabled = useSettingsStore(
+    (s) => s.setApptReminderSmsEnabled,
+  );
   const loadInspections = useInspectionStore((s) => s.load);
 
   // 'idle' | 'syncing' | 'done' | 'error'
@@ -431,12 +439,13 @@ export default function SettingsScreen() {
           </ScrollView>
         </View>
 
-        <Text style={styles.sectionLabel}>FORM</Text>
+        <Text style={styles.sectionLabel}>AI ASSIST</Text>
 
-        <NavRow
-          label="Personalize Your Form Sections"
-          description="Set default section names for new blank inspections"
-          onPress={() => router.push("/sectiontemplates")}
+        <SettingRow
+          label="AI Rewrite"
+          description="Turn rough notes into report-ready text. A ✨ button appears on multiline note fields; your note is sent to AI for a suggestion you review before using."
+          value={aiRewriteEnabled}
+          onValueChange={setAiRewriteEnabled}
         />
 
         <Text style={styles.sectionLabel}>NOTIFICATIONS</Text>
@@ -446,6 +455,19 @@ export default function SettingsScreen() {
           description="Choose which push notifications you'd like to receive"
           onPress={() => router.push("/notifications")}
         />
+
+        <Text style={styles.sectionLabel}>CLIENT REMINDERS</Text>
+
+        <SettingRow
+          label="Text appointment reminder"
+          description="Automatically text clients the day before their inspection to remind them. You can turn this off for an individual inspection when you add or edit it."
+          value={apptReminderSmsEnabled}
+          onValueChange={setApptReminderSmsEnabled}
+        />
+
+        <Guard guard={userProfile === "owner"}>
+          <BusinessTimezoneCard orgSk={orgSk} />
+        </Guard>
 
         <Text style={styles.sectionLabel}>MESSAGING</Text>
 
@@ -457,21 +479,24 @@ export default function SettingsScreen() {
 
         <Text style={styles.sectionLabel}>INTEGRATIONS</Text>
 
-        <SettingRow
-          label="Apple Calendar"
-          description="Add your scheduled inspections to your Apple Calendar"
-          value={!!integrations?.appleCalendar}
-          onValueChange={(val) =>
-            setIntegrations({ ...integrations, appleCalendar: val })
-          }
+        <NavRow
+          label="Calendar"
+          description="Two-way sync your inspections with your Apple or Google calendar"
+          onPress={() => router.push("/calendarsettings")}
         />
-        <SettingRow
-          label="Google Calendar"
-          description="Add your scheduled inspections to your Google Calendar"
-          value={!!integrations?.googleCalendar}
-          onValueChange={(val) =>
-            setIntegrations({ ...integrations, googleCalendar: val })
-          }
+
+        <Text style={styles.sectionLabel}>PAYMENTS</Text>
+        <Guard guard={userProfile === "owner"}>
+          <NavRow
+            label="Payments"
+            description="Connect Stripe to bill clients and auto-release reports when they pay"
+            onPress={() => router.push("/payments-settings")}
+          />
+        </Guard>
+        <NavRow
+          label="Payment Activity"
+          description="See payment links you've sent and what clients have paid"
+          onPress={() => router.push("/payments")}
         />
 
         <Guard guard={userProfile === "owner"}>
@@ -813,6 +838,115 @@ const fbStyles = StyleSheet.create({
   },
 });
 
+// Curated US business time zones. A short labelled list beats a full IANA
+// picker for a US-market app — most inspectors are in one of these.
+const US_TIMEZONES = [
+  { label: "Eastern", value: "America/New_York" },
+  { label: "Central", value: "America/Chicago" },
+  { label: "Mountain", value: "America/Denver" },
+  { label: "Arizona", value: "America/Phoenix" },
+  { label: "Pacific", value: "America/Los_Angeles" },
+  { label: "Alaska", value: "America/Anchorage" },
+  { label: "Hawaii", value: "Pacific/Honolulu" },
+];
+
+function tzLabel(value) {
+  return US_TIMEZONES.find((z) => z.value === value)?.label ?? value;
+}
+
+// Default to the owner's device zone when it's one we list, else Central.
+function detectDefaultTz() {
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (US_TIMEZONES.some((z) => z.value === tz)) return tz;
+  } catch (_) {}
+  return "America/Chicago";
+}
+
+// Owner-only org-wide business time zone. The day-before SMS reminder job reads
+// organizations.timezone server-side to decide each org's "tomorrow" and the
+// local send hour, so it must be an org setting (not per-device). Only the owner
+// can write it (RLS: auth_uid_owns_org); any seat may read it.
+function BusinessTimezoneCard({ orgSk }) {
+  const [savedTz, setSavedTz] = useState(null);
+  const [detected] = useState(detectDefaultTz);
+  // 'loading' | 'idle' | 'saving' | 'error'
+  const [status, setStatus] = useState("loading");
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const tz = await getOrgTimezone(orgSk);
+      if (cancelled) return;
+      setSavedTz(tz);
+      setStatus("idle");
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [orgSk]);
+
+  const active = savedTz ?? detected;
+
+  async function pick(value) {
+    if (status === "saving" || value === savedTz) return;
+    const prev = savedTz;
+    setSavedTz(value); // optimistic
+    setStatus("saving");
+    try {
+      await setOrgTimezone(orgSk, value);
+      setStatus("idle");
+    } catch (e) {
+      logError(e, `SettingsScreen.BusinessTimezoneCard.set tz=${value}`);
+      setSavedTz(prev); // revert
+      setStatus("error");
+      setTimeout(() => setStatus("idle"), 2500);
+    }
+  }
+
+  return (
+    <View style={styles.optionCard}>
+      <Text style={styles.optionCardLabel}>Business Time Zone</Text>
+      <Text style={styles.optionCardDescription}>
+        Used to send client appointment reminders at the right local time.
+      </Text>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.optionRow}
+      >
+        {US_TIMEZONES.map((z) => {
+          const selected = active === z.value;
+          return (
+            <TouchableOpacity
+              key={z.value}
+              onPress={() => pick(z.value)}
+              disabled={status === "loading" || status === "saving"}
+              style={[styles.optionBtn, selected && styles.optionBtnSelected]}
+            >
+              <Text
+                style={[
+                  styles.optionText,
+                  selected && styles.optionTextSelected,
+                ]}
+              >
+                {z.label}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </ScrollView>
+      {status === "error" ? (
+        <Text style={styles.tzError}>Couldn't save — tap to try again.</Text>
+      ) : savedTz == null && status === "idle" ? (
+        <Text style={styles.tzNote}>
+          Defaulting to {tzLabel(detected)} — tap to confirm.
+        </Text>
+      ) : null}
+    </View>
+  );
+}
+
 function NavRow({ label, description, onPress }) {
   return (
     <TouchableOpacity
@@ -957,6 +1091,16 @@ const styles = StyleSheet.create({
   optionTextSelected: {
     color: "#fff",
     fontWeight: "600",
+  },
+  tzNote: {
+    ...theme.typography.caption,
+    color: theme.colors.textSubtle,
+    marginTop: theme.spacing.xs,
+  },
+  tzError: {
+    ...theme.typography.caption,
+    color: theme.colors.error,
+    marginTop: theme.spacing.xs,
   },
   profileHeader: {
     flexDirection: "row",

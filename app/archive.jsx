@@ -2,16 +2,18 @@ import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { theme } from "@theme";
 import dayjs from "dayjs";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
   SafeAreaView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
+import RequestPaymentSheet from "../components/RequestPaymentSheet";
 import {
   getCompletedInspections,
   getDeletedInspections,
@@ -21,11 +23,24 @@ import {
 import { logError } from "../db/logs";
 import { useBannerStore } from "../stores/useBannerStore";
 import { useInspectionStore } from "../stores/useInspectionStore";
+import { useSettingsStore } from "../stores/useSettingsStore";
 
 // Single screen serving two archives, selected by the `type` param:
 //   /archive?type=deleted    → soft-deleted rows (_deleted = 1)
 //   /archive?type=completed  → completed rows (Status = 'CLOSED')
 // Both let the user restore a record back into the active working set.
+
+// Text columns the archive search scans (mirrors the My Day header search);
+// the formatted date string is matched separately in `filtered`.
+const SEARCH_FIELDS = [
+  "FullName",
+  "AddressLine1",
+  "AddressLine2",
+  "City",
+  "State",
+  "ZipCode",
+];
+
 const CONFIG = {
   deleted: {
     title: "Deleted Inspections",
@@ -51,10 +66,26 @@ export default function ArchiveScreen() {
 
   const addToStore = useInspectionStore((s) => s.add);
   const showBanner = useBannerStore((s) => s.show);
+  const userProfile = useSettingsStore((s) => s.userProfile);
 
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState(null);
+  const [payFor, setPayFor] = useState(null); // { sk, name } for the invoice sheet
+  const [query, setQuery] = useState("");
+
+  // Filter by name/address fields OR the formatted date string the row shows.
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return rows;
+    return rows.filter((i) => {
+      if (SEARCH_FIELDS.some((f) => i[f]?.toLowerCase().includes(q))) return true;
+      const when = i.ScheduledAt
+        ? dayjs(i.ScheduledAt).format("MMM D, YYYY · h:mm A").toLowerCase()
+        : "";
+      return when.includes(q);
+    });
+  }, [rows, query]);
 
   const reload = useCallback(async () => {
     try {
@@ -123,6 +154,7 @@ export default function ArchiveScreen() {
       .filter(Boolean)
       .join(", ");
     const isBusy = busyId === item.InspectionSk;
+    const rb = type === "completed" ? reportBadge(item.ReportState) : null;
 
     return (
       <View style={styles.card}>
@@ -136,26 +168,65 @@ export default function ArchiveScreen() {
               {address}
             </Text>
           ) : null}
-        </View>
-        <TouchableOpacity
-          style={[styles.restoreBtn, isBusy && styles.restoreBtnDisabled]}
-          onPress={() => handleRestore(item)}
-          disabled={!!busyId}
-          activeOpacity={0.8}
-        >
-          {isBusy ? (
-            <ActivityIndicator size="small" color={theme?.colors?.primary} />
-          ) : (
-            <>
+          {type === "completed" &&
+          item.PaymentState &&
+          item.PaymentState !== "none" ? (
+            <View style={styles.payBadge}>
               <MaterialCommunityIcons
-                name="restore"
-                size={16}
-                color={theme?.colors?.primary}
+                name={item.Paid ? "check-circle" : "clock-outline"}
+                size={13}
+                color={item.Paid ? theme?.colors?.success : theme?.colors?.warning}
               />
-              <Text style={styles.restoreText}>{config.actionLabel}</Text>
+              <Text
+                style={[
+                  styles.payBadgeTxt,
+                  { color: item.Paid ? theme?.colors?.success : theme?.colors?.warning },
+                ]}
+              >
+                {item.Paid ? "Paid" : "Payment requested"}
+              </Text>
+            </View>
+          ) : null}
+          {rb ? (
+            <View style={styles.payBadge}>
+              <MaterialCommunityIcons name={rb.icon} size={13} color={rb.color} />
+              <Text style={[styles.payBadgeTxt, { color: rb.color }]}>
+                {rb.label}
+              </Text>
+            </View>
+          ) : null}
+        </View>
+
+        <View style={styles.actionRow}>
+          {type === "completed" && (
+            <>
+              <ActionPill
+                icon="cash-plus"
+                label="Invoice"
+                disabled={!!busyId}
+                onPress={() => setPayFor({ sk: item.InspectionSk, name })}
+              />
+              <ActionPill
+                icon="file-document-outline"
+                label="Report"
+                disabled={!!busyId}
+                onPress={() =>
+                  router.push({
+                    pathname: "/reportviewer",
+                    params: { inspectionSk: item.InspectionSk },
+                  })
+                }
+              />
             </>
           )}
-        </TouchableOpacity>
+          <ActionPill
+            icon="restore"
+            label={config.actionLabel}
+            disabled={!!busyId}
+            busy={isBusy}
+            onPress={() => handleRestore(item)}
+          />
+        </View>
       </View>
     );
   }
@@ -177,29 +248,123 @@ export default function ArchiveScreen() {
         <View style={{ width: theme?.layout?.iconSize?.l }} />
       </View>
 
+      {!loading && (rows.length > 0 || query.trim()) ? (
+        <View style={styles.searchWrap}>
+          <View style={styles.searchContainer}>
+            <MaterialCommunityIcons
+              name="magnify"
+              size={theme?.layout?.iconSize?.m}
+              color={theme?.colors?.icon}
+              style={styles.searchIcon}
+            />
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Search name, address, city, zip, or date…"
+              placeholderTextColor={theme?.colors?.textFine}
+              value={query}
+              onChangeText={setQuery}
+              clearButtonMode="while-editing"
+              returnKeyType="search"
+              autoCorrect={false}
+            />
+          </View>
+        </View>
+      ) : null}
+
       {loading ? (
         <View style={styles.center}>
           <ActivityIndicator size="large" color={theme?.colors?.primary} />
         </View>
       ) : (
         <FlatList
-          data={rows}
+          data={filtered}
           keyExtractor={(item) => item.InspectionSk}
           renderItem={renderItem}
+          keyboardShouldPersistTaps="handled"
           contentContainerStyle={styles.list}
           ListEmptyComponent={
             <View style={styles.empty}>
               <MaterialCommunityIcons
-                name={config.icon}
+                name={query.trim() ? "magnify-close" : config.icon}
                 size={theme?.layout?.iconSize?.xl}
                 color={theme?.colors?.textFine}
               />
-              <Text style={styles.emptyText}>{config.empty}</Text>
+              <Text style={styles.emptyText}>
+                {query.trim()
+                  ? "No inspections match your search."
+                  : config.empty}
+              </Text>
             </View>
           }
         />
       )}
+
+      <RequestPaymentSheet
+        visible={!!payFor}
+        onClose={() => setPayFor(null)}
+        inspectionSk={payFor?.sk}
+        clientName={payFor?.name}
+        userProfile={userProfile}
+        onSuccess={() => reload()}
+      />
     </SafeAreaView>
+  );
+}
+
+// Maps the synced ReportState to a badge. 'pending' (nothing happened / manual
+// path) shows nothing.
+function reportBadge(state) {
+  switch (state) {
+    case "sent":
+      return {
+        icon: "email-check-outline",
+        color: theme?.colors?.success,
+        label: "Report sent",
+      };
+    case "held":
+      return {
+        icon: "lock-clock",
+        color: theme?.colors?.warning,
+        label: "Report held — awaiting payment",
+      };
+    case "sending":
+      return {
+        icon: "email-sync-outline",
+        color: theme?.colors?.icon,
+        label: "Sending report…",
+      };
+    case "failed":
+      return {
+        icon: "email-alert-outline",
+        color: theme?.colors?.error,
+        label: "Report send failed",
+      };
+    default:
+      return null;
+  }
+}
+
+function ActionPill({ icon, label, onPress, disabled, busy }) {
+  return (
+    <TouchableOpacity
+      style={[styles.pill, disabled && styles.pillDisabled]}
+      onPress={onPress}
+      disabled={disabled}
+      activeOpacity={0.8}
+    >
+      {busy ? (
+        <ActivityIndicator size="small" color={theme?.colors?.primary} />
+      ) : (
+        <>
+          <MaterialCommunityIcons
+            name={icon}
+            size={16}
+            color={theme?.colors?.primary}
+          />
+          <Text style={styles.pillText}>{label}</Text>
+        </>
+      )}
+    </TouchableOpacity>
   );
 }
 
@@ -222,6 +387,26 @@ const styles = StyleSheet.create({
   navTitle: {
     ...theme?.typography?.h4,
   },
+  searchWrap: {
+    paddingHorizontal: theme?.spacing?.m,
+    paddingTop: theme?.spacing?.m,
+  },
+  searchContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: theme?.colors?.input,
+    borderRadius: theme?.layout?.borderRadius?.full,
+    paddingHorizontal: theme?.spacing?.s,
+    height: 38,
+  },
+  searchIcon: {
+    marginRight: theme?.spacing?.xs,
+  },
+  searchInput: {
+    flex: 1,
+    ...theme?.typography?.body,
+    paddingVertical: 0,
+  },
   center: {
     flex: 1,
     alignItems: "center",
@@ -232,8 +417,6 @@ const styles = StyleSheet.create({
     paddingBottom: theme?.spacing?.xxl,
   },
   card: {
-    flexDirection: "row",
-    alignItems: "center",
     backgroundColor: theme?.colors?.cardBackground,
     borderRadius: theme?.layout?.borderRadius?.m,
     paddingHorizontal: theme?.spacing?.m,
@@ -241,10 +424,7 @@ const styles = StyleSheet.create({
     marginBottom: theme?.spacing?.s,
     ...theme?.shadows?.light,
   },
-  cardText: {
-    flex: 1,
-    marginRight: theme?.spacing?.m,
-  },
+  cardText: {},
   cardName: {
     ...theme?.typography?.bodyBold,
   },
@@ -252,7 +432,24 @@ const styles = StyleSheet.create({
     ...theme?.typography?.label,
     marginTop: 2,
   },
-  restoreBtn: {
+  payBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    marginTop: theme?.spacing?.xs,
+  },
+  payBadgeTxt: {
+    ...theme?.typography?.label,
+    fontWeight: "600",
+  },
+  actionRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "flex-end",
+    gap: theme?.spacing?.s,
+    marginTop: theme?.spacing?.m,
+  },
+  pill: {
     flexDirection: "row",
     alignItems: "center",
     gap: theme?.spacing?.xs,
@@ -264,10 +461,10 @@ const styles = StyleSheet.create({
     minWidth: 92,
     justifyContent: "center",
   },
-  restoreBtnDisabled: {
+  pillDisabled: {
     opacity: theme?.layout?.opacity?.disabled,
   },
-  restoreText: {
+  pillText: {
     ...theme?.typography?.label,
     color: theme?.colors?.primary,
     fontWeight: "600",

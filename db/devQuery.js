@@ -34,10 +34,10 @@ export async function wipeDatabase() {
       db.execSync(`
         DELETE FROM SmsStatus;
         DELETE FROM SmsTemplate;
-        DELETE FROM InspectionDetail;
-        DELETE FROM InspectionDescription;
+        DELETE FROM InspectionForm;
+        DELETE FROM NotificationSettings;
         DELETE FROM Inspections;
-        DELETE FROM SectionTemplate;
+        DELETE FROM WalkthroughTemplate;
         DELETE FROM Users;
         DELETE FROM Organizations;
         DELETE FROM AppLogs;
@@ -81,5 +81,5 @@ export async function wipeDatabase() {
 // then long-press the menu icon in the top-right of the list screen.
 // ─────────────────────────────────────────────────────────────────────────────
 export async function runDevQuery() {
-  await devQuery("SELECT * FROM Organizations");
+  await devQuery("SELECT * FROM AppLogs");
 }

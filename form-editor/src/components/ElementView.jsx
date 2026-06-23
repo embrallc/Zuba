@@ -1,12 +1,13 @@
-import { bindingByKey } from "../../../shared/formBindings";
 import { assetUrl } from "../api";
+import { bindingByKey, bindingMisplaced } from "../bindings";
 import { useEditorStore } from "../store";
 import TextElement from "./TextElement";
 import { RESIZE_HANDLES, useDragNode } from "./hooks";
 
 function FieldBody({ el }) {
   const s = el.style ?? {};
-  const meta = el.binding ? bindingByKey(el.binding) : null;
+  const walkthroughSchema = useEditorStore((st) => st.walkthroughSchema);
+  const meta = el.binding ? bindingByKey(el.binding, walkthroughSchema) : null;
   const label = meta?.label ?? el.label ?? "Blank line";
   return (
     <div
@@ -57,10 +58,11 @@ export default function ElementView({ band, el }) {
   const startEditText = useEditorStore((s) => s.startEditText);
   const { onPointerDown } = useDragNode({ kind: "element", bandId: band.id, id: el.id });
 
-  // A per-section field placed in a static band can't resolve at generation
-  // time — flag it loudly but don't block (the user may be mid-rearrange).
-  const meta = el.binding ? bindingByKey(el.binding) : null;
-  const invalid = !!meta && meta.scope === "section" && band.kind !== "repeatable";
+  // A per-section field placed in a band that doesn't repeat over its home
+  // section can't resolve at generation time — flag it loudly but don't block.
+  const walkthroughSchema = useEditorStore((st) => st.walkthroughSchema);
+  const meta = el.binding ? bindingByKey(el.binding, walkthroughSchema) : null;
+  const invalid = bindingMisplaced(meta, band);
 
   let body;
   switch (el.type) {

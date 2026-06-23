@@ -23,6 +23,23 @@ export async function getAllInspections() {
   }
 }
 
+// Single row by SK (any status), or null. Used by the Payments screen to label
+// a payment_requests row with its client/address — completed inspections stay
+// in SQLite so this resolves them too.
+export async function getInspectionById(sk) {
+  if (!sk) return null;
+  try {
+    return (
+      (await db.getFirstAsync(`SELECT * FROM Inspections WHERE InspectionSk = ?`, [
+        sk,
+      ])) ?? null
+    );
+  } catch (e) {
+    logError(e, `db/inspections.getInspectionById sk=${sk}`);
+    return null;
+  }
+}
+
 // Soft-deleted rows, for the Archive → Deleted restore screen.
 export async function getDeletedInspections() {
   try {
@@ -59,8 +76,9 @@ export async function insertInspection(data) {
         InspectionSk, UserSk, FullName, Summary,
         AddressLine1, AddressLine2, City, State, ZipCode,
         ScheduledAt, Phone, Email, Longitude, Latitude,
+        HasApptReminder, ApptReminderStatus, ReportRecipients,
         _version, _lastChangedAt, _deleted
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0)`,
       [
         sk,
         data.UserSk,
@@ -76,16 +94,19 @@ export async function insertInspection(data) {
         data.Email ?? null,
         data.Longitude ?? null,
         data.Latitude ?? null,
+        data.HasApptReminder ?? 0,
+        data.ApptReminderStatus ?? "PENDING",
+        data.ReportRecipients ?? "[]",
         now,
       ],
     );
-    const inserted = {
-      ...data,
-      InspectionSk: sk,
-      _version: 1,
-      _lastChangedAt: now,
-      _deleted: 0,
-    };
+    // Read back the full row so the store/event always get a complete,
+    // column-shaped object (incl. PaymentState/ReportState/Paid/Status defaults)
+    // rather than a hand-built subset that can drift from the schema.
+    const inserted = await db.getFirstAsync(
+      `SELECT * FROM Inspections WHERE InspectionSk = ?`,
+      [sk],
+    );
     emit(DB_EVENTS.INSPECTION_INSERTED, inserted);
     return inserted;
   } catch (e) {
@@ -103,7 +124,8 @@ export async function updateInspection(sk, data) {
         AddressLine1 = ?, AddressLine2 = ?,
         City = ?, State = ?, ZipCode = ?,
         ScheduledAt = ?, Phone = ?, Email = ?,
-        Longitude = ?, Latitude = ?,
+        Longitude = ?, Latitude = ?, HasApptReminder = ?,
+        ReportRecipients = COALESCE(?, ReportRecipients),
         _version = _version + 1, _lastChangedAt = ?, Synced = 0
       WHERE InspectionSk = ?`,
       [
@@ -119,11 +141,20 @@ export async function updateInspection(sk, data) {
         data.Email ?? null,
         data.Longitude ?? null,
         data.Latitude ?? null,
+        data.HasApptReminder ?? 0,
+        data.ReportRecipients ?? null,
         now,
         sk,
       ],
     );
-    const updated = { ...data, InspectionSk: sk, _lastChangedAt: now };
+    // Read back the full row (not a spread of the edit-form fields) so the
+    // returned object + the scheduler event carry every column —
+    // Status/PaymentState/ReportState/Paid/_version — and never clobber them
+    // when a caller pushes this into the store.
+    const updated = await db.getFirstAsync(
+      `SELECT * FROM Inspections WHERE InspectionSk = ?`,
+      [sk],
+    );
     emit(DB_EVENTS.INSPECTION_UPDATED, updated);
     return updated;
   } catch (e) {
@@ -156,15 +187,7 @@ export async function softDeleteInspection(sk) {
 // must go first.
 export async function deleteInspectionLocal(sk) {
   try {
-    await db.runAsync(
-      `DELETE FROM InspectionDetail WHERE InspectionDescriptionSk IN
-       (SELECT InspectionDescriptionSk FROM InspectionDescription WHERE InspectionSk = ?)`,
-      [sk],
-    );
-    await db.runAsync(
-      `DELETE FROM InspectionDescription WHERE InspectionSk = ?`,
-      [sk],
-    );
+    await db.runAsync(`DELETE FROM InspectionForm WHERE InspectionSk = ?`, [sk]);
     await db.runAsync(`DELETE FROM SmsStatus WHERE InspectionSk = ?`, [sk]);
     await db.runAsync(`DELETE FROM Inspections WHERE InspectionSk = ?`, [sk]);
     emit(DB_EVENTS.INSPECTION_DELETED, { InspectionSk: sk });
@@ -200,6 +223,27 @@ export async function setInspectionStatus(sk, status) {
   }
 }
 
+// Optimistically reflect a payment state locally so the ribbon/badge updates
+// immediately and survives complete → archive → reopen, before the
+// authoritative cloud value syncs back. Deliberately does NOT bump
+// _version/Synced (payment_state is server-owned — the webhook/EF set the real
+// value, which wins on the next pull) and does NOT emit (no reschedule needed).
+export async function setInspectionPaymentStateLocal(sk, state) {
+  try {
+    await db.runAsync(
+      `UPDATE Inspections SET PaymentState = ? WHERE InspectionSk = ?`,
+      [state, sk],
+    );
+    return await db.getFirstAsync(
+      `SELECT * FROM Inspections WHERE InspectionSk = ?`,
+      [sk],
+    );
+  } catch (e) {
+    logError(e, `db/inspections.setInspectionPaymentStateLocal sk=${sk}`);
+    return null;
+  }
+}
+
 // Record where this device cached the last generated report PDF. Deliberately
 // does NOT touch _version/Synced or emit events — the file is device-local
 // metadata, not synced data, and must never trigger a cloud push or a
@@ -217,6 +261,73 @@ export async function setInspectionLocalReport(sk, path, at) {
   } catch (e) {
     logError(e, `db/inspections.setInspectionLocalReport sk=${sk}`);
     throw e;
+  }
+}
+
+// Write the calendar-sync bookkeeping columns for one inspection. Used by the
+// calendar engine (utils/calendarSync.js) after it creates/updates/deletes the
+// device calendar event, and after a pull links an event to an inspection.
+//
+// Deliberately does NOT emit a db event — emitting INSPECTION_UPDATED here would
+// re-enter the calendar push handler and loop. When `propagate` is true we DO
+// bump _version + clear Synced so the ownership/id reach the user's other
+// devices (the single-writer guard); pure snapshot refreshes pass propagate:false
+// to avoid cloud churn. `snapshot` may be an object (stringified) or null.
+export async function setInspectionCalendarFields(
+  sk,
+  { eventId = null, ownerDeviceId = null, snapshot = null, propagate = false } = {},
+) {
+  try {
+    const snapStr =
+      snapshot == null
+        ? null
+        : typeof snapshot === "string"
+          ? snapshot
+          : JSON.stringify(snapshot);
+    if (propagate) {
+      const now = dayjs().valueOf();
+      await db.runAsync(
+        `UPDATE Inspections SET
+          CalendarEventId = ?, CalendarOwnerDeviceId = ?, CalendarSnapshot = ?,
+          _version = _version + 1, _lastChangedAt = ?, Synced = 0
+         WHERE InspectionSk = ?`,
+        [eventId, ownerDeviceId, snapStr, now, sk],
+      );
+    } else {
+      await db.runAsync(
+        `UPDATE Inspections SET
+          CalendarEventId = ?, CalendarOwnerDeviceId = ?, CalendarSnapshot = ?
+         WHERE InspectionSk = ?`,
+        [eventId, ownerDeviceId, snapStr, sk],
+      );
+    }
+    return await db.getFirstAsync(
+      `SELECT * FROM Inspections WHERE InspectionSk = ?`,
+      [sk],
+    );
+  } catch (e) {
+    logError(e, `db/inspections.setInspectionCalendarFields sk=${sk}`);
+    return null;
+  }
+}
+
+// Active (not deleted, not completed) inspections this device owns a calendar
+// event for. The pull reconciler uses this to find links whose event vanished
+// from the calendar window (→ soft-delete the inspection).
+export async function getActiveCalendarLinks(deviceId) {
+  if (!deviceId) return [];
+  try {
+    return await db.getAllAsync(
+      `SELECT InspectionSk, CalendarEventId, CalendarSnapshot, ScheduledAt,
+              _lastChangedAt, Status
+         FROM Inspections
+        WHERE _deleted = 0 AND (Status IS NULL OR Status != 'CLOSED')
+          AND CalendarOwnerDeviceId = ? AND CalendarEventId IS NOT NULL`,
+      [deviceId],
+    );
+  } catch (e) {
+    logError(e, "db/inspections.getActiveCalendarLinks");
+    return [];
   }
 }
 

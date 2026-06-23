@@ -3,71 +3,93 @@ import { theme } from "@theme";
 import dayjs from "dayjs";
 import * as ImagePicker from "expo-image-picker";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
-import { AnimatePresence, MotiView } from "moti";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
-  Image,
   Keyboard,
+  KeyboardAvoidingView,
   Platform,
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
-import DraggableFlatList, {
-  ScaleDecorator,
-} from "react-native-draggable-flatlist";
 import { SafeAreaView } from "react-native-safe-area-context";
-import KeyboardToolbar from "../components/KeyboardToolbar";
 import VoiceFab from "../components/VoiceFab";
-import {
-  addInspectionPhoto,
-  deleteDescription,
-  deleteDetail,
-  getDescriptionsByInspection,
-  getDetailsByDescription,
-  insertDescription,
-  updateDescription,
-  updateSectionNotes,
-  updateSectionPositions,
-  updateSeverityLevel,
-} from "../db/inspectionForm";
-import { updateInspection } from "../db/inspections";
+import AiRewriteSheet from "../components/walkthrough/AiRewriteSheet";
+import WalkField, { PhotoModal } from "../components/walkthrough/WalkField";
 import { logError } from "../db/logs";
-import { getSectionTemplates } from "../db/sectionTemplates";
-import { useVoiceField } from "../hooks/useVoiceField";
+import { SEVERITY_LEVELS } from "../shared/walkthroughSchema";
+import { requestRewrite, rewriteErrorMessage } from "../utils/aiRewrite";
+import {
+  ensureInspectionForm,
+  fetchAndCacheTemplate,
+  getCachedTemplate,
+  newId,
+  saveAnswers,
+} from "../db/walkthroughForms";
 import { useInspectionStore } from "../stores/useInspectionStore";
+import { usePhotoCaptureStore, usePhotoMarkupStore } from "../stores/usePhotoWorkflow";
 import { useSettingsStore } from "../stores/useSettingsStore";
-import { resolvePhotoUri } from "../utils/inspectionPhotos";
+import {
+  deleteCachedPhoto,
+  deleteInspectionPhoto,
+  processAndCachePhoto,
+  resolvePhotoUri,
+} from "../utils/inspectionPhotos";
 
-const SEVERITY = [
-  { key: "ok", label: "OK", color: "#16A34A", bg: "#DCFCE7" },
-  { key: "low", label: "Low", color: "#CA8A04", bg: "#FEF3C7" },
-  { key: "medium", label: "Medium", color: "#EA580C", bg: "#FFEDD5" },
-  { key: "critical", label: "Critical", color: "#DC2626", bg: "#FEE2E2" },
-];
+const clone = (o) => JSON.parse(JSON.stringify(o ?? { sections: {} }));
+
+function findInstance(a, secId, instId) {
+  return (
+    a?.sections?.[secId]?.instances?.find((i) => i.instanceId === instId) ?? null
+  );
+}
+
+// Ensure every schema section has an answers entry, and every static section
+// has exactly one instance to render into. Snapshot + answers come from the
+// same template so they're already consistent; this is defensive.
+function normalizeAnswers(schema, answers) {
+  const a = clone(answers);
+  if (!a.sections) a.sections = {};
+  for (const sec of schema?.sections ?? []) {
+    if (!a.sections[sec.id]) a.sections[sec.id] = { instances: [] };
+    if (
+      sec.kind === "static" &&
+      a.sections[sec.id].instances.length === 0
+    ) {
+      a.sections[sec.id].instances.push({ instanceId: newId("i"), fields: {} });
+    }
+  }
+  return a;
+}
 
 export default function InspectionFormScreen() {
   const router = useRouter();
   const { inspectionSk } = useLocalSearchParams();
-  const userSk = useSettingsStore((s) => s.userSk);
-
   const inspection = useInspectionStore((s) => s.getById(inspectionSk));
-  const updateInStore = useInspectionStore((s) => s.update);
+  const aiRewriteEnabled = useSettingsStore((s) => s.aiRewriteEnabled);
 
-  const [summary, setSummary] = useState(inspection?.Summary ?? "");
-  const [sections, setSections] = useState([]);
+  const [schema, setSchema] = useState(null);
+  const [answers, setAnswers] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [saveState, setSaveState] = useState("idle");
-  const [isDragging, setIsDragging] = useState(false);
+  const [saveState, setSaveState] = useState("idle"); // idle | saving | saved
+  const [openPhoto, setOpenPhoto] = useState(null); // { sectionId, instanceId, fieldId, photoId }
+  // AI Rewrite. `rewriteBusy` drives the per-field ✨ spinner (the field/note
+  // whose rewrite is in flight). `rewriteSheet` is the open review surface;
+  // `sheetLoading` covers a Regenerate from inside it.
+  const [rewriteBusy, setRewriteBusy] = useState(null); // {sectionId,instanceId,fieldId,photoId?}
+  const [rewriteSheet, setRewriteSheet] = useState(null); // + {original, suggestion}
+  const [sheetLoading, setSheetLoading] = useState(false);
 
-  // ── Keyboard ───────────────────────────────────────────────────────────
-  const inputRefs = useRef({});
-  const [focusedField, setFocusedField] = useState(null);
+  const answersRef = useRef({ sections: {} });
+  const dirtyRef = useRef(false);
+  const saveTimer = useRef(null);
+
+  // Keyboard metrics so the voice mic floats just above the keyboard while a
+  // text field is open (and drops to the corner when it's dismissed).
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
 
@@ -76,7 +98,7 @@ export default function InspectionFormScreen() {
     const hide = Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
     const onShow = Keyboard.addListener(show, (e) => {
       setKeyboardVisible(true);
-      setKeyboardHeight(e.endCoordinates.height);
+      setKeyboardHeight(e.endCoordinates?.height ?? 0);
     });
     const onHide = Keyboard.addListener(hide, () => {
       setKeyboardVisible(false);
@@ -88,298 +110,187 @@ export default function InspectionFormScreen() {
     };
   }, []);
 
-  // ── Field order for toolbar prev/next ─────────────────────────────────
-  const fieldOrder = useMemo(() => {
-    const fields = ["summary"];
-    sections.forEach((sec) => {
-      fields.push(`desc_${sec.sk}`);
-      fields.push(`notes_${sec.sk}`);
-    });
-    return fields;
-  }, [sections]);
-
-  const currentIndex = fieldOrder.indexOf(focusedField);
-  const canGoPrev = currentIndex > 0;
-  const canGoNext = currentIndex < fieldOrder.length - 1;
-
-  function focusPrev() {
-    if (canGoPrev) inputRefs.current[fieldOrder[currentIndex - 1]]?.focus();
-  }
-  function focusNext() {
-    if (canGoNext) inputRefs.current[fieldOrder[currentIndex + 1]]?.focus();
-  }
-
-  // ── Load from DB ───────────────────────────────────────────────────────
-  const initialLoadDone = useRef(false);
-
-  const loadSections = useCallback(async () => {
-    if (!inspectionSk) return;
-    try {
-      let descs = await getDescriptionsByInspection(inspectionSk);
-
-      // Auto-populate from section templates on the very first load of a blank form
-      if (descs.length === 0 && !initialLoadDone.current && userSk) {
-        const templates = await getSectionTemplates(userSk);
-        if (templates.length > 0) {
-          for (const [i, tmpl] of templates.entries()) {
-            await insertDescription(inspectionSk, tmpl.Name, i);
-          }
-          descs = await getDescriptionsByInspection(inspectionSk);
-        }
-      }
-
-      const withDetails = await Promise.all(
-        descs.map(async (d) => {
-          const rawDetails = await getDetailsByDescription(
-            d.InspectionDescriptionSk,
-          );
-          const details = await Promise.all(
-            rawDetails.map(async (det) => ({
-              sk: det.InspectionDetailSk,
-              uri: await resolvePhotoUri({
-                localUri: det.LocalPictureURI,
-                cloudUri: det.CloudPictureURI,
-                detailSk: det.InspectionDetailSk,
-              }),
-              note: det.PictureNote ?? "",
-              markup: det.PictureMarkup ?? null,
-            })),
-          );
-          return {
-            sk: d.InspectionDescriptionSk,
-            description: d.Description ?? "",
-            notes: d.Notes ?? "",
-            severity: d.SeverityLevel ?? null,
-            details,
-          };
-        }),
-      );
-      setSections(withDetails);
-    } catch (e) {
-      logError(e, `InspectionFormScreen.loadSections sk=${inspectionSk}`);
-    }
-  }, [inspectionSk, userSk]);
-
+  // ── Load: snapshot the published template on first open ──────────────────
   useEffect(() => {
-    loadSections().finally(() => {
-      setLoading(false);
-      initialLoadDone.current = true;
-    });
-  }, [loadSections]);
-
-  useFocusEffect(
-    useCallback(() => {
-      if (initialLoadDone.current) {
-        loadSections();
+    let alive = true;
+    (async () => {
+      try {
+        const orgSk = useSettingsStore.getState().orgSk;
+        let cached = await getCachedTemplate(orgSk);
+        if (!cached?.schema && orgSk) {
+          cached = await fetchAndCacheTemplate(orgSk);
+        }
+        const form = await ensureInspectionForm(
+          inspectionSk,
+          cached?.schema ?? null,
+          cached?.version ?? 0,
+        );
+        if (!alive) return;
+        const sch = form?.schema ?? null;
+        const norm = normalizeAnswers(sch, form?.answers);
+        setSchema(sch);
+        setAnswers(norm);
+        answersRef.current = norm;
+      } catch (e) {
+        logError(e, `InspectionFormScreen.load sk=${inspectionSk}`);
+      } finally {
+        if (alive) setLoading(false);
       }
-    }, [loadSections]),
-  );
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [inspectionSk]);
 
-  // ── Auto-save helpers ──────────────────────────────────────────────────
-  const saveTimers = useRef({});
+  // ── Save (debounced) ─────────────────────────────────────────────────────
+  const doSave = useCallback(async () => {
+    dirtyRef.current = false;
+    try {
+      await saveAnswers(inspectionSk, answersRef.current);
+      setSaveState("saved");
+      setTimeout(() => setSaveState("idle"), 1400);
+    } catch (e) {
+      logError(e, `InspectionFormScreen.save sk=${inspectionSk}`);
+      setSaveState("idle");
+    }
+  }, [inspectionSk]);
 
-  // Cancel any pending debounced saves when the form unmounts so we don't
-  // fire setSaveState on a torn-down component or push a stale snapshot.
+  function scheduleSave() {
+    setSaveState("saving");
+    clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(doSave, 700);
+  }
+
+  // Flush a pending edit on unmount so nothing is lost on a fast back-out.
   useEffect(() => {
     return () => {
-      Object.values(saveTimers.current).forEach((t) => clearTimeout(t));
-      saveTimers.current = {};
+      clearTimeout(saveTimer.current);
+      if (dirtyRef.current) {
+        saveAnswers(inspectionSk, answersRef.current).catch(() => {});
+      }
     };
-  }, []);
+  }, [inspectionSk]);
 
-  function flashSave(asyncFn) {
-    setSaveState("saving");
-    asyncFn()
-      .then(() => {
-        setSaveState("saved");
-        setTimeout(() => setSaveState("idle"), 1800);
-      })
-      .catch((e) => {
-        logError(e, "InspectionFormScreen.flashSave");
-        setSaveState("idle");
-      });
+  // ── Answers mutation ─────────────────────────────────────────────────────
+  // rerender=false is used by text fields, which hold their own input state —
+  // skipping the parent re-render keeps typing perfectly smooth.
+  function mutateAnswers(fn, rerender = true) {
+    const next = clone(answersRef.current);
+    fn(next);
+    answersRef.current = next;
+    dirtyRef.current = true;
+    if (rerender) setAnswers(next);
+    scheduleSave();
   }
 
-  function scheduleAutoSave(key, asyncFn, delay = 800) {
-    clearTimeout(saveTimers.current[key]);
-    saveTimers.current[key] = setTimeout(() => flashSave(asyncFn), delay);
+  function setValue(secId, instId, fId, value, rerender = true) {
+    mutateAnswers((a) => {
+      const inst = findInstance(a, secId, instId);
+      if (inst) inst.fields[fId] = value;
+    }, rerender);
   }
 
-  // ── Summary ────────────────────────────────────────────────────────────
-  function handleSummaryChange(value) {
-    setSummary(value);
-    scheduleAutoSave("summary", async () => {
-      // `inspection` comes from the store and is `null` until the row is
-      // loaded — guard the spreads so a quick edit before hydration can't
-      // overwrite fields with undefined.
-      const base = inspection ?? {};
-      const updated = await updateInspection(inspectionSk, {
-        ...base,
-        Summary: value,
-      });
-      updateInStore({ ...base, ...(updated ?? {}) });
+  function addInstance(secId) {
+    mutateAnswers((a) => {
+      if (!a.sections[secId]) a.sections[secId] = { instances: [] };
+      a.sections[secId].instances.push({ instanceId: newId("i"), fields: {} });
     });
   }
 
-  // ── Voice dictation: Summary ────────────────────────────────────────────
-  const summaryVoice = useVoiceField(summary, handleSummaryChange);
-
-  // ── Position sync ──────────────────────────────────────────────────────
-  async function syncPositions(secs) {
-    try {
-      await updateSectionPositions(
-        secs.map((s, i) => ({ sk: s.sk, position: i })),
-      );
-    } catch (e) {
-      logError(e, "InspectionFormScreen.syncPositions");
+  function removeInstance(secId, instId) {
+    const inst = findInstance(answersRef.current, secId, instId);
+    const photoRefs = [];
+    if (inst) {
+      for (const val of Object.values(inst.fields ?? {})) {
+        if (Array.isArray(val)) {
+          for (const p of val) {
+            if (p && typeof p === "object" && p.id) photoRefs.push(p);
+          }
+        }
+      }
+    }
+    mutateAnswers((a) => {
+      const sec = a.sections?.[secId];
+      if (sec) sec.instances = sec.instances.filter((i) => i.instanceId !== instId);
+    });
+    for (const p of photoRefs) {
+      if (p.cloudUri) deleteInspectionPhoto(p.cloudUri);
+      deleteCachedPhoto(p.id);
     }
   }
 
-  // ── Sections ───────────────────────────────────────────────────────────
-  async function handleAddSection() {
-    try {
-      const newDesc = await insertDescription(
-        inspectionSk,
-        "",
-        sections.length,
-      );
-      const updated = [
-        ...sections,
-        {
-          sk: newDesc.InspectionDescriptionSk,
-          description: "",
-          notes: "",
-          severity: null,
-          details: [],
-        },
-      ];
-      setSections(updated);
-    } catch (e) {
-      logError(e, "InspectionFormScreen.handleAddSection");
-    }
+  function confirmRemoveInstance(secId, instId, label) {
+    Alert.alert("Remove?", `Remove "${label}" and its photos?`, [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Remove",
+        style: "destructive",
+        onPress: () => removeInstance(secId, instId),
+      },
+    ]);
   }
 
-  async function handleInsertAt(index) {
-    try {
-      const newDesc = await insertDescription(inspectionSk, "", index);
-      const newSection = {
-        sk: newDesc.InspectionDescriptionSk,
-        description: "",
-        notes: "",
-        severity: null,
-        details: [],
-      };
-      const updated = [
-        ...sections.slice(0, index),
-        newSection,
-        ...sections.slice(index),
-      ];
-      setSections(updated);
-      await syncPositions(updated);
-    } catch (e) {
-      logError(e, `InspectionFormScreen.handleInsertAt index=${index}`);
-    }
+  // ── Photos ───────────────────────────────────────────────────────────────
+  function addPhoto(secId, instId, fId, photoRef) {
+    mutateAnswers((a) => {
+      const inst = findInstance(a, secId, instId);
+      if (!inst) return;
+      const arr = Array.isArray(inst.fields[fId]) ? inst.fields[fId] : [];
+      inst.fields[fId] = [...arr, photoRef];
+    });
   }
 
-  async function handleDragEnd({ data }) {
-    setIsDragging(false);
-    setSections(data);
-    await syncPositions(data);
+  function updatePhoto(secId, instId, fId, photoId, patch) {
+    mutateAnswers((a) => {
+      const inst = findInstance(a, secId, instId);
+      const arr = inst?.fields?.[fId];
+      if (!Array.isArray(arr)) return;
+      inst.fields[fId] = arr.map((p) => (p.id === photoId ? { ...p, ...patch } : p));
+    });
   }
 
-  async function handleDeleteSection(sk) {
-    Alert.alert(
-      "Delete Section",
-      "This will remove the section and all its photos. Continue?",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Delete",
-          style: "destructive",
-          onPress: async () => {
-            try {
-              await deleteDescription(sk);
-              const updated = sections.filter((s) => s.sk !== sk);
-              setSections(updated);
-              await syncPositions(updated);
-            } catch (e) {
-              logError(e, `InspectionFormScreen.handleDeleteSection sk=${sk}`);
-            }
-          },
-        },
-      ],
-    );
+  function removePhoto(secId, instId, fId, photoId) {
+    const inst = findInstance(answersRef.current, secId, instId);
+    const arr = inst?.fields?.[fId];
+    const ref = Array.isArray(arr) ? arr.find((p) => p.id === photoId) : null;
+    mutateAnswers((a) => {
+      const i2 = findInstance(a, secId, instId);
+      if (i2 && Array.isArray(i2.fields[fId])) {
+        i2.fields[fId] = i2.fields[fId].filter((p) => p.id !== photoId);
+      }
+    });
+    if (ref?.cloudUri) deleteInspectionPhoto(ref.cloudUri);
+    deleteCachedPhoto(photoId);
+    setOpenPhoto(null);
   }
 
-  function handleDescriptionChange(sk, value) {
-    setSections((prev) =>
-      prev.map((s) => (s.sk === sk ? { ...s, description: value } : s)),
-    );
-    scheduleAutoSave(`desc_${sk}`, () => updateDescription(sk, value));
-  }
-
-  function handleNotesChange(sk, value) {
-    setSections((prev) =>
-      prev.map((s) => (s.sk === sk ? { ...s, notes: value } : s)),
-    );
-    scheduleAutoSave(`notes_${sk}`, () => updateSectionNotes(sk, value));
-  }
-
-  function handleSeverityChange(sk, level) {
-    setSections((prev) =>
-      prev.map((s) => (s.sk === sk ? { ...s, severity: level } : s)),
-    );
-    flashSave(() => updateSeverityLevel(sk, level));
-  }
-
-  // ── Photo helpers ──────────────────────────────────────────────────────
-  // Photo flow: downscale + JPEG into the app photo cache, insert detail row,
-  // upload to Storage on next sync. Never touches the user's Photos library —
-  // see db/inspectionForm.addInspectionPhoto.
-  async function appendPhoto(sectionSk, sourceUri) {
-    try {
-      if (!sourceUri) return;
-      const newDetail = await addInspectionPhoto({
-        descriptionSk: sectionSk,
-        sourceUri,
-      });
-      if (!newDetail) return;
-      const uri = await resolvePhotoUri({
-        localUri: newDetail.LocalPictureURI,
-        cloudUri: newDetail.CloudPictureURI,
-        detailSk: newDetail.InspectionDetailSk,
-      });
-      setSections((prev) =>
-        prev.map((s) =>
-          s.sk === sectionSk
-            ? {
-                ...s,
-                details: [
-                  ...s.details,
-                  {
-                    sk: newDetail.InspectionDetailSk,
-                    uri,
-                    note: "",
-                    markup: null,
-                  },
-                ],
+  function applyMarkup(photoId, markup) {
+    mutateAnswers((a) => {
+      for (const sec of Object.values(a.sections ?? {})) {
+        for (const inst of sec.instances ?? []) {
+          for (const val of Object.values(inst.fields ?? {})) {
+            if (Array.isArray(val)) {
+              const p = val.find(
+                (x) => x && typeof x === "object" && x.id === photoId,
+              );
+              if (p) {
+                p.markup = markup;
+                return;
               }
-            : s,
-        ),
-      );
-    } catch (e) {
-      logError(e, `InspectionFormScreen.appendPhoto sectionSk=${sectionSk}`);
-    }
+            }
+          }
+        }
+      }
+    });
   }
 
-  async function pickFromLibrary(sectionSk) {
+  async function pickFromLibrary(secId, instId, fId) {
     try {
-      const { status } =
-        await ImagePicker.requestMediaLibraryPermissionsAsync();
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (status !== "granted") {
         Alert.alert(
           "Permission needed",
-          "Allow photo library access to upload pictures.",
+          "Allow photo library access to add pictures.",
         );
         return;
       }
@@ -390,721 +301,582 @@ export default function InspectionFormScreen() {
       });
       if (result.canceled || !result.assets?.length) return;
       for (const asset of result.assets) {
-        // asset.uri is the picker's temp copy — appendPhoto processes it into
-        // our own cache, so the original library photo is never referenced.
-        await appendPhoto(sectionSk, asset.uri);
+        const id = newId("p");
+        const cachePath = await processAndCachePhoto(asset.uri, id);
+        addPhoto(secId, instId, fId, {
+          id,
+          localUri: cachePath ?? asset.uri,
+          cloudUri: null,
+          note: "",
+          markup: null,
+        });
       }
     } catch (e) {
-      logError(
-        e,
-        `InspectionFormScreen.pickFromLibrary sectionSk=${sectionSk}`,
-      );
+      logError(e, "InspectionFormScreen.pickFromLibrary");
     }
   }
 
-  function handleCameraPress(sectionSk) {
-    router.push({ pathname: "/camera", params: { sectionSk } });
+  function makePhotoApi(secId, instId, fId) {
+    return {
+      onCamera: () => {
+        usePhotoCaptureStore.getState().beginCapture({
+          inspectionSk,
+          sectionId: secId,
+          instanceId: instId,
+          fieldId: fId,
+        });
+        router.push("/camera");
+      },
+      onLibrary: () => pickFromLibrary(secId, instId, fId),
+      onOpen: (photoId) =>
+        setOpenPhoto({ sectionId: secId, instanceId: instId, fieldId: fId, photoId }),
+      onDelete: (photoId) => removePhoto(secId, instId, fId, photoId),
+    };
   }
 
-  function handleOpenPhoto(detail, sectionSk) {
-    router.push({
-      pathname: "/photonote",
-      params: { sectionSk, initialDetailSk: detail.sk },
+  function getOpenPhotoRef() {
+    if (!openPhoto) return null;
+    const inst = findInstance(
+      answersRef.current,
+      openPhoto.sectionId,
+      openPhoto.instanceId,
+    );
+    const arr = inst?.fields?.[openPhoto.fieldId];
+    return Array.isArray(arr)
+      ? arr.find((p) => p.id === openPhoto.photoId) ?? null
+      : null;
+  }
+
+  async function openMarkup() {
+    const ref = getOpenPhotoRef();
+    if (!ref) return;
+    const uri = await resolvePhotoUri({
+      localUri: ref.localUri,
+      cloudUri: ref.cloudUri,
     });
-  }
-
-  function handleOpenMarkup(detail) {
+    setOpenPhoto(null);
     router.push({
       pathname: "/photoedit",
       params: {
-        detailSk: detail.sk,
-        uri: detail.uri ?? "",
+        uri: uri ?? "",
         initialMarkup:
-          typeof detail.markup === "string"
-            ? detail.markup
-            : detail.markup
-              ? JSON.stringify(detail.markup)
+          typeof ref.markup === "string"
+            ? ref.markup
+            : ref.markup
+              ? JSON.stringify(ref.markup)
               : "",
+        target: ref.id,
       },
     });
   }
 
-  async function handleDeletePhoto(detailSk, sectionSk) {
-    try {
-      await deleteDetail(detailSk);
-      setSections((prev) =>
-        prev.map((s) =>
-          s.sk === sectionSk
-            ? { ...s, details: s.details.filter((d) => d.sk !== detailSk) }
-            : s,
-        ),
-      );
-    } catch (e) {
-      logError(e, `InspectionFormScreen.handleDeletePhoto sk=${detailSk}`);
+  // ── AI Rewrite ───────────────────────────────────────────────────────────
+  // Format a sibling field's answer into a short context string so the rewrite
+  // can be specific (e.g. "Issues: Cracks, Granule loss; Condition: Critical").
+  function formatFieldValue(field, value) {
+    if (value == null || value === "") return null;
+    switch (field.type) {
+      case "toggle":
+        return value === true ? "Yes" : value === false ? "No" : null;
+      case "radio": {
+        const o = (field.config?.options ?? []).find((x) => x.id === value);
+        return o?.label ?? null;
+      }
+      case "checkbox": {
+        if (!Array.isArray(value) || value.length === 0) return null;
+        const labels = value
+          .map((id) => (field.config?.options ?? []).find((x) => x.id === id)?.label)
+          .filter(Boolean);
+        return labels.length ? labels.join(", ") : null;
+      }
+      case "severity": {
+        const lvl = SEVERITY_LEVELS.find((l) => l.key === value);
+        return lvl?.label ?? null;
+      }
+      case "text":
+        return typeof value === "string" && value.trim() ? value.trim() : null;
+      default:
+        return null;
     }
   }
 
-  // ── Render helpers ─────────────────────────────────────────────────────
+  // Sibling answers in the same instance (excluding the field being rewritten,
+  // headings, and photos) become context. It's all property findings — never
+  // client PII (that lives on the Inspections row, not in walkthrough answers).
+  function buildContext(section, instance, fieldId) {
+    const out = [];
+    for (const f of section?.fields ?? []) {
+      if (f.id === fieldId || f.type === "heading" || f.type === "photo") continue;
+      const v = formatFieldValue(f, instance?.fields?.[f.id]);
+      if (v) out.push({ label: f.label, value: v });
+    }
+    return out;
+  }
+
+  function handleRewriteError(e) {
+    Alert.alert("AI Rewrite", rewriteErrorMessage(e?.code));
+  }
+
+  function rewritePayload(sectionId, instanceId, fieldId, photoId, text, regenerate) {
+    const section = schema?.sections?.find((sx) => sx.id === sectionId);
+    const instance = findInstance(answersRef.current, sectionId, instanceId);
+    const field = section?.fields?.find((fx) => fx.id === fieldId);
+    return {
+      text,
+      fieldLabel: photoId ? `${field?.label ?? "Photo"} note` : field?.label,
+      sectionTitle: section?.title,
+      context: buildContext(section, instance, fieldId),
+      regenerate,
+    };
+  }
+
+  // Kick off a rewrite for a form field (photoId undefined) or a photo note
+  // (photoId set). The in-flight lock doubles as the button debounce.
+  async function startRewrite({ sectionId, instanceId, fieldId, photoId, text }) {
+    if (rewriteBusy) return;
+    const trimmed = (text ?? "").trim();
+    if (!trimmed) return;
+    Keyboard.dismiss();
+    setRewriteBusy({ sectionId, instanceId, fieldId, photoId });
+    try {
+      const suggestion = await requestRewrite(
+        rewritePayload(sectionId, instanceId, fieldId, photoId, trimmed, false),
+      );
+      setRewriteSheet({ sectionId, instanceId, fieldId, photoId, original: trimmed, suggestion });
+    } catch (e) {
+      handleRewriteError(e);
+    } finally {
+      setRewriteBusy(null);
+    }
+  }
+
+  async function regenerateRewrite() {
+    if (!rewriteSheet || sheetLoading) return;
+    setSheetLoading(true);
+    try {
+      const { sectionId, instanceId, fieldId, photoId, original } = rewriteSheet;
+      const suggestion = await requestRewrite(
+        rewritePayload(sectionId, instanceId, fieldId, photoId, original, true),
+      );
+      setRewriteSheet((s) => (s ? { ...s, suggestion } : s));
+    } catch (e) {
+      handleRewriteError(e);
+    } finally {
+      setSheetLoading(false);
+    }
+  }
+
+  function applyRewrite() {
+    if (!rewriteSheet) return;
+    const { sectionId, instanceId, fieldId, photoId, suggestion } = rewriteSheet;
+    const text = (suggestion ?? "").trim();
+    if (text) {
+      if (photoId) updatePhoto(sectionId, instanceId, fieldId, photoId, { note: text });
+      else setValue(sectionId, instanceId, fieldId, text, true);
+    }
+    setRewriteSheet(null);
+  }
+
+  function makeTextAi(section, instance, field) {
+    if (!aiRewriteEnabled) return undefined;
+    const busy =
+      rewriteBusy &&
+      !rewriteBusy.photoId &&
+      rewriteBusy.sectionId === section.id &&
+      rewriteBusy.instanceId === instance.instanceId &&
+      rewriteBusy.fieldId === field.id;
+    return {
+      enabled: true,
+      loading: !!busy,
+      onRequest: (text) =>
+        startRewrite({
+          sectionId: section.id,
+          instanceId: instance.instanceId,
+          fieldId: field.id,
+          text,
+        }),
+    };
+  }
+
+  // The review sheet is an overlay (not a Modal), so it can render at the form
+  // root for field rewrites OR inside the photo modal for note rewrites — a
+  // second Modal won't reliably present over the photo Modal.
+  function renderRewriteSheet() {
+    return (
+      <AiRewriteSheet
+        visible
+        original={rewriteSheet?.original ?? ""}
+        suggestion={rewriteSheet?.suggestion ?? ""}
+        loading={sheetLoading}
+        onChangeSuggestion={(t) =>
+          setRewriteSheet((s) => (s ? { ...s, suggestion: t } : s))
+        }
+        onRegenerate={regenerateRewrite}
+        onUse={applyRewrite}
+        onKeepMine={() => setRewriteSheet(null)}
+      />
+    );
+  }
+
+  // ── Pick up camera captures + markup results on return ───────────────────
+  useFocusEffect(
+    useCallback(() => {
+      const cap = usePhotoCaptureStore.getState();
+      if (cap.target?.inspectionSk === inspectionSk && cap.captures.length) {
+        const { sectionId, instanceId, fieldId } = cap.target;
+        const uris = cap.captures;
+        usePhotoCaptureStore.getState().clear();
+        (async () => {
+          for (const tempUri of uris) {
+            const id = newId("p");
+            const cachePath = await processAndCachePhoto(tempUri, id);
+            addPhoto(sectionId, instanceId, fieldId, {
+              id,
+              localUri: cachePath ?? tempUri,
+              cloudUri: null,
+              note: "",
+              markup: null,
+            });
+          }
+        })();
+      }
+
+      const mk = usePhotoMarkupStore.getState();
+      if (mk.result) {
+        const { photoId, markup } = mk.result;
+        usePhotoMarkupStore.getState().clear();
+        applyMarkup(photoId, markup);
+      }
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [inspectionSk]),
+  );
+
+  // ── Render ───────────────────────────────────────────────────────────────
   const title = inspection?.FullName
     ? `${inspection.FullName} — ${dayjs(inspection.ScheduledAt).format("MMM D")}`
-    : "Inspection Form";
+    : "Walkthrough";
 
-  if (loading) {
-    return (
-      <SafeAreaView style={styles.safe} edges={["top"]}>
-        <ActivityIndicator
-          style={{ flex: 1 }}
-          size="large"
-          color={theme.colors.primary}
+  function renderFields(section, instance) {
+    return section.fields.map((f) => {
+      if (f.type === "heading") {
+        return <WalkField key={f.id} field={f} />;
+      }
+      const value = instance.fields?.[f.id];
+      if (f.type === "photo") {
+        return (
+          <WalkField
+            key={f.id}
+            field={f}
+            value={value}
+            photo={makePhotoApi(section.id, instance.instanceId, f.id)}
+          />
+        );
+      }
+      const rerender = f.type !== "text";
+      return (
+        <WalkField
+          key={f.id}
+          field={f}
+          value={value}
+          onChange={(v) =>
+            setValue(section.id, instance.instanceId, f.id, v, rerender)
+          }
+          ai={f.type === "text" ? makeTextAi(section, instance, f) : undefined}
         />
-      </SafeAreaView>
+      );
+    });
+  }
+
+  function renderSection(section) {
+    const secAns = answers?.sections?.[section.id] ?? { instances: [] };
+
+    if (section.kind === "static") {
+      const inst = secAns.instances[0];
+      return (
+        <View key={section.id} style={styles.card}>
+          <Text style={styles.sectionTitle}>{section.title}</Text>
+          {inst && renderFields(section, inst)}
+        </View>
+      );
+    }
+
+    // Repeatable
+    return (
+      <View key={section.id} style={styles.repeatBlock}>
+        <Text style={styles.repeatTitle}>{section.title}</Text>
+        {secAns.instances.length === 0 && (
+          <Text style={styles.emptyRepeat}>
+            None added yet. Tap below to add one.
+          </Text>
+        )}
+        {secAns.instances.map((inst, idx) => (
+          <View key={inst.instanceId} style={styles.card}>
+            <View style={styles.instanceHeader}>
+              <Text style={styles.instanceTitle}>
+                {section.title} {idx + 1}
+              </Text>
+              <TouchableOpacity
+                onPress={() =>
+                  confirmRemoveInstance(
+                    section.id,
+                    inst.instanceId,
+                    `${section.title} ${idx + 1}`,
+                  )
+                }
+                hitSlop={theme?.layout?.hitSlop?.medium}
+              >
+                <MaterialCommunityIcons
+                  name="trash-can-outline"
+                  size={20}
+                  color={theme?.colors?.textSubtle}
+                />
+              </TouchableOpacity>
+            </View>
+            {renderFields(section, inst)}
+          </View>
+        ))}
+        <TouchableOpacity
+          style={styles.addInstanceBtn}
+          onPress={() => addInstance(section.id)}
+          activeOpacity={0.8}
+        >
+          <MaterialCommunityIcons
+            name="plus-circle-outline"
+            size={20}
+            color={theme?.colors?.primary}
+          />
+          <Text style={styles.addInstanceText}>
+            {section.addLabel || "Add"}
+          </Text>
+        </TouchableOpacity>
+      </View>
     );
   }
-
-  function renderSectionItem({ item, index, drag, isActive }) {
-    return (
-      <ScaleDecorator activeScale={0.97}>
-        <SectionCard
-          section={item}
-          index={index}
-          inputRefs={inputRefs}
-          setFocusedField={setFocusedField}
-          onDescriptionChange={handleDescriptionChange}
-          onNotesChange={handleNotesChange}
-          onSeverityChange={handleSeverityChange}
-          onDeleteSection={handleDeleteSection}
-          onCameraPress={handleCameraPress}
-          onUploadPhoto={pickFromLibrary}
-          onOpenPhoto={handleOpenPhoto}
-          onOpenMarkup={handleOpenMarkup}
-          onDeletePhoto={handleDeletePhoto}
-          drag={drag}
-          isActive={isActive}
-        />
-      </ScaleDecorator>
-    );
-  }
-
-  function renderSeparator({ leadingItem }) {
-    if (isDragging) return null;
-    const leadingIndex = sections.findIndex((s) => s.sk === leadingItem.sk);
-    return <InsertSeparator onPress={() => handleInsertAt(leadingIndex + 1)} />;
-  }
-
-  const summaryHeader = (
-    <View style={styles.summaryHeader}>
-      <Text style={styles.overline}>SUMMARY</Text>
-      <TextInput
-        ref={(r) => {
-          inputRefs.current["summary"] = r;
-        }}
-        onFocus={() => {
-          setFocusedField("summary");
-          summaryVoice.onFocus();
-        }}
-        style={[styles.input, styles.textArea]}
-        value={summary}
-        onChangeText={handleSummaryChange}
-        placeholder="Overall findings and notes…"
-        placeholderTextColor={theme.colors.textFine}
-        multiline
-        numberOfLines={4}
-        textAlignVertical="top"
-      />
-    </View>
-  );
-
-  const addSectionFooter = (
-    <View style={styles.footerContent}>
-      <TouchableOpacity style={styles.addSectionBtn} onPress={handleAddSection}>
-        <MaterialCommunityIcons
-          name="plus-circle-outline"
-          size={20}
-          color={theme.colors.primary}
-        />
-        <Text style={styles.addSectionText}>Add Section</Text>
-      </TouchableOpacity>
-    </View>
-  );
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
-      {/* Navbar */}
       <View style={styles.navbar}>
         <TouchableOpacity
           onPress={() => router.back()}
-          hitSlop={theme.layout.hitSlop.medium}
+          hitSlop={theme?.layout?.hitSlop?.medium}
         >
           <MaterialCommunityIcons
             name="close"
-            size={theme.layout.iconSize.l}
-            color={theme.colors.icon}
+            size={theme?.layout?.iconSize?.l ?? 26}
+            color={theme?.colors?.icon}
           />
         </TouchableOpacity>
         <Text style={styles.navTitle} numberOfLines={1}>
           {title}
         </Text>
-
-        {/* Animated save state indicator */}
-        <View style={styles.saveIndicatorContainer}>
-          <AnimatePresence>
-            {saveState === "saving" && (
-              <MotiView
-                key="saving"
-                from={{ opacity: 0, scale: 0.7 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.7 }}
-                transition={{ type: "spring", damping: 15, stiffness: 200 }}
-                style={styles.saveIndicatorInner}
-              >
-                <ActivityIndicator size="small" color={theme.colors.primary} />
-              </MotiView>
-            )}
-            {saveState === "saved" && (
-              <MotiView
-                key="saved"
-                from={{ opacity: 0, scale: 0.6, translateY: 5 }}
-                animate={{ opacity: 1, scale: 1, translateY: 0 }}
-                exit={{ opacity: 0, scale: 0.7 }}
-                transition={{ type: "spring", damping: 12, stiffness: 220 }}
-                style={styles.saveIndicatorInner}
-              >
-                <MaterialCommunityIcons
-                  name="check-circle"
-                  size={20}
-                  color={theme.colors.success}
-                />
-              </MotiView>
-            )}
-          </AnimatePresence>
+        <View style={styles.saveIndicator}>
+          {saveState === "saving" && (
+            <ActivityIndicator size="small" color={theme?.colors?.primary} />
+          )}
+          {saveState === "saved" && (
+            <MaterialCommunityIcons
+              name="check-circle"
+              size={20}
+              color={theme?.colors?.success}
+            />
+          )}
         </View>
       </View>
 
-      <DraggableFlatList
-        data={sections}
-        keyExtractor={(item) => item.sk}
-        onDragBegin={() => setIsDragging(true)}
-        onDragEnd={handleDragEnd}
-        renderItem={renderSectionItem}
-        ItemSeparatorComponent={renderSeparator}
-        ListHeaderComponent={summaryHeader}
-        ListFooterComponent={addSectionFooter}
-        contentContainerStyle={
-          keyboardVisible ? { paddingBottom: keyboardHeight + 56 } : undefined
+      {loading ? (
+        <ActivityIndicator
+          style={{ flex: 1 }}
+          size="large"
+          color={theme?.colors?.primary}
+        />
+      ) : !schema ? (
+        <View style={styles.emptyState}>
+          <MaterialCommunityIcons
+            name="clipboard-alert-outline"
+            size={44}
+            color={theme?.colors?.textFine}
+          />
+          <Text style={styles.emptyTitle}>No walkthrough form yet</Text>
+          <Text style={styles.emptyBody}>
+            Your organization's walkthrough form hasn't been published. Ask the
+            owner to design and publish it from the Form Builder, then reopen
+            this inspection.
+          </Text>
+        </View>
+      ) : (
+        <KeyboardAvoidingView
+          style={{ flex: 1 }}
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+        >
+          <ScrollView
+            contentContainerStyle={styles.scroll}
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="interactive"
+          >
+            {(schema.sections ?? []).map(renderSection)}
+            {(schema.sections ?? []).length === 0 && (
+              <Text style={styles.emptyBody}>
+                This form has no sections yet.
+              </Text>
+            )}
+          </ScrollView>
+        </KeyboardAvoidingView>
+      )}
+
+      {!loading && schema && (
+        <VoiceFab
+          keyboardVisible={keyboardVisible}
+          keyboardHeight={keyboardHeight}
+        />
+      )}
+
+      <PhotoModal
+        visible={!!openPhoto}
+        photoRef={getOpenPhotoRef()}
+        onClose={() => setOpenPhoto(null)}
+        onNoteChange={(note) =>
+          openPhoto &&
+          updatePhoto(
+            openPhoto.sectionId,
+            openPhoto.instanceId,
+            openPhoto.fieldId,
+            openPhoto.photoId,
+            { note },
+          )
         }
-        keyboardShouldPersistTaps="handled"
+        onMarkup={openMarkup}
+        onDelete={() =>
+          openPhoto &&
+          removePhoto(
+            openPhoto.sectionId,
+            openPhoto.instanceId,
+            openPhoto.fieldId,
+            openPhoto.photoId,
+          )
+        }
+        ai={
+          openPhoto && aiRewriteEnabled
+            ? {
+                enabled: true,
+                loading: rewriteBusy?.photoId === openPhoto.photoId,
+                onRequest: (noteText) =>
+                  startRewrite({
+                    sectionId: openPhoto.sectionId,
+                    instanceId: openPhoto.instanceId,
+                    fieldId: openPhoto.fieldId,
+                    photoId: openPhoto.photoId,
+                    text: noteText,
+                  }),
+              }
+            : undefined
+        }
+        rewriteOverlay={rewriteSheet?.photoId ? renderRewriteSheet() : null}
       />
 
-      <VoiceFab
-        keyboardVisible={keyboardVisible}
-        keyboardHeight={keyboardHeight}
-      />
-
-      <KeyboardToolbar
-        visible={keyboardVisible}
-        keyboardHeight={keyboardHeight}
-        canGoPrev={canGoPrev}
-        canGoNext={canGoNext}
-        onPrev={focusPrev}
-        onNext={focusNext}
-      />
+      {rewriteSheet && !rewriteSheet.photoId ? renderRewriteSheet() : null}
     </SafeAreaView>
   );
 }
 
-// ── InsertSeparator ────────────────────────────────────────────────────────
-function InsertSeparator({ onPress }) {
-  return (
-    <TouchableOpacity
-      onPress={onPress}
-      style={styles.separator}
-      activeOpacity={0.7}
-    >
-      <View style={styles.separatorLine} />
-      <View style={styles.separatorCircle}>
-        <MaterialCommunityIcons
-          name="plus"
-          size={13}
-          color={theme.colors.primary}
-        />
-      </View>
-      <View style={styles.separatorLine} />
-    </TouchableOpacity>
-  );
-}
-
-// ── SectionCard ────────────────────────────────────────────────────────────
-function SectionCard({
-  section,
-  index,
-  inputRefs,
-  setFocusedField,
-  onDescriptionChange,
-  onNotesChange,
-  onSeverityChange,
-  onDeleteSection,
-  onCameraPress,
-  onUploadPhoto,
-  onOpenPhoto,
-  onOpenMarkup,
-  onDeletePhoto,
-  drag,
-  isActive,
-}) {
-  const severityColor = SEVERITY.find((s) => s.key === section.severity)?.color;
-
-  const descriptionVoice = useVoiceField(section.description, (v) =>
-    onDescriptionChange(section.sk, v),
-  );
-  const notesVoice = useVoiceField(section.notes, (v) =>
-    onNotesChange(section.sk, v),
-  );
-
-  return (
-    <View
-      style={[
-        styles.section,
-        isActive && styles.sectionActive,
-        {
-          borderLeftWidth: 4,
-          borderLeftColor: severityColor ?? theme.colors.input,
-        },
-      ]}
-    >
-      <View style={styles.sectionHeader}>
-        <TouchableOpacity
-          onLongPress={drag}
-          delayLongPress={150}
-          style={styles.dragHandle}
-          hitSlop={theme.layout.hitSlop.medium}
-        >
-          <MaterialCommunityIcons
-            name="drag-horizontal-variant"
-            size={20}
-            color={theme.colors.textFine}
-          />
-        </TouchableOpacity>
-        <TextInput
-          ref={(r) => {
-            inputRefs.current[`desc_${section.sk}`] = r;
-          }}
-          onFocus={() => {
-            setFocusedField(`desc_${section.sk}`);
-            descriptionVoice.onFocus();
-          }}
-          style={styles.sectionNameInput}
-          value={section.description}
-          onChangeText={(v) => onDescriptionChange(section.sk, v)}
-          placeholder="Section name…"
-          placeholderTextColor={theme.colors.textFine}
-          returnKeyType="done"
-        />
-        <TouchableOpacity
-          onPress={() => onDeleteSection(section.sk)}
-          hitSlop={theme.layout.hitSlop.medium}
-        >
-          <MaterialCommunityIcons
-            name="trash-can-outline"
-            size={theme.layout.iconSize.m}
-            color={theme.colors.textSubtle}
-          />
-        </TouchableOpacity>
-      </View>
-
-      <SeverityPicker
-        value={section.severity}
-        onChange={(level) => onSeverityChange(section.sk, level)}
-      />
-
-      <TextInput
-        ref={(r) => {
-          inputRefs.current[`notes_${section.sk}`] = r;
-        }}
-        onFocus={() => {
-          setFocusedField(`notes_${section.sk}`);
-          notesVoice.onFocus();
-        }}
-        style={[styles.input, styles.textArea]}
-        value={section.notes}
-        onChangeText={(v) => onNotesChange(section.sk, v)}
-        placeholder="Describe what was found in this section…"
-        placeholderTextColor={theme.colors.textFine}
-        multiline
-        numberOfLines={3}
-        textAlignVertical="top"
-      />
-
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.thumbnailRow}
-      >
-        {section.details.map((detail) => (
-          <View key={detail.sk} style={styles.thumbnailContainer}>
-            <Thumbnail
-              detail={detail}
-              onPress={() => onOpenPhoto(detail, section.sk)}
-              onEditPress={() => onOpenMarkup(detail)}
-            />
-
-            <TouchableOpacity
-              style={styles.thumbnailDelete}
-              onPress={() => onDeletePhoto(detail.sk, section.sk)}
-              hitSlop={theme.layout.hitSlop.medium}
-            >
-              <MaterialCommunityIcons name="trash-can" size={12} color="#fff" />
-            </TouchableOpacity>
-          </View>
-        ))}
-
-        <TouchableOpacity
-          style={styles.addThumbnailBtn}
-          onPress={() => onCameraPress(section.sk)}
-          activeOpacity={0.7}
-        >
-          <MaterialCommunityIcons
-            name="camera-plus-outline"
-            size={26}
-            color={theme.colors.primary}
-          />
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={styles.addThumbnailBtn}
-          onPress={() => onUploadPhoto(section.sk)}
-          activeOpacity={0.7}
-        >
-          <MaterialCommunityIcons
-            name="image-plus"
-            size={26}
-            color={theme.colors.primary}
-          />
-        </TouchableOpacity>
-      </ScrollView>
-    </View>
-  );
-}
-
-// ── Thumbnail ──────────────────────────────────────────────────────────────
-function detailHasMarkup(markup) {
-  if (!markup) return false;
-  try {
-    const parsed = typeof markup === "string" ? JSON.parse(markup) : markup;
-    return Array.isArray(parsed?.strokes) && parsed.strokes.length > 0;
-  } catch (_) {
-    return false;
-  }
-}
-
-function Thumbnail({ detail, onPress, onEditPress }) {
-  const [loading, setLoading] = useState(!!detail.uri);
-  const hasMarkup = detailHasMarkup(detail.markup);
-  return (
-    <TouchableOpacity
-      onPress={onPress}
-      activeOpacity={0.8}
-      style={styles.thumbnailWrapper}
-    >
-      {!!detail.uri && (
-        <Image
-          source={{ uri: detail.uri }}
-          style={styles.thumbnail}
-          resizeMode="cover"
-          onLoad={() => setLoading(false)}
-          onError={() => setLoading(false)}
-        />
-      )}
-      {loading && (
-        <View style={[StyleSheet.absoluteFillObject, styles.thumbnailLoading]}>
-          <ActivityIndicator size="small" color={theme.colors.primary} />
-        </View>
-      )}
-      {!!detail.note && <View style={styles.thumbnailDot} />}
-
-      {/* Markup edit chip — top-left. Green tint when strokes exist so the
-          inspector can see at a glance which photos already carry annotations. */}
-      <TouchableOpacity
-        onPress={(e) => {
-          e?.stopPropagation?.();
-          onEditPress?.();
-        }}
-        hitSlop={theme.layout.hitSlop.medium}
-        style={[styles.thumbnailEdit, hasMarkup && styles.thumbnailEditActive]}
-      >
-        <MaterialCommunityIcons
-          name="pencil"
-          size={11}
-          color={hasMarkup ? "#fff" : "rgba(255,255,255,0.85)"}
-        />
-      </TouchableOpacity>
-    </TouchableOpacity>
-  );
-}
-
-// ── SeverityPicker ─────────────────────────────────────────────────────────
-function SeverityPicker({ value, onChange }) {
-  return (
-    <View style={severityStyles.row}>
-      {SEVERITY.map((s) => {
-        const selected = value === s.key;
-        return (
-          <TouchableOpacity
-            key={s.key}
-            style={[
-              severityStyles.chip,
-              selected
-                ? { backgroundColor: s.color, borderColor: s.color }
-                : { backgroundColor: s.bg, borderColor: s.color },
-            ]}
-            onPress={() => onChange(selected ? null : s.key)}
-            activeOpacity={0.75}
-          >
-            <View
-              style={[
-                severityStyles.dot,
-                {
-                  backgroundColor: selected
-                    ? "rgba(255,255,255,0.85)"
-                    : s.color,
-                },
-              ]}
-            />
-            <Text
-              style={[
-                severityStyles.chipLabel,
-                { color: selected ? "#fff" : s.color },
-              ]}
-            >
-              {s.label}
-            </Text>
-          </TouchableOpacity>
-        );
-      })}
-    </View>
-  );
-}
-
-const severityStyles = StyleSheet.create({
-  row: {
-    flexDirection: "row",
-    gap: theme.spacing.xs,
-  },
-  chip: {
-    flex: 1,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 5,
-    paddingVertical: 7,
-    borderRadius: theme.layout.borderRadius.full,
-    borderWidth: 1.5,
-  },
-  dot: {
-    width: 7,
-    height: 7,
-    borderRadius: 4,
-  },
-  chipLabel: {
-    fontSize: 11,
-    fontWeight: "700",
-    letterSpacing: 0.3,
-  },
-});
-
-// ── Styles ─────────────────────────────────────────────────────────────────
-const THUMB = 90;
-
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: theme.colors.mainBackground },
+  safe: { flex: 1, backgroundColor: theme?.colors?.mainBackground },
   navbar: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingHorizontal: theme.spacing.m,
-    paddingVertical: theme.spacing.m,
-    backgroundColor: theme.colors.cardBackground,
-    borderBottomWidth: 0,
-    ...theme.shadows.light,
+    paddingHorizontal: theme?.spacing?.m,
+    paddingVertical: theme?.spacing?.m,
+    backgroundColor: theme?.colors?.cardBackground,
+    ...theme?.shadows?.light,
   },
   navTitle: {
-    ...theme.typography.h4,
+    ...theme?.typography?.h4,
     flex: 1,
-    marginHorizontal: theme.spacing.s,
+    marginHorizontal: theme?.spacing?.s,
   },
-  saveIndicatorContainer: {
-    width: 44,
+  saveIndicator: {
+    width: 28,
     height: 28,
     alignItems: "center",
     justifyContent: "center",
   },
-  saveIndicatorInner: {
-    alignItems: "center",
-    justifyContent: "center",
+
+  scroll: {
+    padding: theme?.spacing?.m,
+    paddingBottom: 80,
+  },
+  card: {
+    backgroundColor: theme?.colors?.cardBackground,
+    borderRadius: theme?.layout?.borderRadius?.l ?? 14,
+    padding: theme?.spacing?.m,
+    marginBottom: theme?.spacing?.m,
+    ...theme?.shadows?.light,
+  },
+  sectionTitle: {
+    ...theme?.typography?.h4,
+    marginBottom: theme?.spacing?.m,
+    color: theme?.colors?.text,
   },
 
-  summaryHeader: {
-    padding: theme.spacing.m,
-    paddingBottom: theme.spacing.s,
+  repeatBlock: {
+    marginBottom: theme?.spacing?.m,
   },
-  footerContent: {
-    paddingHorizontal: theme.spacing.m,
-    paddingTop: theme.spacing.s,
-    paddingBottom: theme.spacing.xxl,
+  repeatTitle: {
+    ...theme?.typography?.h4,
+    color: theme?.colors?.text,
+    marginBottom: theme?.spacing?.s,
+    paddingLeft: 2,
   },
-
-  overline: {
-    ...theme.typography.overline,
-    marginBottom: theme.spacing.s,
+  emptyRepeat: {
+    fontSize: 13,
+    color: theme?.colors?.textFine,
+    fontStyle: "italic",
+    marginBottom: theme?.spacing?.s,
+    paddingLeft: 2,
   },
-  input: {
-    backgroundColor: theme.colors.cardBackground,
-    borderRadius: theme.layout.borderRadius.s,
-    borderWidth: theme.layout.borderWidth.base,
-    borderColor: theme.colors.input,
-    paddingHorizontal: theme.spacing.m,
-    paddingVertical: theme.spacing.s,
-    ...theme.typography.body,
-    minHeight: 42,
-  },
-  textArea: { minHeight: 90, paddingTop: theme.spacing.s },
-
-  section: {
-    backgroundColor: theme.colors.cardBackground,
-    borderRadius: theme.layout.borderRadius.l,
-    padding: theme.spacing.m,
-    marginHorizontal: theme.spacing.m,
-    marginBottom: theme.spacing.m,
-    gap: theme.spacing.s,
-    ...theme.shadows.light,
-  },
-  sectionActive: {
-    ...theme.shadows.dark,
-    opacity: 0.96,
-  },
-  sectionHeader: {
+  instanceHeader: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+    marginBottom: theme?.spacing?.s,
   },
-  dragHandle: {
-    paddingRight: theme.spacing.s,
+  instanceTitle: {
+    ...theme?.typography?.bodyBold,
+    color: theme?.colors?.primary,
   },
-  sectionNameInput: {
-    flex: 1,
-    ...theme.typography.bodyBold,
-    color: theme.colors.primary,
-    paddingVertical: 2,
-  },
-
-  separator: {
+  addInstanceBtn: {
     flexDirection: "row",
     alignItems: "center",
-    marginHorizontal: theme.spacing.m,
-    paddingVertical: theme.spacing.xs,
-    marginBottom: theme.spacing.xs,
-  },
-  separatorLine: {
-    flex: 1,
-    height: 1,
-    backgroundColor: theme.colors.input,
-  },
-  separatorCircle: {
-    width: 26,
-    height: 26,
-    borderRadius: 13,
-    borderWidth: theme.layout.borderWidth.base,
-    borderColor: theme.colors.input,
-    alignItems: "center",
     justifyContent: "center",
-    marginHorizontal: theme.spacing.xs,
-    backgroundColor: theme.colors.mainBackground,
-  },
-
-  thumbnailRow: {
-    flexDirection: "row",
-    gap: theme.spacing.s,
-    paddingVertical: theme.spacing.xs,
-  },
-  thumbnailContainer: {
-    width: THUMB,
-    height: THUMB,
-  },
-  thumbnailWrapper: {
-    width: THUMB,
-    height: THUMB,
-    borderRadius: theme.layout.borderRadius.s,
-    overflow: "hidden",
-    backgroundColor: theme.colors.input,
-  },
-  thumbnailLoading: {
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  thumbnail: {
-    width: THUMB,
-    height: THUMB,
-  },
-  thumbnailDot: {
-    position: "absolute",
-    bottom: 5,
-    right: 5,
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: theme.colors.primary,
+    gap: theme?.spacing?.s,
+    paddingVertical: theme?.spacing?.m,
+    borderRadius: theme?.layout?.borderRadius?.l ?? 14,
     borderWidth: 1,
-    borderColor: "#fff",
-  },
-  thumbnailDelete: {
-    position: "absolute",
-    top: 4,
-    right: 4,
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: theme.colors.error,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  thumbnailEdit: {
-    position: "absolute",
-    top: 4,
-    left: 4,
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: "rgba(0,0,0,0.55)",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  thumbnailEditActive: {
-    backgroundColor: "#16A34A",
-  },
-  addThumbnailBtn: {
-    width: THUMB,
-    height: THUMB,
-    borderRadius: theme.layout.borderRadius.s,
-    borderWidth: theme.layout.borderWidth.base,
-    borderColor: theme.colors.primary,
+    borderColor: theme?.colors?.primary,
     borderStyle: "dashed",
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: theme.colors.primaryGhost,
+    backgroundColor: theme?.colors?.primaryGhost,
+  },
+  addInstanceText: {
+    ...theme?.typography?.bodyBold,
+    color: theme?.colors?.primary,
   },
 
-  addSectionBtn: {
-    flexDirection: "row",
+  emptyState: {
+    flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    gap: theme.spacing.s,
-    paddingVertical: theme.spacing.m,
-    borderRadius: theme.layout.borderRadius.l,
-    borderWidth: theme.layout.borderWidth.base,
-    borderColor: theme.colors.primary,
-    borderStyle: "dashed",
-    backgroundColor: theme.colors.primaryGhost,
+    padding: 32,
+    gap: 10,
   },
-  addSectionText: {
-    ...theme.typography.bodyBold,
-    color: theme.colors.primary,
+  emptyTitle: {
+    ...theme?.typography?.h4,
+    color: theme?.colors?.text,
+    marginTop: 6,
+  },
+  emptyBody: {
+    fontSize: 14,
+    lineHeight: 21,
+    color: theme?.colors?.textSubtle,
+    textAlign: "center",
   },
 });

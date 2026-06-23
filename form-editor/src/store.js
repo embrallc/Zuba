@@ -31,6 +31,9 @@ export const useEditorStore = create((set, get) => {
   return {
     schema: null,
     name: "Inspection Report",
+    // The org's walkthrough template — loaded at boot so the report's binding
+    // palette and field labels reflect the real fields the owner built.
+    walkthroughSchema: null,
     selected: null, // {kind:"band"|"element"|"shape", bandId, id}
     editingTextId: null,
     zoom: 1,
@@ -44,7 +47,20 @@ export const useEditorStore = create((set, get) => {
     loadSchema: (schema, name) =>
       set({ schema, ...(name ? { name } : {}), past: [], future: [], dirty: false }),
 
+    // Replace the whole schema as ONE undoable step (e.g. "Build from my
+    // walkthrough form"). Unlike loadSchema it keeps history so the prior
+    // design can be restored with Undo.
+    replaceSchema: (schema) =>
+      set((state) => ({
+        ...pushHistory(state),
+        schema,
+        selected: null,
+        editingTextId: null,
+        dirty: true,
+      })),
+
     setName: (name) => set({ name, dirty: true }),
+    setWalkthroughSchema: (walkthroughSchema) => set({ walkthroughSchema }),
     setZoom: (zoom) => set({ zoom }),
     setSaveState: (saveState) => set({ saveState }),
     setGuides: (guides) => set({ guides }),

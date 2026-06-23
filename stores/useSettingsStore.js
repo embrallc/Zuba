@@ -13,6 +13,8 @@ const KEYS = {
   calendarStartHour: "settings_calendarStartHour",
   notifications: "settings_notifications",
   integrations: "settings_integrations",
+  aiRewrite: "settings_aiRewriteEnabled",
+  apptReminderSms: "settings_apptReminderSmsEnabled",
 };
 
 // Default OFF until the user opts in.
@@ -49,6 +51,14 @@ export const useSettingsStore = create((set) => ({
   // Minutes before an appointment that an Upcoming Appointment reminder
   // should fire. Hard-coded for now; a Settings picker will land later.
   scheduleReminderOffsetMinutes: 60,
+  // Opt-in: show the ✨ Rewrite affordance on multiline note fields, which
+  // sends the note text to Gemini (via the ai-rewrite edge function) for a
+  // report-ready suggestion the inspector reviews before using. Default OFF.
+  aiRewriteEnabled: false,
+  // Default for the day-before client SMS appointment reminder. Seeds each new
+  // inspection's HasApptReminder; the per-inspection toggle in Add/Edit overrides
+  // it. Default OFF — it's opt-in (costs an SMS and needs client consent).
+  apptReminderSmsEnabled: false,
 
   loadSettings: async () => {
     try {
@@ -59,6 +69,8 @@ export const useSettingsStore = create((set) => ({
         startHour,
         notifications,
         integrations,
+        aiRewrite,
+        apptReminderSms,
       ] = await Promise.all([
         AsyncStorage.getItem(KEYS.showWeekends),
         AsyncStorage.getItem(KEYS.userSk),
@@ -66,6 +78,8 @@ export const useSettingsStore = create((set) => ({
         AsyncStorage.getItem(KEYS.calendarStartHour),
         AsyncStorage.getItem(KEYS.notifications),
         AsyncStorage.getItem(KEYS.integrations),
+        AsyncStorage.getItem(KEYS.aiRewrite),
+        AsyncStorage.getItem(KEYS.apptReminderSms),
       ]);
       set({
         showWeekends: showWeekends ? JSON.parse(showWeekends) : false,
@@ -78,6 +92,10 @@ export const useSettingsStore = create((set) => ({
         integrations: integrations
           ? { ...DEFAULT_INTEGRATIONS, ...JSON.parse(integrations) }
           : { ...DEFAULT_INTEGRATIONS },
+        aiRewriteEnabled: aiRewrite ? JSON.parse(aiRewrite) : false,
+        apptReminderSmsEnabled: apptReminderSms
+          ? JSON.parse(apptReminderSms)
+          : false,
       });
     } catch (e) {
       logError(e, "useSettingsStore.loadSettings");
@@ -133,6 +151,24 @@ export const useSettingsStore = create((set) => ({
       await AsyncStorage.setItem(KEYS.showWeekends, JSON.stringify(val));
     } catch (e) {
       logError(e, `useSettingsStore.setShowWeekends val=${val}`);
+    }
+  },
+
+  setAiRewriteEnabled: async (val) => {
+    try {
+      set({ aiRewriteEnabled: val });
+      await AsyncStorage.setItem(KEYS.aiRewrite, JSON.stringify(val));
+    } catch (e) {
+      logError(e, `useSettingsStore.setAiRewriteEnabled val=${val}`);
+    }
+  },
+
+  setApptReminderSmsEnabled: async (val) => {
+    try {
+      set({ apptReminderSmsEnabled: val });
+      await AsyncStorage.setItem(KEYS.apptReminderSms, JSON.stringify(val));
+    } catch (e) {
+      logError(e, `useSettingsStore.setApptReminderSmsEnabled val=${val}`);
     }
   },
 

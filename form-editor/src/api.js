@@ -13,10 +13,12 @@ const base =
   import.meta.env.VITE_API_BASE ??
   "https://wwspvjsnkkgdziixbeei.supabase.co/functions/v1/form-editor";
 const LOCAL_KEY = "kensa-form-template";
+const LOCAL_WALK_KEY = "kensa-walkthrough-template";
 
 // Server's draft_updated_at echo — optimistic-concurrency baseline so two
-// open tabs can't silently clobber each other.
+// open tabs can't silently clobber each other. Tracked per designer.
 let lastUpdatedAt = null;
+let lastWalkUpdatedAt = null;
 
 async function request(path, options = {}) {
   const res = await fetch(`${base}${path}?t=${encodeURIComponent(token)}`, {
@@ -66,6 +68,39 @@ export async function saveTemplate({ name, schema }) {
 export async function publishTemplate() {
   if (!hasToken) return { local: true };
   return request("/api/publish", { method: "POST" });
+}
+
+// ── Walkthrough (data-capture) template — same org, separate document ────────
+
+export async function loadWalkthrough() {
+  if (!hasToken) {
+    try {
+      const raw = localStorage.getItem(LOCAL_WALK_KEY);
+      if (raw) return JSON.parse(raw);
+    } catch (_) {}
+    return { name: null, schema: null };
+  }
+  const data = await request("/api/walkthrough");
+  lastWalkUpdatedAt = data?.draftUpdatedAt ?? null;
+  return data;
+}
+
+export async function saveWalkthrough({ name, schema }) {
+  if (!hasToken) {
+    localStorage.setItem(LOCAL_WALK_KEY, JSON.stringify({ name, schema }));
+    return { local: true };
+  }
+  const data = await request("/api/walkthrough", {
+    method: "PUT",
+    body: JSON.stringify({ name, schema, baseUpdatedAt: lastWalkUpdatedAt }),
+  });
+  lastWalkUpdatedAt = data?.draftUpdatedAt ?? lastWalkUpdatedAt;
+  return data;
+}
+
+export async function publishWalkthrough() {
+  if (!hasToken) return { local: true };
+  return request("/api/walkthrough/publish", { method: "POST" });
 }
 
 // Upload a processed (downscaled) PNG/JPEG for an image element. In local

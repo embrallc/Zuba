@@ -35,31 +35,38 @@ export default function KeyboardToolbar({
             />
           </TouchableOpacity>
 
-          <TouchableOpacity
-            onPress={onPrev}
-            disabled={!canGoPrev}
-            hitSlop={theme.layout.hitSlop.medium}
-            style={styles.btn}
-          >
-            <MaterialCommunityIcons
-              name="chevron-left"
-              size={26}
-              color={canGoPrev ? theme.colors.primary : theme.colors.textFine}
-            />
-          </TouchableOpacity>
+          {/* Field navigation only makes sense with multiple fields — hosts
+              with a single input (e.g. the photo-note modal) omit onPrev/onNext
+              and get a clean dismiss-only toolbar. */}
+          {onPrev && onNext ? (
+            <>
+              <TouchableOpacity
+                onPress={onPrev}
+                disabled={!canGoPrev}
+                hitSlop={theme.layout.hitSlop.medium}
+                style={styles.btn}
+              >
+                <MaterialCommunityIcons
+                  name="chevron-left"
+                  size={26}
+                  color={canGoPrev ? theme.colors.primary : theme.colors.textFine}
+                />
+              </TouchableOpacity>
 
-          <TouchableOpacity
-            onPress={onNext}
-            disabled={!canGoNext}
-            hitSlop={theme.layout.hitSlop.medium}
-            style={styles.btn}
-          >
-            <MaterialCommunityIcons
-              name="chevron-right"
-              size={26}
-              color={canGoNext ? theme.colors.primary : theme.colors.textFine}
-            />
-          </TouchableOpacity>
+              <TouchableOpacity
+                onPress={onNext}
+                disabled={!canGoNext}
+                hitSlop={theme.layout.hitSlop.medium}
+                style={styles.btn}
+              >
+                <MaterialCommunityIcons
+                  name="chevron-right"
+                  size={26}
+                  color={canGoNext ? theme.colors.primary : theme.colors.textFine}
+                />
+              </TouchableOpacity>
+            </>
+          ) : null}
 
           {onSave && (
             <TouchableOpacity

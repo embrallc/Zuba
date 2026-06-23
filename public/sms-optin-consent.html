@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Zuba — SMS Appointment Reminder Consent & Opt-In</title>
+<!--
+  PURPOSE: Opt-in / consent documentation for Twilio A2P 10DLC campaign review,
+  and a script inspectors use to collect customer consent for SMS reminders.
+
+  BEFORE PUBLISHING: replace every [BRACKETED] placeholder with your real value
+  (support email/phone, website, and the Privacy Policy / SMS Terms URLs once
+  your landing page is live).
+-->
+<style>
+  :root { --ink:#1c1c2e; --muted:#5b5b6b; --line:#e4e4ee; --brand:#5b5bd6; --soft:#f6f6fb; }
+  * { box-sizing:border-box; }
+  body {
+    font-family:-apple-system,system-ui,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    color:var(--ink); line-height:1.55; margin:0; background:#fff;
+  }
+  .wrap { max-width:760px; margin:0 auto; padding:48px 28px 80px; }
+  header { border-bottom:2px solid var(--brand); padding-bottom:18px; margin-bottom:28px; }
+  h1 { font-size:1.6rem; margin:0 0 4px; }
+  h2 { font-size:1.12rem; margin:32px 0 10px; }
+  .sub { color:var(--muted); font-size:.95rem; }
+  p { margin:8px 0; }
+  ul { margin:8px 0; padding-left:22px; }
+  li { margin:4px 0; }
+  .card {
+    background:var(--soft); border:1px solid var(--line); border-radius:10px;
+    padding:16px 18px; margin:12px 0;
+  }
+  .quote {
+    border-left:4px solid var(--brand); background:#fafaff;
+    padding:14px 18px; margin:12px 0; border-radius:0 8px 8px 0;
+  }
+  .quote em { color:var(--muted); }
+  .msg {
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    background:#fff; border:1px solid var(--line); border-radius:8px;
+    padding:12px 14px; margin:10px 0; font-size:.9rem; white-space:pre-wrap;
+  }
+  .label { font-weight:600; font-size:.82rem; text-transform:uppercase; letter-spacing:.04em; color:var(--brand); margin-bottom:4px; }
+  .meta { color:var(--muted); font-size:.85rem; }
+  a { color:var(--brand); }
+  .foot { margin-top:40px; padding-top:16px; border-top:1px solid var(--line); color:var(--muted); font-size:.82rem; }
+  @media print { .wrap { padding:0; } body { font-size:12px; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>SMS Appointment Reminder — Consent &amp; Opt-In</h1>
+    <div class="sub">
+      Program (brand): <strong>Zuba</strong> &nbsp;•&nbsp;
+      Operated by: <strong>Embra LLC</strong> &nbsp;•&nbsp;
+      Website: <strong>apps.embrallc.com</strong>
+    </div>
+  </header>
+
+  <h2>1. Program overview</h2>
+  <p>
+    Zuba is a home-inspection scheduling app used by professional home inspectors.
+    With the customer's consent, inspectors send a single <strong>appointment-reminder
+    text message</strong> before a scheduled home inspection. These messages are
+    <strong>transactional</strong> (service reminders tied to an appointment the
+    customer booked) — they are not marketing or promotional.
+  </p>
+  <div class="card">
+    <strong>Use case:</strong> Appointment reminders<br />
+    <strong>Message frequency:</strong> Low — typically 1–2 messages per inspection
+    (a reminder before the appointment, plus any confirmation/HELP/STOP replies).<br />
+    <strong>Who sends:</strong> The customer's home inspector, through Zuba.<br />
+    <strong>Who receives:</strong> Customers who scheduled a home inspection and
+    explicitly agreed to reminders.
+  </div>
+
+  <h2>2. How customers opt in</h2>
+  <p>
+    Consent is collected <strong>directly by the inspector at the time the inspection
+    is scheduled</strong> (by phone, in person, or via a booking form). The customer
+    provides their mobile number and gives explicit permission to receive reminder
+    texts before the inspector enables reminders for that appointment. Consent is
+    <strong>not a condition of service</strong> — a customer can decline reminders and
+    still book their inspection. Customers can opt out at any time (see §5).
+  </p>
+
+  <h2>3. Opt-in script (what the inspector asks the customer)</h2>
+
+  <div class="label">Spoken / phone &amp; in person</div>
+  <div class="quote">
+    "As part of scheduling your home inspection, we can send a text reminder before
+    your appointment. Would you like that? These are appointment reminders only —
+    message frequency varies (usually 1–2 messages), message and data rates may
+    apply, and you can reply <strong>STOP</strong> at any time to opt out or
+    <strong>HELP</strong> for help. Your number is used only for these reminders and
+    is never sold. Do I have your permission to text appointment reminders to this
+    number?"
+  </div>
+
+  <div class="label">Written / booking form / checkbox</div>
+  <div class="quote">
+    ☐ <strong>Yes, text me appointment reminders.</strong>
+    <em>By checking this box and providing my mobile number, I agree to receive SMS
+    appointment reminders from Zuba (operated by Embra LLC) at the number provided.
+    Message frequency varies. Message &amp; data rates may apply. Reply STOP to
+    cancel, HELP for help. Consent is not a condition of purchase. See our
+    <a href="https://zuba-legal.pages.dev/privacy">Privacy Policy</a> and
+    <a href="https://zuba-legal.pages.dev/sms-terms">SMS Terms</a>.</em>
+  </div>
+
+  <h2>4. Sample messages</h2>
+
+  <div class="label">Appointment reminder</div>
+  <div class="msg">Zuba: Reminder — your home inspection with [Inspector/Company] is tomorrow, [Date] at [Time], at [Address]. Questions? Call [phone]. Reply STOP to opt out, HELP for help.</div>
+
+  <div class="label">Reply to HELP</div>
+  <div class="msg">Zuba appointment reminders. For help, contact support@embrallc.com. Msg &amp; data rates may apply. Reply STOP to unsubscribe.</div>
+
+  <div class="label">Reply to STOP</div>
+  <div class="msg">You have been unsubscribed from Zuba appointment reminders and will receive no further messages. Reply HELP for help.</div>
+
+  <h2>5. Opt-out &amp; help</h2>
+  <ul>
+    <li><strong>Opt out:</strong> Customers can reply <strong>STOP</strong> to any
+      message to immediately unsubscribe and receive no further texts.</li>
+    <li><strong>Help:</strong> Customers can reply <strong>HELP</strong>, or contact
+      <strong>support@embrallc.com</strong> .</li>
+    <li>Standard carrier <strong>message and data rates may apply.</strong></li>
+    <li><strong>Message frequency varies</strong> and is low (appointment reminders only).</li>
+  </ul>
+
+  <h2>6. Privacy</h2>
+  <p>
+    Mobile numbers are collected solely to send appointment reminders and are
+    <strong>never sold or shared with third parties for marketing</strong>, nor shared
+    with any party for their own marketing. Carriers (e.g., for message delivery) are
+    not permitted to use the information for any other purpose. Full details:
+    <a href="https://zuba-legal.pages.dev/privacy">https://zuba-legal.pages.dev/privacy</a>.
+  </p>
+
+  <div class="foot">
+    Zuba is a product of Embra LLC. &nbsp;•&nbsp; Contact: support@embrallc.com
+    &nbsp;•&nbsp; Last updated: 06/2026.<br />
+    This page documents how Zuba collects SMS consent for appointment reminders, for
+    carrier and A2P 10DLC review.
+  </div>
+
+</div>
+</body>
+</html>

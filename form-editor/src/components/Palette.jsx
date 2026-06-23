@@ -1,5 +1,6 @@
-import { FORM_BINDINGS } from "../../../shared/formBindings";
+import { bindingGroups } from "../bindings";
 import { MIME, setPayload } from "../dnd";
+import { useEditorStore } from "../store";
 
 function DragItem({ mime, payload, className = "", children }) {
   return (
@@ -14,6 +15,8 @@ function DragItem({ mime, payload, className = "", children }) {
 }
 
 export default function Palette() {
+  const walkthroughSchema = useEditorStore((s) => s.walkthroughSchema);
+  const groups = bindingGroups(walkthroughSchema);
   return (
     <div className="palette">
       <h3>Sections</h3>
@@ -76,7 +79,13 @@ export default function Palette() {
         Drag onto the page for a standalone value, or drop inside a text block
         to mix with your own words.
       </div>
-      {FORM_BINDINGS.groups.map((group) => (
+      {groups.length === 0 && (
+        <div className="hint">
+          Design your walkthrough form first — its fields appear here to drop
+          into the report.
+        </div>
+      )}
+      {groups.map((group) => (
         <div key={group.id}>
           <h3>
             {group.label}

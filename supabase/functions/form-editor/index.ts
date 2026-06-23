@@ -322,6 +322,124 @@ serve(async (req) => {
       return json({ error: "method_not_allowed" }, 405);
     }
 
+    // ── Walkthrough (data-capture) template — same org, separate document ───
+    if (
+      subPath === "/api/walkthrough" ||
+      subPath === "/api/walkthrough/publish"
+    ) {
+      const tok = await validateToken(admin, rawToken);
+      if (!tok) return json({ error: "invalid_token" }, 401);
+
+      if (subPath === "/api/walkthrough" && req.method === "GET") {
+        const { data, error } = await admin
+          .from("walkthrough_templates")
+          .select(
+            "name, draft_schema, draft_updated_at, published_at, published_version",
+          )
+          .eq("org_sk", tok.org_sk)
+          .maybeSingle();
+        if (error) {
+          logError("walkthrough_read_failed", error, { org: tok.org_sk });
+          return json({ error: "db_error" }, 500);
+        }
+        return json({
+          name: data?.name ?? null,
+          schema: data?.draft_schema ?? null,
+          draftUpdatedAt: data?.draft_updated_at ?? null,
+          publishedAt: data?.published_at ?? null,
+          publishedVersion: data?.published_version ?? 0,
+        });
+      }
+
+      if (subPath === "/api/walkthrough" && req.method === "PUT") {
+        const body = await req.json().catch(() => null);
+        const schema = body?.schema;
+        if (!schema || typeof schema !== "object") {
+          return json({ error: "missing_schema" }, 400);
+        }
+        if (JSON.stringify(schema).length > MAX_SCHEMA_BYTES) {
+          return json({ error: "schema_too_large" }, 413);
+        }
+
+        const { data: existing } = await admin
+          .from("walkthrough_templates")
+          .select("draft_updated_at")
+          .eq("org_sk", tok.org_sk)
+          .maybeSingle();
+
+        // Optimistic concurrency — compare as instants, not strings (Postgres
+        // serializes "+00:00", we write "...Z").
+        const existingMs = existing?.draft_updated_at
+          ? new Date(existing.draft_updated_at).getTime()
+          : NaN;
+        const baseMs = body?.baseUpdatedAt
+          ? new Date(body.baseUpdatedAt).getTime()
+          : NaN;
+        if (
+          Number.isFinite(existingMs) &&
+          Number.isFinite(baseMs) &&
+          existingMs !== baseMs
+        ) {
+          return json(
+            { error: "conflict", draftUpdatedAt: existing.draft_updated_at },
+            409,
+          );
+        }
+
+        const nowIso = new Date().toISOString();
+        const { error } = await admin.from("walkthrough_templates").upsert(
+          {
+            org_sk: tok.org_sk,
+            name:
+              typeof body?.name === "string" && body.name.trim()
+                ? body.name.trim().slice(0, 120)
+                : "Walkthrough",
+            draft_schema: schema,
+            draft_updated_at: nowIso,
+            updated_by: tok.user_id,
+          },
+          { onConflict: "org_sk" },
+        );
+        if (error) {
+          logError("walkthrough_save_failed", error, { org: tok.org_sk });
+          return json({ error: "db_error" }, 500);
+        }
+        return json({ draftUpdatedAt: nowIso });
+      }
+
+      if (subPath === "/api/walkthrough/publish" && req.method === "POST") {
+        const { data: row, error: readErr } = await admin
+          .from("walkthrough_templates")
+          .select("draft_schema, published_version")
+          .eq("org_sk", tok.org_sk)
+          .maybeSingle();
+        if (readErr || !row?.draft_schema) {
+          return json({ error: "nothing_to_publish" }, 400);
+        }
+        const nowIso = new Date().toISOString();
+        const nextVersion = (row.published_version ?? 0) + 1;
+        const { error } = await admin
+          .from("walkthrough_templates")
+          .update({
+            published_schema: row.draft_schema,
+            published_at: nowIso,
+            published_version: nextVersion,
+          })
+          .eq("org_sk", tok.org_sk);
+        if (error) {
+          logError("walkthrough_publish_failed", error, { org: tok.org_sk });
+          return json({ error: "db_error" }, 500);
+        }
+        logInfo("walkthrough_published", {
+          org: tok.org_sk,
+          version: nextVersion,
+        });
+        return json({ publishedAt: nowIso, publishedVersion: nextVersion });
+      }
+
+      return json({ error: "method_not_allowed" }, 405);
+    }
+
     // ── App route: mint / revoke editor links (Supabase JWT, owner only) ───
     if (req.method === "POST") {
       const authHeader = req.headers.get("Authorization") ?? "";

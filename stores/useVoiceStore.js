@@ -1,8 +1,8 @@
 import { create } from "zustand";
 
 // Global voice-dictation state. Lives independently from any screen so the
-// recognition session can survive navigation between inspectionform and the
-// photonote modal without restarting.
+// recognition session can survive navigation between the inspection form and
+// the photo markup editor without restarting.
 //
 // Field-switch model:
 // - `currentField` is the field that should receive new transcripts.

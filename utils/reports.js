@@ -70,7 +70,13 @@ async function downloadAndRecord(inspection, signedUrl, generatedAtMs) {
     throw new Error("Couldn't download the report.");
   }
   const updated = await setInspectionLocalReport(sk, dest, generatedAtMs);
-  if (updated) useInspectionStore.getState().update(updated);
+  if (updated) {
+    // Only reflect into the active store if the inspection is already there —
+    // never inject a completed/archived inspection back into the active lists
+    // (generating/viewing a report from the Archive must not "un-complete" it).
+    const store = useInspectionStore.getState();
+    if (store.inspections[sk]) store.update(updated);
+  }
   return dest;
 }
 

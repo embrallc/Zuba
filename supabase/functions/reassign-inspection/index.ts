@@ -5,10 +5,11 @@
 // For each assignment:
 //   - Verifies the caller is an owner or admin of the inspection's org
 //   - Verifies the new user is in the same org
-//   - Calls the `reassign_inspection` RPC to cascade user_id through
-//     descriptions, details, and sms_status
-//   - For every detail with a cloud photo, moves the storage object to the
-//     new owner's prefix and updates cloud_picture_uri
+//   - Calls the `reassign_inspection` RPC to move user_id onto the inspection,
+//     its inspection_forms row, and sms_status
+//   - Walks the form's answers JSON; for every captured photo, moves the
+//     storage object to the new owner's prefix and rewrites its cloudUri, then
+//     writes the updated answers back so clients pull the new paths
 //
 // Response: { results: [{ inspection_sk, ok, error? }] }
 
@@ -126,38 +127,102 @@ async function reassignOne(
     return { inspection_sk, ok: false, error: "target user not in your org" };
   }
 
-  // Cascade DB updates and get the list of details that need their storage
-  // objects moved.
-  const { data: details, error: rpcErr } = await admin.rpc(
-    "reassign_inspection",
-    { p_inspection_sk: inspection_sk, p_new_user_id: new_user_id },
-  );
+  // Move user_id onto the inspection, its form, and sms_status (with version
+  // bumps so clients refresh).
+  const { error: rpcErr } = await admin.rpc("reassign_inspection", {
+    p_inspection_sk: inspection_sk,
+    p_new_user_id: new_user_id,
+  });
   if (rpcErr) return { inspection_sk, ok: false, error: rpcErr.message };
 
-  // Move storage objects (best effort — log any individual failure and keep
-  // going so a single bad photo doesn't abort the whole reassign).
-  for (const d of (details ?? []) as { detail_sk: string; old_cloud_uri: string }[]) {
-    const oldPath = d.old_cloud_uri;
-    if (!oldPath) continue;
-    const newPath = swapUserIdInPath(oldPath, new_user_id);
-    if (newPath === oldPath) continue;
-
-    const { error: moveErr } = await admin.storage
-      .from(BUCKET)
-      .move(oldPath, newPath);
-    if (moveErr) {
-      console.warn(
-        `[reassign-inspection] storage move failed sk=${d.detail_sk} from=${oldPath} to=${newPath} err=${moveErr.message}`,
-      );
-      continue;
+  // Relocate the form's photos. They live as refs inside answers JSON now, so
+  // load the form, walk it, move each storage object to the new owner's
+  // prefix, rewrite the ref's cloudUri, and (if anything moved) save answers
+  // back with a fresh _version so the recipient pulls the new paths.
+  const { data: form, error: formErr } = await admin
+    .from("inspection_forms")
+    .select("answers, _version")
+    .eq("inspection_sk", inspection_sk)
+    .maybeSingle();
+  if (formErr) {
+    // The user_id reassignment already succeeded; surface the photo problem
+    // but don't claim the whole reassign failed.
+    console.warn(
+      `[reassign-inspection] could not load form sk=${inspection_sk} err=${formErr.message}`,
+    );
+    return { inspection_sk, ok: true };
+  }
+  if (form?.answers) {
+    const moved = await relocateAnswerPhotos(admin, form.answers, new_user_id);
+    if (moved) {
+      const { error: saveErr } = await admin
+        .from("inspection_forms")
+        .update({
+          answers: form.answers,
+          _version: (form._version ?? 1) + 1,
+          _last_changed_at: Date.now(),
+        })
+        .eq("inspection_sk", inspection_sk);
+      if (saveErr) {
+        console.warn(
+          `[reassign-inspection] saving relocated photo paths failed sk=${inspection_sk} err=${saveErr.message}`,
+        );
+      }
     }
-    await admin
-      .from("inspection_details")
-      .update({ cloud_picture_uri: newPath })
-      .eq("inspection_detail_sk", d.detail_sk);
   }
 
   return { inspection_sk, ok: true };
+}
+
+// A photo field's answer is an array of objects (each a photo ref with id +
+// cloudUri); a checkbox answer is an array of strings. The object/string split
+// is enough to tell them apart without the schema — same heuristic sync uses.
+function isPhotoArray(value: unknown): value is Record<string, unknown>[] {
+  return (
+    Array.isArray(value) &&
+    value.some((el) => el && typeof el === "object" && "id" in el)
+  );
+}
+
+// Walk answers.sections[*].instances[*].fields[*], moving every cloud photo to
+// the new owner's path prefix and rewriting cloudUri in place. Returns whether
+// anything was actually moved (so the caller knows to persist + bump version).
+async function relocateAnswerPhotos(
+  admin: SupabaseClient,
+  answers: { sections?: Record<string, { instances?: { fields?: Record<string, unknown> }[] }> },
+  newUserId: string,
+): Promise<boolean> {
+  let moved = false;
+  const sections = answers?.sections;
+  if (!sections || typeof sections !== "object") return false;
+  for (const sec of Object.values(sections)) {
+    for (const inst of sec?.instances ?? []) {
+      const fields = inst?.fields;
+      if (!fields || typeof fields !== "object") continue;
+      for (const value of Object.values(fields)) {
+        if (!isPhotoArray(value)) continue;
+        for (const ref of value) {
+          const oldPath = ref?.cloudUri as string | undefined;
+          if (!oldPath) continue;
+          const newPath = swapUserIdInPath(oldPath, newUserId);
+          if (newPath === oldPath) continue;
+
+          const { error: moveErr } = await admin.storage
+            .from(BUCKET)
+            .move(oldPath, newPath);
+          if (moveErr) {
+            console.warn(
+              `[reassign-inspection] storage move failed photo=${ref.id} from=${oldPath} to=${newPath} err=${moveErr.message}`,
+            );
+            continue;
+          }
+          ref.cloudUri = newPath;
+          moved = true;
+        }
+      }
+    }
+  }
+  return moved;
 }
 
 // Path layout is `{orgSk}/{userId}/{detailSk}/{ts}.jpg`. Swap segment 2.

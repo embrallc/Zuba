@@ -1,10 +1,9 @@
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { theme } from "@theme";
 import { CameraView, useCameraPermissions } from "expo-camera";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { useRouter } from "expo-router";
 import { useRef, useState } from "react";
 import {
-  ActivityIndicator,
   FlatList,
   Image,
   StyleSheet,
@@ -13,24 +12,22 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { addInspectionPhoto } from "../db/inspectionForm";
 import { logError } from "../db/logs";
+import { usePhotoCaptureStore } from "../stores/usePhotoWorkflow";
 
 export default function CameraScreen() {
   const router = useRouter();
-  const { sectionSk } = useLocalSearchParams();
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = useRef(null);
 
-  // Each entry: { tempUri }. The temp URI drives the thumbnail strip;
-  // handleDone processes each capture into the app's photo cache (downscale +
-  // JPEG) — nothing is written to the user's Photos library.
+  // Each entry: { tempUri }. The temp URI drives the thumbnail strip; handleDone
+  // hands the captures back to the walkthrough form, which processes each into
+  // the app's photo cache — nothing is written to the user's Photos library.
   const [captured, setCaptured] = useState([]);
   const [capturing, setCapturing] = useState(false);
-  const [saving, setSaving] = useState(false);
 
   async function handleCapture() {
-    if (capturing || saving || !cameraRef.current) return;
+    if (capturing || !cameraRef.current) return;
     setCapturing(true);
     try {
       const photo = await cameraRef.current.takePictureAsync({
@@ -45,25 +42,15 @@ export default function CameraScreen() {
     }
   }
 
-  async function handleDone() {
+  function handleDone() {
     if (captured.length === 0) {
       router.back();
       return;
     }
-    setSaving(true);
-    try {
-      // Reverse so DB insertion order matches capture order (most recent last).
-      const ordered = [...captured].reverse();
-      for (const item of ordered) {
-        await addInspectionPhoto({
-          descriptionSk: sectionSk,
-          sourceUri: item.tempUri,
-        });
-      }
-    } catch (e) {
-      logError(e, "CameraScreen.handleDone");
-    }
-    // Navigate back after all saves — useFocusEffect in inspectionform reloads
+    // Reverse so order matches capture order (most recent last), then hand the
+    // raw temp URIs back to the walkthrough form to process into the answers.
+    const orderedUris = [...captured].reverse().map((c) => c.tempUri);
+    usePhotoCaptureStore.getState().setCaptures(orderedUris);
     router.back();
   }
 
@@ -98,7 +85,6 @@ export default function CameraScreen() {
       <SafeAreaView edges={["top"]} style={styles.topBar}>
         <TouchableOpacity
           onPress={() => router.back()}
-          disabled={saving}
           hitSlop={theme.layout.hitSlop.medium}
           style={styles.topBtn}
         >
@@ -108,14 +94,10 @@ export default function CameraScreen() {
         {captured.length > 0 && (
           <TouchableOpacity
             onPress={handleDone}
-            disabled={saving || capturing}
+            disabled={capturing}
             style={styles.doneBtn}
           >
-            {saving ? (
-              <ActivityIndicator color="#fff" size="small" />
-            ) : (
-              <Text style={styles.doneBtnText}>Done ({captured.length})</Text>
-            )}
+            <Text style={styles.doneBtnText}>Done ({captured.length})</Text>
           </TouchableOpacity>
         )}
       </SafeAreaView>
@@ -140,7 +122,7 @@ export default function CameraScreen() {
       <SafeAreaView edges={["bottom"]} style={styles.shutterArea}>
         <TouchableOpacity
           onPress={handleCapture}
-          disabled={capturing || saving}
+          disabled={capturing}
           activeOpacity={0.7}
           style={styles.shutterOuter}
         >

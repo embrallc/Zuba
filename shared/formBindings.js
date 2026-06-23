@@ -60,16 +60,6 @@ export const FORM_BINDINGS = {
         { key: "inspection.summary", label: "Report Summary", type: "text", source: "Inspections.Summary", scope: "static" },
       ],
     },
-    {
-      id: "section",
-      label: "Walkthrough Section",
-      scope: "section",
-      fields: [
-        { key: "section.name", label: "Section Name", type: "text", source: "InspectionDescription.Description", scope: "section" },
-        { key: "section.notes", label: "Section Notes", type: "text", source: "InspectionDescription.Notes", scope: "section" },
-        { key: "section.severity", label: "Severity", type: "text", source: "InspectionDescription.SeverityLevel", scope: "section" },
-      ],
-    },
   ],
 };
 
