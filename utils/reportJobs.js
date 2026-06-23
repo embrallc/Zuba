@@ -94,14 +94,19 @@ export function subscribeToJob(jobId, onRow) {
         filter: `id=eq.${jobId}`,
       },
       (payload) => {
-        console.log(`[reportJobs] realtime payload job=${jobId}`, payload?.new?.status);
         if (active && payload?.new) onRow(payload.new);
       },
     )
     .subscribe((status, err) => {
-      // SUBSCRIBED = good. CHANNEL_ERROR/TIMED_OUT = the app won't receive row
-      // updates (RLS/auth/publication issue) and will appear stuck on "Queued".
-      console.log(`[reportJobs] channel status job=${jobId}: ${status}`, err ?? "");
+      // CHANNEL_ERROR/TIMED_OUT means the app won't receive row updates
+      // (RLS/auth/publication issue) and would appear stuck on "Queued". Only
+      // surface that failure path; SUBSCRIBED is the silent happy case.
+      if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+        logError(
+          new Error(`report_jobs realtime ${status}: ${err?.message ?? ""}`),
+          `reportJobs.subscribeToJob job=${jobId}`,
+        );
+      }
     });
   return () => {
     active = false;
