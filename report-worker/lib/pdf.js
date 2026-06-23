@@ -28,7 +28,7 @@ export async function buildMockPdf({ inspectionId, orgId, jobId } = {}) {
   draw(`Job: ${jobId ?? "—"}`);
   y -= 10;
   draw("This mock confirms the report pipeline works end to end:", 11, font, muted);
-  draw("app → Cloud Run → Storage + report_jobs → Realtime.", 11, font, muted);
+  draw("app -> Cloud Run -> Storage + report_jobs -> Realtime.", 11, font, muted);
   draw("The real report rendering ports into this worker next.", 11, font, muted);
 
   return await pdf.save();

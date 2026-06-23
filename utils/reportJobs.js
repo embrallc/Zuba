@@ -94,10 +94,15 @@ export function subscribeToJob(jobId, onRow) {
         filter: `id=eq.${jobId}`,
       },
       (payload) => {
+        console.log(`[reportJobs] realtime payload job=${jobId}`, payload?.new?.status);
         if (active && payload?.new) onRow(payload.new);
       },
     )
-    .subscribe();
+    .subscribe((status, err) => {
+      // SUBSCRIBED = good. CHANNEL_ERROR/TIMED_OUT = the app won't receive row
+      // updates (RLS/auth/publication issue) and will appear stuck on "Queued".
+      console.log(`[reportJobs] channel status job=${jobId}: ${status}`, err ?? "");
+    });
   return () => {
     active = false;
     try {
