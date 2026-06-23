@@ -76,20 +76,63 @@ export async function requestWorker({ jobId, inspectionSk, orgSk }) {
   return res.json().catch(() => ({}));
 }
 
-// Subscribe to a single report_jobs row. Fires onRow(row) on each change, plus
-// one initial fetch so a job that finished before realtime attached isn't
-// missed. Returns an unsubscribe fn.
+// Status ordering — updates may only move FORWARD. Guards against a stale
+// initial fetch (or out-of-order delivery) regressing a newer status back to
+// "Queued". failed/completed are both terminal.
+const STATUS_RANK = { pending: 0, processing: 1, completed: 2, failed: 2 };
+const TERMINAL = new Set(["completed", "failed"]);
+const POLL_MS = 4000;
+// Give up after this long so a worker that died mid-render (row stuck on
+// 'processing') doesn't poll forever. Generous — a heavy photo report can take
+// a couple of minutes.
+const MAX_POLL_MS = 5 * 60 * 1000;
+
+// Track a single report_jobs row to a terminal state. Fires onRow(row) on each
+// FORWARD change. Uses Realtime for snappiness AND a polling backstop, because
+// Realtime alone is unreliable for long jobs: a 30–60s render gives the socket
+// ample chance to drop (screen sleep, backgrounding, a network blip) and miss
+// the `completed` event, leaving the UI stuck on "Queued". The report_jobs row
+// is the source of truth, so we poll it until it settles. Returns unsubscribe.
 export function subscribeToJob(jobId, onRow) {
   let active = true;
-  supabase
-    .from("report_jobs")
-    .select("*")
-    .eq("id", jobId)
-    .maybeSingle()
-    .then(({ data }) => {
-      if (active && data) onRow(data);
-    })
-    .catch(() => {});
+  let lastRank = -1;
+  let pollTimer = null;
+
+  const stopPolling = () => {
+    if (pollTimer) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+  };
+
+  // Apply a row only if it advances the status; stop everything once terminal.
+  const emit = (row) => {
+    if (!active || !row?.status) return;
+    const rank = STATUS_RANK[row.status] ?? 0;
+    if (rank < lastRank) return; // never regress
+    lastRank = rank;
+    onRow(row);
+    if (TERMINAL.has(row.status)) {
+      stopPolling();
+      active = false;
+      try {
+        supabase.removeChannel(channel);
+      } catch (_) {}
+    }
+  };
+
+  const fetchOnce = () => {
+    supabase
+      .from("report_jobs")
+      .select("*")
+      .eq("id", jobId)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (data) emit(data);
+      })
+      .catch(() => {});
+  };
+
   const channel = supabase
     .channel(`report_job:${jobId}`)
     .on(
@@ -101,13 +144,12 @@ export function subscribeToJob(jobId, onRow) {
         filter: `id=eq.${jobId}`,
       },
       (payload) => {
-        if (active && payload?.new) onRow(payload.new);
+        if (payload?.new) emit(payload.new);
       },
     )
     .subscribe((status, err) => {
-      // CHANNEL_ERROR/TIMED_OUT means the app won't receive row updates
-      // (RLS/auth/publication issue) and would appear stuck on "Queued". Only
-      // surface that failure path; SUBSCRIBED is the silent happy case.
+      // Don't hard-fail on a realtime error — the poll backstop covers it — but
+      // log it so a chronically broken subscription is visible.
       if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
         logError(
           new Error(`report_jobs realtime ${status}: ${err?.message ?? ""}`),
@@ -115,8 +157,35 @@ export function subscribeToJob(jobId, onRow) {
         );
       }
     });
+
+  // Initial read (catches a job that finished before realtime attached) + the
+  // polling backstop until the row settles or the deadline passes.
+  const startedAt = Date.now();
+  fetchOnce();
+  pollTimer = setInterval(() => {
+    if (Date.now() - startedAt > MAX_POLL_MS) {
+      const wasActive = active;
+      stopPolling();
+      active = false;
+      try {
+        supabase.removeChannel(channel);
+      } catch (_) {}
+      if (wasActive) {
+        onRow({
+          id: jobId,
+          status: "failed",
+          error:
+            "Timed out waiting for the report. It may still be finishing — reopen in a moment.",
+        });
+      }
+      return;
+    }
+    fetchOnce();
+  }, POLL_MS);
+
   return () => {
     active = false;
+    stopPolling();
     try {
       supabase.removeChannel(channel);
     } catch (_) {}
@@ -135,7 +204,12 @@ export async function startCloudReport(inspection, onUpdate) {
       orgSk,
     });
   } catch (e) {
+    // The worker didn't ack (it sets 'processing' before responding 202), so
+    // the row is still 'pending' and won't move. Tear down the poll FIRST so it
+    // can't fetch that stale 'pending' and regress the UI back to "Queued",
+    // then surface the dispatch failure.
     logError(e, `reportJobs.startCloudReport sk=${inspection.InspectionSk}`);
+    unsubscribe();
     onUpdate({ id: jobId, status: "failed", error: e?.message ?? "Request failed" });
   }
   return { jobId, unsubscribe };
