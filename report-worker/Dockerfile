@@ -1,6 +1,7 @@
-# Node 20 on Debian slim. Slim (not alpine) keeps native modules painless when
-# `sharp` is added for image downscaling in the follow-up.
-FROM node:20-slim
+# Node 22 on Debian slim. 22 (not 20) ships a global WebSocket, which recent
+# @supabase/supabase-js requires at createClient time. Slim (not alpine) also
+# keeps native modules painless when `sharp` is added in the follow-up.
+FROM node:22-slim
 
 WORKDIR /app
 
