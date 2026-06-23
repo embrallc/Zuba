@@ -1,5 +1,5 @@
 import express from "express";
-import { buildMockPdf } from "./lib/pdf.js";
+import { renderInspectionReport } from "./lib/render.js";
 import {
   buildStoragePath,
   loadJob,
@@ -37,12 +37,17 @@ app.post("/api/generate-report", async (req, res) => {
     });
   }
 
-  // 1. Validate body.
-  const { jobId, inspectionId, orgId } = req.body ?? {};
-  if (!jobId || !inspectionId || !orgId) {
+  // 1. Validate body. orgId is intentionally NOT trusted from the client — we
+  // read it from the job row below. tzOffsetMinutes is optional (defaults to
+  // UTC) and only affects how dates are formatted in the PDF.
+  const { jobId, inspectionId } = req.body ?? {};
+  const tzOffsetMin = Number.isFinite(req.body?.tzOffsetMinutes)
+    ? Number(req.body.tzOffsetMinutes)
+    : 0;
+  if (!jobId || !inspectionId) {
     return res.status(400).json({
       error: "missing_fields",
-      required: ["jobId", "inspectionId", "orgId"],
+      required: ["jobId", "inspectionId"],
     });
   }
 
@@ -75,22 +80,28 @@ app.post("/api/generate-report", async (req, res) => {
   }
   res.status(202).json({ jobId, status: "processing" });
 
-  // 5. Detached background generation.
+  // 5. Detached background generation. orgId comes from the job row (server
+  // trusted); the renderer falls back to the user's profile org if it's null.
   void generateInBackground({
     jobId,
     inspectionId,
-    orgId,
+    orgId: job.org_sk ?? null,
     userId: user.id,
+    tzOffsetMin,
   });
 });
 
-async function generateInBackground({ jobId, inspectionId, orgId, userId }) {
+async function generateInBackground({ jobId, inspectionId, orgId, userId, tzOffsetMin }) {
   try {
-    // Step A: (stub) fetch any extra inspection data. The mock doesn't need it;
-    // the real renderer will pull the inspection + walkthrough form here.
-
-    // Step B: build the PDF buffer.
-    const bytes = await buildMockPdf({ inspectionId, orgId, jobId });
+    // Step A+B: fetch the inspection + walkthrough form + report layout and
+    // render the PDF (photos downscaled with sharp). Throws ReportError with a
+    // user-meaningful message for no-template / not-found cases.
+    const { bytes, pageCount, skippedPhotos } = await renderInspectionReport({
+      inspectionSk: inspectionId,
+      userId,
+      orgSk: orgId,
+      tzOffsetMin,
+    });
 
     // Step C: upload to the private bucket (service role).
     const storagePath = buildStoragePath({ orgId, userId, inspectionId });
@@ -106,6 +117,7 @@ async function generateInBackground({ jobId, inspectionId, orgId, userId }) {
       userId,
       storagePath,
       sizeBytes: bytes.length,
+      pageCount,
     });
     await setJobStatus(jobId, {
       status: "completed",
@@ -113,7 +125,9 @@ async function generateInBackground({ jobId, inspectionId, orgId, userId }) {
       storage_path: storagePath,
       error: null,
     });
-    console.log(`[worker] job ${jobId} completed -> ${storagePath}`);
+    console.log(
+      `[worker] job ${jobId} completed -> ${storagePath} (${pageCount}p, skipped ${skippedPhotos} photo(s))`,
+    );
   } catch (e) {
     const message = e?.message ?? String(e);
     console.error(`[worker] job ${jobId} FAILED:`, message);

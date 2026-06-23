@@ -60,13 +60,14 @@ export async function recordReport({
   userId,
   storagePath,
   sizeBytes,
+  pageCount = 1,
 }) {
   const { error } = await admin.from("inspection_reports").insert({
     inspection_sk: inspectionId,
     org_sk: orgId ?? null,
     user_id: userId,
     storage_path: storagePath,
-    page_count: 1,
+    page_count: pageCount,
     size_bytes: sizeBytes,
     generated_at: new Date().toISOString(),
   });

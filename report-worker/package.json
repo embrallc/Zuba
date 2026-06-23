@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Zuba PDF report generation worker (Cloud Run). Receives a job, generates the report PDF, uploads to Supabase Storage, and updates report_jobs.",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "scripts": {
     "start": "node index.js",
@@ -14,6 +14,7 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.45.4",
     "express": "^4.19.2",
-    "pdf-lib": "^1.17.1"
+    "pdf-lib": "^1.17.1",
+    "sharp": "^0.33.5"
   }
 }

@@ -6,6 +6,7 @@
 // detached, and flips the row to completed/failed — which streams back here via
 // the subscription.
 
+import dayjs from "dayjs";
 import { logError } from "../db/logs";
 import { useSettingsStore } from "../stores/useSettingsStore";
 import { supabase } from "./supabase";
@@ -60,7 +61,13 @@ export async function requestWorker({ jobId, inspectionSk, orgSk }) {
       "Content-Type": "application/json",
       Authorization: `Bearer ${jwt}`,
     },
-    body: JSON.stringify({ jobId, inspectionId: inspectionSk, orgId: orgSk }),
+    // orgId is read from the job row server-side (not trusted from here).
+    // tzOffsetMinutes formats dates in the PDF for the inspector's timezone.
+    body: JSON.stringify({
+      jobId,
+      inspectionId: inspectionSk,
+      tzOffsetMinutes: dayjs().utcOffset(),
+    }),
   });
   if (res.status !== 202 && !res.ok) {
     const body = await res.text().catch(() => "");
