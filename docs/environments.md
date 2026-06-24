@@ -19,6 +19,32 @@ Future: when real users arrive, split staging/prod into **separate orgs**.
 
 ---
 
+## API keys (new Supabase key system)
+
+Every project — local, staging, prod — uses the **new API key system**. Two
+formats, and only these:
+
+- **`sb_publishable_…`** — public, safe in the app bundle. This is what
+  `EXPO_PUBLIC_SUPABASE_KEY` carries. RLS is the security boundary; the
+  publishable key grants nothing on its own.
+- **`sb_secret_…`** — service-role, **server-only**, bypasses RLS. Lives in the
+  Railway worker (`SUPABASE_SERVICE_ROLE_KEY`), the pg_cron Vault entry
+  (`service_role_key`), and is auto-injected into Edge Functions as
+  `SUPABASE_SERVICE_ROLE_KEY`. Never ships to a client, never committed.
+
+The **legacy JWT keys** (`anon` / `service_role`, the long `eyJ…` tokens) are
+deprecated and must be **disabled** on every project (see the one-time setup
+steps). The API gateway accepts both formats, but our functions check
+`jwt === SUPABASE_SERVICE_ROLE_KEY` for internal calls — so every external holder
+of the service key MUST use the `sb_secret_…` value (a legacy JWT reaches the
+function but fails the `===` check → 401).
+
+Get the values from **Dashboard → Project Settings → API Keys** (reveal the
+secret key). Rotating the secret means updating every holder at once — see the
+rotate runbook.
+
+---
+
 ## Prerequisites
 
 - **Supabase CLI** (`npx supabase`, v2.107+ already used here).
@@ -91,6 +117,9 @@ Commit it. Never edit a project's schema in the dashboard.
    eas env:create --environment preview --name EXPO_PUBLIC_REPORT_WORKER_URL --value <staging worker URL> --visibility plaintext
    ```
    Build: `eas build --profile preview`.
+10. **Disable legacy keys:** Dashboard → API Keys → Legacy API keys → disable
+    `anon` + `service_role`. Staging only ever used the new keys, so this is a
+    no-op safety lock — confirm nothing references a JWT first.
 
 ---
 
@@ -106,6 +135,10 @@ Commit it. Never edit a project's schema in the dashboard.
 3. **Secrets are already set** on this project (live Stripe/Resend/etc.). Keep them LIVE.
 4. **Deploy** by tagging a release: `git tag v1.x.y && git push --tags` → approve the *Deploy Production* workflow.
 5. **App EAS env (production):** `eas env:create --environment production ...` with the prod URL, prod publishable key, prod worker URL. Build `eas build --profile production`.
+6. **Migrate off legacy keys** (one-time hardening — prod predates the new key system):
+   - Railway prod worker: set `SUPABASE_SERVICE_ROLE_KEY` = prod `sb_secret_…`, redeploy, check `/health` → `configured:true` and run one report.
+   - Confirm Vault `service_role_key` = prod `sb_secret_…` (the cron-401 fix already did this) and EAS prod `EXPO_PUBLIC_SUPABASE_KEY` = prod `sb_publishable_…` (app already uses it).
+   - Then Dashboard → API Keys → **Legacy API keys → disable** `anon` + `service_role`. (No real users; any stale build baked with a legacy anon JWT would stop working — rebuild it with the publishable key.)
 
 ---
 
