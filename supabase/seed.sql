@@ -46,8 +46,10 @@ BEGIN
   )
   ON CONFLICT (provider, provider_id) DO NOTHING;
 
+  -- Ownership lives on public.users (organizations.user_id was dropped); read
+  -- the org the handle_new_user trigger just created from there.
   SELECT org_sk INTO v_org_sk
-    FROM public.organizations WHERE user_id = v_user_id LIMIT 1;
+    FROM public.users WHERE id = v_user_id;
 
   -- A couple of OPEN inspections so the list/calendar isn't empty. org_sk is
   -- set automatically by the inspections_set_org_sk trigger; status defaults to
