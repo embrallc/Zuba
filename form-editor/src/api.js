@@ -9,9 +9,12 @@ export const hasToken = !!token;
 // The editor is statically hosted (Cloudflare Pages) because Supabase rewrites
 // text/html to text/plain on its shared domain — so API calls go cross-origin
 // to the edge function, which already answers CORS.
-const base =
-  import.meta.env.VITE_API_BASE ??
-  "https://wwspvjsnkkgdziixbeei.supabase.co/functions/v1/form-editor";
+//
+// VITE_API_BASE is environment-specific (staging vs prod form-editor function)
+// and is baked in at build time from the per-mode env file (.env.production /
+// .env.staging). It is only used when a token is present; local `vite dev` runs
+// in mock mode (no token) and never reaches the network.
+const base = import.meta.env.VITE_API_BASE ?? "";
 const LOCAL_KEY = "kensa-form-template";
 const LOCAL_WALK_KEY = "kensa-walkthrough-template";
 

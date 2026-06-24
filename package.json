@@ -7,10 +7,18 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
+    "sb:start": "npx supabase start",
+    "sb:stop": "npx supabase stop",
+    "sb:status": "npx supabase status",
+    "sb:reset": "npx supabase db reset",
+    "sb:serve": "npx supabase functions serve --env-file supabase/functions/.env",
+    "sb:diff": "npx supabase db diff",
     "editor:dev": "npm --prefix form-editor run dev",
     "editor:build": "npm --prefix form-editor run build",
+    "editor:build:staging": "npm --prefix form-editor run build -- --mode staging",
     "editor:deploy": "npm run editor:build && npx wrangler pages deploy form-editor/dist --project-name=kensa-form-editor",
-    "editor:deploy-api": "npx supabase functions deploy form-editor --no-verify-jwt"
+    "editor:deploy:staging": "npm run editor:build:staging && npx wrangler pages deploy form-editor/dist --project-name=kensa-form-editor-staging",
+    "editor:deploy-api": "npx supabase functions deploy form-editor"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",

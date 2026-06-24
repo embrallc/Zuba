@@ -1,0 +1,48 @@
+# Deploy database migrations + Edge Functions to the PRODUCTION Supabase project.
+#
+# Trigger: a tagged release (`v*`) or manual dispatch. The job runs in the
+# `production` GitHub Environment — add required reviewers to that environment
+# (Settings → Environments → production) so every prod deploy needs a manual
+# approval click. This is the gate between "merged to main / live on staging"
+# and "live in production".
+#
+# Required GitHub config:
+#   secrets.SUPABASE_ACCESS_TOKEN  — personal access token
+#   secrets.PROD_DB_PASSWORD       — production project's database password
+#   vars.PROD_PROJECT_ID           — production project ref
+#
+# Edge Function secrets are seeded once per project (see docs/environments.md).
+name: Deploy Production (Supabase)
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+concurrency:
+  group: supabase-prod
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production # protected — configure required reviewers for the approval gate
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.PROD_DB_PASSWORD }}
+      PROJECT_ID: ${{ vars.PROD_PROJECT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Link to production project
+        run: supabase link --project-ref "$PROJECT_ID"
+
+      - name: Push migrations
+        run: supabase db push
+
+      - name: Deploy Edge Functions (verify_jwt per config.toml)
+        run: supabase functions deploy
