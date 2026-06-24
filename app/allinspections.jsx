@@ -23,6 +23,7 @@ import {
 } from "../db/inspections";
 import { useInspectionStore } from "../stores/useInspectionStore";
 import { useSettingsStore } from "../stores/useSettingsStore";
+import { isOnline } from "../utils/connectivity";
 import { supabase } from "../utils/supabase";
 import { syncAll } from "../utils/sync";
 
@@ -141,6 +142,13 @@ export default function AllInspectionsScreen() {
 
   async function handleSave() {
     if (saving || pendingPayload.length === 0) return;
+    if (!isOnline()) {
+      Alert.alert(
+        "You're offline",
+        "Connect to the internet, then try saving again.",
+      );
+      return;
+    }
     setSaving(true);
     try {
       const { data, error } = await supabase.functions.invoke(

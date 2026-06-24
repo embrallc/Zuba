@@ -20,6 +20,7 @@ import { logError } from "../db/logs";
 import { getAllInspections } from "../db/inspections";
 import { useInspectionStore } from "../stores/useInspectionStore";
 import { useSettingsStore } from "../stores/useSettingsStore";
+import { isOnline } from "../utils/connectivity";
 import { supabase } from "../utils/supabase";
 import { syncAll } from "../utils/sync";
 
@@ -112,6 +113,13 @@ export default function UnassignedRecordsScreen() {
       .filter(([, uid]) => !!uid)
       .map(([inspection_sk, new_user_id]) => ({ inspection_sk, new_user_id }));
     if (payload.length === 0) return;
+    if (!isOnline()) {
+      Alert.alert(
+        "You're offline",
+        "Connect to the internet, then try saving again.",
+      );
+      return;
+    }
 
     setSaving(true);
     try {
