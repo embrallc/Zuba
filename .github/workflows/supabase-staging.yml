@@ -1,0 +1,53 @@
+# Deploy database migrations + Edge Functions to the STAGING Supabase project.
+#
+# Trigger: every push to `main` that touches the backend (or manual dispatch).
+# Staging is the integration environment — it auto-tracks main so what's merged
+# is always live there for QA before a tagged release promotes it to prod.
+#
+# Required GitHub config (Settings → Secrets and variables → Actions):
+#   secrets.SUPABASE_ACCESS_TOKEN  — personal access token (supabase.com/dashboard/account/tokens)
+#   secrets.STAGING_DB_PASSWORD    — staging project's database password
+#   vars.STAGING_PROJECT_ID        — staging project ref (e.g. abcd...)
+#
+# NOTE: Edge Function *secrets* (Stripe/Gemini/Resend/etc.) are seeded ONCE per
+# project via `supabase secrets set` — see docs/environments.md. This workflow
+# only ships code + schema, never secrets.
+name: Deploy Staging (Supabase)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "supabase/migrations/**"
+      - "supabase/functions/**"
+      - "supabase/config.toml"
+      - ".github/workflows/supabase-staging.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: supabase-staging
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: staging
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.STAGING_DB_PASSWORD }}
+      PROJECT_ID: ${{ vars.STAGING_PROJECT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Link to staging project
+        run: supabase link --project-ref "$PROJECT_ID"
+
+      - name: Push migrations
+        run: supabase db push --yes
+
+      - name: Deploy Edge Functions (verify_jwt per config.toml)
+        run: supabase functions deploy
