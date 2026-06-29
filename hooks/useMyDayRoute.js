@@ -32,6 +32,16 @@ export function useMyDayRoute({ enabled = true } = {}) {
     setError(null);
 
     try {
+      // 0. Auth gate. my-day-route is verify_jwt=true, so calling it without a
+      // session 401s. The My Day tab can mount for a beat while signed-out (the
+      // dev client restores the last route before the login redirect lands), so
+      // bail silently here — no location prompt, no EF call, no error banner.
+      // The finally still resets loading/inflight; refresh() re-runs post-login.
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (!session) return;
+
       // 1. Foreground location permission. Request once; if denied, surface
       // via banner and exit. Caller can call refresh() to try again after
       // the user grants in Settings.
