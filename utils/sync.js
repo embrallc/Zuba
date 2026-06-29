@@ -84,20 +84,68 @@ function cloudInspectionToStoreObj(r) {
 // partial.
 const PULL_PAGE_SIZE = 1000;
 
-async function fetchAllUserRows(table, pkColumn, userId) {
-  const all = [];
+// ─── INCREMENTAL PULL: manifest diff ────────────────────────────────────────
+// Instead of re-downloading every full row each sync, fetch a cheap manifest of
+// (pk, server_updated_at) for all of a user's rows, compare each against the
+// server_updated_at we stored locally, and download the FULL row only where it
+// changed (or is new). server_updated_at is set ONLY by a DB trigger, so it's
+// the reliable "did this row change on the server" signal; the big payload (e.g.
+// inspection_forms.answers/schema_snapshot) transfers only for changed rows.
+
+// Cheap manifest: two small columns, no JSONB. Paged for the 1000-row PostgREST
+// cap. Throws on any page error so the caller's seen-set is never partial (a
+// partial seen-set would mis-drive the prune phase into deleting live rows).
+async function fetchManifest(table, pkColumn, userId) {
+  const manifest = new Map();
   for (let from = 0; ; from += PULL_PAGE_SIZE) {
     const { data, error } = await supabase
       .from(table)
-      .select("*")
+      .select(`${pkColumn}, server_updated_at`)
       .eq("user_id", userId)
       .order(pkColumn, { ascending: true })
       .range(from, from + PULL_PAGE_SIZE - 1);
     if (error) throw error;
-    all.push(...(data ?? []));
+    for (const r of data ?? []) {
+      manifest.set(r[pkColumn], r.server_updated_at ?? 0);
+    }
     if (!data || data.length < PULL_PAGE_SIZE) break;
   }
+  return manifest;
+}
+
+// Full rows for a specific set of pks (those the diff flagged), chunked to keep
+// each request's `in (...)` list bounded.
+const FETCH_CHUNK_SIZE = 200;
+
+async function fetchRowsByPks(table, pkColumn, pks) {
+  const all = [];
+  for (let i = 0; i < pks.length; i += FETCH_CHUNK_SIZE) {
+    const chunk = pks.slice(i, i + FETCH_CHUNK_SIZE);
+    const { data, error } = await supabase.from(table).select("*").in(pkColumn, chunk);
+    if (error) throw error;
+    all.push(...(data ?? []));
+  }
   return all;
+}
+
+// Compare a cloud manifest against the locally-stored ServerUpdatedAt for each
+// row. Returns the full set of cloud pks (drives prune) and the subset whose
+// full row must be fetched (new locally, or the cloud stamp moved ahead of ours).
+function diffManifest(manifest, localTable, localPkColumn) {
+  const local = new Map();
+  for (const r of db.getAllSync(
+    `SELECT ${localPkColumn} AS pk, IFNULL(ServerUpdatedAt, 0) AS sut FROM ${localTable}`,
+  )) {
+    local.set(r.pk, r.sut);
+  }
+  const seen = new Set();
+  const changedPks = [];
+  for (const [pk, cloudSut] of manifest) {
+    seen.add(pk);
+    const localSut = local.get(pk);
+    if (localSut === undefined || cloudSut > localSut) changedPks.push(pk);
+  }
+  return { seen, changedPks };
 }
 
 // PostgREST reports an RLS write rejection as 42501. The expected cause here
@@ -330,13 +378,18 @@ async function pushSmsStatus(userId) {
 // Tables without _version (SmsTemplate) use UpdatedAt.
 
 async function pullInspections(userId) {
-  const data = await fetchAllUserRows("inspections", "inspection_sk", userId);
+  const manifest = await fetchManifest("inspections", "inspection_sk", userId);
+  const { seen, changedPks } = diffManifest(
+    manifest,
+    "Inspections",
+    "InspectionSk",
+  );
+  if (changedPks.length === 0) return seen;
 
-  const seen = new Set();
+  const data = await fetchRowsByPks("inspections", "inspection_sk", changedPks);
   const store = useInspectionStore.getState();
 
-  for (const r of data ?? []) {
-    seen.add(r.inspection_sk);
+  for (const r of data) {
     try {
       const local = db.getFirstSync(
         `SELECT _version, PaymentState, ReportState, Paid FROM Inspections WHERE InspectionSk = ?`,
@@ -472,6 +525,13 @@ async function pullInspections(userId) {
         }
         }
       }
+      // Record that we've reconciled against this server stamp so the row is
+      // not re-fetched until the cloud changes it again (also advances a
+      // brand-new INSERT off its default 0).
+      await db.runAsync(
+        `UPDATE Inspections SET ServerUpdatedAt = ? WHERE InspectionSk = ?`,
+        [r.server_updated_at ?? 0, r.inspection_sk],
+      );
     } catch (e) {
       logError(e, `sync/pullInspections:${r?.inspection_sk ?? "unknown"}`);
     }
@@ -480,11 +540,16 @@ async function pullInspections(userId) {
 }
 
 async function pullSmsTemplates(userId) {
-  const data = await fetchAllUserRows("sms_templates", "sms_template_sk", userId);
+  const manifest = await fetchManifest("sms_templates", "sms_template_sk", userId);
+  const { seen, changedPks } = diffManifest(
+    manifest,
+    "SmsTemplate",
+    "SmsTemplateSk",
+  );
+  if (changedPks.length === 0) return seen;
 
-  const seen = new Set();
-  for (const r of data ?? []) {
-    seen.add(r.sms_template_sk);
+  const data = await fetchRowsByPks("sms_templates", "sms_template_sk", changedPks);
+  for (const r of data) {
     try {
       const local = db.getFirstSync(
         `SELECT UpdatedAt FROM SmsTemplate WHERE SmsTemplateSk = ?`,
@@ -515,6 +580,10 @@ async function pullSmsTemplates(userId) {
           [r.name, r.body, r.position ?? 0, r.updated_at, r.sms_template_sk],
         );
       }
+      await db.runAsync(
+        `UPDATE SmsTemplate SET ServerUpdatedAt = ? WHERE SmsTemplateSk = ?`,
+        [r.server_updated_at ?? 0, r.sms_template_sk],
+      );
     } catch (e) {
       logError(e, `sync/pullSmsTemplates:${r?.sms_template_sk ?? "unknown"}`);
     }
@@ -523,11 +592,12 @@ async function pullSmsTemplates(userId) {
 }
 
 async function pullSmsStatus(userId) {
-  const data = await fetchAllUserRows("sms_status", "sms_status_sk", userId);
+  const manifest = await fetchManifest("sms_status", "sms_status_sk", userId);
+  const { seen, changedPks } = diffManifest(manifest, "SmsStatus", "SmsStatusSk");
+  if (changedPks.length === 0) return seen;
 
-  const seen = new Set();
-  for (const r of data ?? []) {
-    seen.add(r.sms_status_sk);
+  const data = await fetchRowsByPks("sms_status", "sms_status_sk", changedPks);
+  for (const r of data) {
     try {
       const local = db.getFirstSync(
         `SELECT _version FROM SmsStatus WHERE SmsStatusSk = ?`,
@@ -567,6 +637,10 @@ async function pullSmsStatus(userId) {
           ],
         );
       }
+      await db.runAsync(
+        `UPDATE SmsStatus SET ServerUpdatedAt = ? WHERE SmsStatusSk = ?`,
+        [r.server_updated_at ?? 0, r.sms_status_sk],
+      );
     } catch (e) {
       logError(e, `sync/pullSmsStatus:${r?.sms_status_sk ?? "unknown"}`);
     }
@@ -676,27 +750,33 @@ async function pushOneInspectionForm(r, userId, orgSk) {
       }
     }
 
-    const { error } = await supabase.from("inspection_forms").upsert(
-      {
-        inspection_sk: r.InspectionSk,
-        user_id: userId,
-        template_version: r.TemplateVersion ?? 0,
-        schema_snapshot: schemaSnapshot,
-        answers,
-        _version: r._version ?? 1,
-        _last_changed_at: r._lastChangedAt ?? null,
-        _deleted: !!r._deleted,
-      },
-      { onConflict: "inspection_sk" },
-    );
+    const { data: up, error } = await supabase
+      .from("inspection_forms")
+      .upsert(
+        {
+          inspection_sk: r.InspectionSk,
+          user_id: userId,
+          template_version: r.TemplateVersion ?? 0,
+          schema_snapshot: schemaSnapshot,
+          answers,
+          _version: r._version ?? 1,
+          _last_changed_at: r._lastChangedAt ?? null,
+          _deleted: !!r._deleted,
+        },
+        { onConflict: "inspection_sk" },
+      )
+      // Read back the trigger-set stamp so the manifest diff doesn't re-download
+      // this (potentially large) form on the very next sync.
+      .select("server_updated_at");
     if (error) throw error;
+    const serverSut = up?.[0]?.server_updated_at ?? null;
 
     // A row with a still-pending photo stays dirty so the upload retries.
     if (!uploadPending) {
       await db.runAsync(
-        `UPDATE InspectionForm SET Synced = 1
+        `UPDATE InspectionForm SET Synced = 1, ServerUpdatedAt = COALESCE(?, ServerUpdatedAt)
          WHERE InspectionSk = ? AND IFNULL(_lastChangedAt, 0) = ?`,
-        [r.InspectionSk, r._lastChangedAt ?? 0],
+        [serverSut, r.InspectionSk, r._lastChangedAt ?? 0],
       );
     }
     return { ok: true, pending: uploadPending };
@@ -750,14 +830,24 @@ export async function pushInspectionForm(sk) {
 }
 
 async function pullInspectionForms(userId) {
-  const data = await fetchAllUserRows(
+  const manifest = await fetchManifest(
     "inspection_forms",
     "inspection_sk",
     userId,
   );
-  const seen = new Set();
+  const { seen, changedPks } = diffManifest(
+    manifest,
+    "InspectionForm",
+    "InspectionSk",
+  );
+  if (changedPks.length === 0) return seen;
+
+  const data = await fetchRowsByPks(
+    "inspection_forms",
+    "inspection_sk",
+    changedPks,
+  );
   for (const r of data) {
-    seen.add(r.inspection_sk);
     try {
       const local = db.getFirstSync(
         `SELECT _version FROM InspectionForm WHERE InspectionSk = ?`,
@@ -798,6 +888,10 @@ async function pullInspectionForms(userId) {
           ],
         );
       }
+      await db.runAsync(
+        `UPDATE InspectionForm SET ServerUpdatedAt = ? WHERE InspectionSk = ?`,
+        [r.server_updated_at ?? 0, r.inspection_sk],
+      );
     } catch (e) {
       logError(
         e,

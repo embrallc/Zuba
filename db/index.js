@@ -375,4 +375,22 @@ export function initializeDatabase(userId) {
       );
     } catch (_) {}
   }
+
+  // Mirror of the cloud's server_updated_at (epoch micros). The incremental
+  // manifest-diff pull compares this against the cloud value to decide which
+  // rows actually changed; 0 = never fetched/changed (forces a fetch on first
+  // sight, then stays put while it matches the cloud's 0).
+  const serverStampTables = [
+    "Inspections",
+    "InspectionForm",
+    "SmsTemplate",
+    "SmsStatus",
+  ];
+  for (const table of serverStampTables) {
+    try {
+      _db.execSync(
+        `ALTER TABLE ${table} ADD COLUMN ServerUpdatedAt INTEGER NOT NULL DEFAULT 0`,
+      );
+    } catch (_) {}
+  }
 }
