@@ -23,6 +23,7 @@ import { getOrgTimezone, setOrgTimezone } from "../db/organizations";
 import { updateUserName } from "../db/users";
 import { useInspectionStore } from "../stores/useInspectionStore";
 import { useSettingsStore } from "../stores/useSettingsStore";
+import { ensureMediaWritePermission } from "../utils/inspectionPhotos";
 import { signOutAndClear, supabase } from "../utils/supabase";
 import { syncAll } from "../utils/sync";
 import { useSubscriptionStore } from "../stores/useSubscriptionStore";
@@ -74,6 +75,12 @@ export default function SettingsScreen() {
   const setApptReminderSmsEnabled = useSettingsStore(
     (s) => s.setApptReminderSmsEnabled,
   );
+  const persistPhotosToDevice = useSettingsStore((s) => s.persistPhotosToDevice);
+  const setPersistPhotosToDevice = useSettingsStore(
+    (s) => s.setPersistPhotosToDevice,
+  );
+  const photoAlbumEnabled = useSettingsStore((s) => s.photoAlbumEnabled);
+  const setPhotoAlbumEnabled = useSettingsStore((s) => s.setPhotoAlbumEnabled);
   const loadInspections = useInspectionStore((s) => s.load);
 
   // 'idle' | 'syncing' | 'done' | 'error'
@@ -138,6 +145,52 @@ export default function SettingsScreen() {
       setTimeout(() => setSyncStatus("idle"), 2500);
     }
   }
+  // Main "save photos to this device" toggle. Enabling it asks for write-only
+  // ("Add Photos") library access; if the user declines we leave the toggle
+  // off and point them at iOS/Android Settings to change their mind.
+  async function handleTogglePersistPhotos(val) {
+    if (!val) {
+      setPersistPhotosToDevice(false);
+      return;
+    }
+    const granted = await ensureMediaWritePermission({ full: false });
+    if (!granted) {
+      Alert.alert(
+        "Photo Access Needed",
+        "To save inspection photos to this device, allow photo access in Settings.",
+        [
+          { text: "Not Now", style: "cancel" },
+          { text: "Open Settings", onPress: () => Linking.openSettings() },
+        ],
+      );
+      return;
+    }
+    setPersistPhotosToDevice(true);
+  }
+
+  // Sub-toggle: file saves into a dedicated "Zuba" album. Albums need full
+  // (read-write) library access, so this escalates the permission; if the user
+  // won't grant full access we keep it off and explain why.
+  async function handleToggleAlbum(val) {
+    if (!val) {
+      setPhotoAlbumEnabled(false);
+      return;
+    }
+    const granted = await ensureMediaWritePermission({ full: true });
+    if (!granted) {
+      Alert.alert(
+        "Full Photo Access Needed",
+        "Organizing photos into a Zuba album needs full photo-library access. You can grant it in Settings, or leave this off to save to your camera roll instead.",
+        [
+          { text: "Not Now", style: "cancel" },
+          { text: "Open Settings", onPress: () => Linking.openSettings() },
+        ],
+      );
+      return;
+    }
+    setPhotoAlbumEnabled(true);
+  }
+
   const subscriptionStatus = useSubscriptionStore((s) => s.status);
   const refreshSubscription = useSubscriptionStore((s) => s.refreshStatus);
   const clearSubscription = useSubscriptionStore((s) => s.clear);
@@ -447,6 +500,24 @@ export default function SettingsScreen() {
           value={aiRewriteEnabled}
           onValueChange={setAiRewriteEnabled}
         />
+
+        <Text style={styles.sectionLabel}>PHOTOS</Text>
+
+        <SettingRow
+          label="Save photos to this device"
+          description="Also save photos you take to this phone's photo library, on top of the app and the cloud — a personal backup you can view in your gallery. Applies to new photos you take while this is on."
+          value={persistPhotosToDevice}
+          onValueChange={handleTogglePersistPhotos}
+        />
+
+        {persistPhotosToDevice && (
+          <SettingRow
+            label="Organize in a Zuba album"
+            description="Group saved photos into a dedicated “Zuba” album instead of your main camera roll. Needs full photo-library access."
+            value={photoAlbumEnabled}
+            onValueChange={handleToggleAlbum}
+          />
+        )}
 
         <Text style={styles.sectionLabel}>NOTIFICATIONS</Text>
 

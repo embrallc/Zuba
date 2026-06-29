@@ -38,6 +38,7 @@ import {
   deleteInspectionPhoto,
   processAndCachePhoto,
   resolvePhotoUri,
+  savePhotoToDevice,
 } from "../utils/inspectionPhotos";
 
 const clone = (o) => JSON.parse(JSON.stringify(o ?? { sections: {} }));
@@ -526,6 +527,11 @@ export default function InspectionFormScreen() {
         const { sectionId, instanceId, fieldId } = cap.target;
         const uris = cap.captures;
         usePhotoCaptureStore.getState().clear();
+        // Opt-in device-library save (Settings → Photos). Read once here, not
+        // reactively — camera captures only; library picks already live in the
+        // gallery so they're intentionally not saved.
+        const { persistPhotosToDevice, photoAlbumEnabled } =
+          useSettingsStore.getState();
         (async () => {
           for (const tempUri of uris) {
             const id = newId("p");
@@ -537,6 +543,9 @@ export default function InspectionFormScreen() {
               note: "",
               markup: null,
             });
+            if (persistPhotosToDevice && cachePath) {
+              await savePhotoToDevice(cachePath, { album: photoAlbumEnabled });
+            }
           }
         })();
       }

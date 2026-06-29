@@ -15,6 +15,8 @@ const KEYS = {
   integrations: "settings_integrations",
   aiRewrite: "settings_aiRewriteEnabled",
   apptReminderSms: "settings_apptReminderSmsEnabled",
+  persistPhotos: "settings_persistPhotosToDevice",
+  photoAlbum: "settings_photoAlbumEnabled",
 };
 
 // Default OFF until the user opts in.
@@ -59,6 +61,14 @@ export const useSettingsStore = create((set) => ({
   // inspection's HasApptReminder; the per-inspection toggle in Add/Edit overrides
   // it. Default OFF — it's opt-in (costs an SMS and needs client consent).
   apptReminderSmsEnabled: false,
+  // Opt-in: also save camera-captured inspection photos to the device's photo
+  // library (on top of the app cache + cloud bucket). Device-local — a storage
+  // preference for THIS phone, so it never rides the cloud users row. Default OFF.
+  persistPhotosToDevice: false,
+  // When persistPhotosToDevice is on, route saves into a dedicated "Zuba" album
+  // instead of the plain camera roll. Needs full (read-write) library access, so
+  // it's a second opt-in revealed only after the main toggle is granted. Default OFF.
+  photoAlbumEnabled: false,
 
   loadSettings: async () => {
     try {
@@ -71,6 +81,8 @@ export const useSettingsStore = create((set) => ({
         integrations,
         aiRewrite,
         apptReminderSms,
+        persistPhotos,
+        photoAlbum,
       ] = await Promise.all([
         AsyncStorage.getItem(KEYS.showWeekends),
         AsyncStorage.getItem(KEYS.userSk),
@@ -80,6 +92,8 @@ export const useSettingsStore = create((set) => ({
         AsyncStorage.getItem(KEYS.integrations),
         AsyncStorage.getItem(KEYS.aiRewrite),
         AsyncStorage.getItem(KEYS.apptReminderSms),
+        AsyncStorage.getItem(KEYS.persistPhotos),
+        AsyncStorage.getItem(KEYS.photoAlbum),
       ]);
       set({
         showWeekends: showWeekends ? JSON.parse(showWeekends) : false,
@@ -96,6 +110,10 @@ export const useSettingsStore = create((set) => ({
         apptReminderSmsEnabled: apptReminderSms
           ? JSON.parse(apptReminderSms)
           : false,
+        persistPhotosToDevice: persistPhotos
+          ? JSON.parse(persistPhotos)
+          : false,
+        photoAlbumEnabled: photoAlbum ? JSON.parse(photoAlbum) : false,
       });
     } catch (e) {
       logError(e, "useSettingsStore.loadSettings");
@@ -169,6 +187,24 @@ export const useSettingsStore = create((set) => ({
       await AsyncStorage.setItem(KEYS.apptReminderSms, JSON.stringify(val));
     } catch (e) {
       logError(e, `useSettingsStore.setApptReminderSmsEnabled val=${val}`);
+    }
+  },
+
+  setPersistPhotosToDevice: async (val) => {
+    try {
+      set({ persistPhotosToDevice: val });
+      await AsyncStorage.setItem(KEYS.persistPhotos, JSON.stringify(val));
+    } catch (e) {
+      logError(e, `useSettingsStore.setPersistPhotosToDevice val=${val}`);
+    }
+  },
+
+  setPhotoAlbumEnabled: async (val) => {
+    try {
+      set({ photoAlbumEnabled: val });
+      await AsyncStorage.setItem(KEYS.photoAlbum, JSON.stringify(val));
+    } catch (e) {
+      logError(e, `useSettingsStore.setPhotoAlbumEnabled val=${val}`);
     }
   },
 

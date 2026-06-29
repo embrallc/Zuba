@@ -61,7 +61,14 @@
       "expo-location",
       "expo-image-picker",
       "expo-camera",
-      "expo-media-library",
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Allow ClientManagement to access your photos to organize inspection photos into an album.",
+          "savePhotosPermission": "Allow ClientManagement to save inspection photos to your device.",
+          "isAccessMediaLocationEnabled": false
+        }
+      ],
       "expo-secure-store",
       [
         "expo-speech-recognition",
