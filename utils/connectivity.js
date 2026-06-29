@@ -37,11 +37,26 @@ let unsubscribe = null;
 // boot/refresh sync already in flight rather than duplicating it).
 export function startConnectivityWatch() {
   if (unsubscribe) return;
+  // Lazy-require so a binary missing the native module is handled HERE instead
+  // of crashing at a top-level import. A stale dev client may not THROW — it can
+  // hand back an undefined/partial module — so we feature-check before using it.
+  let NetInfo;
   try {
-    // Lazy-require so a binary missing the native module fails HERE, inside the
-    // guard, rather than crashing at a top-level import before this can catch it.
     const mod = require("@react-native-community/netinfo");
-    const NetInfo = mod?.default ?? mod;
+    NetInfo = mod?.default ?? mod;
+  } catch (e) {
+    console.log("[connectivity] NetInfo unavailable; skipping watch:", e?.message);
+    return;
+  }
+  if (!NetInfo || typeof NetInfo.addEventListener !== "function") {
+    // Module resolved but the native side isn't linked into this binary (an old
+    // dev client not yet rebuilt). isOnline() keeps its safe `true` default, so
+    // nothing is wrongly blocked offline — just skip the watch until a rebuild.
+    console.log("[connectivity] NetInfo native module missing; skipping watch.");
+    return;
+  }
+
+  try {
     unsubscribe = NetInfo.addEventListener((state) => {
       const next = isStateOnline(state);
       const cameOnline = next && !online;
