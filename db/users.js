@@ -51,15 +51,17 @@ export async function pullSelfUser(userSk) {
   }
 }
 
-// Update the current user's name in local SQLite + the cloud users row.
-// Returns true on success, false if either side failed (caller can revert).
+// Update the current user's name. CLOUD-FIRST on purpose: the Users row is NOT
+// part of the dirty-flag sync set, so a local-first write would have no retry —
+// an offline edit would leave SQLite showing a name the server never received
+// (and the server-side reminder job would keep using the stale one). So we write
+// the cloud first and only mirror it locally once accepted; on failure we touch
+// nothing and return false so the caller surfaces an error. This matches the
+// online-only, fail-visible model of the other org/profile settings.
+// Returns true on success, false if the cloud write failed.
 export async function updateUserName(userSk, { fname, lname }) {
+  if (!userSk) return false;
   try {
-    if (!userSk) return false;
-    await db.runAsync(
-      `UPDATE Users SET fname = ?, lname = ?, _lastChangedAt = ? WHERE UserId = ?`,
-      [fname ?? null, lname ?? null, dayjs().valueOf(), userSk],
-    );
     const { error } = await supabase
       .from("users")
       .update({ fname: fname ?? null, lname: lname ?? null })
@@ -68,6 +70,10 @@ export async function updateUserName(userSk, { fname, lname }) {
       logError(error, `db/users.updateUserName sk=${userSk}`);
       return false;
     }
+    await db.runAsync(
+      `UPDATE Users SET fname = ?, lname = ?, _lastChangedAt = ? WHERE UserId = ?`,
+      [fname ?? null, lname ?? null, dayjs().valueOf(), userSk],
+    );
     return true;
   } catch (e) {
     logError(e, `db/users.updateUserName sk=${userSk}`);

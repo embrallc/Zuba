@@ -21,6 +21,10 @@ import { useInspectionStore } from "../stores/useInspectionStore";
 import { useSettingsStore } from "../stores/useSettingsStore";
 import { useSmsStore } from "../stores/useSmsStore";
 import { runPull, startCalendarSync } from "../utils/calendarSync";
+import {
+  startConnectivityWatch,
+  stopConnectivityWatch,
+} from "../utils/connectivity";
 import { setupGlobalErrorHandler } from "../utils/globalErrorHandler";
 import {
   cancelUpcomingApptNotif,
@@ -137,6 +141,8 @@ export default function RootLayout() {
 
   useEffect(() => {
     configurePurchases();
+    // Watch connectivity so a reconnect immediately flushes the dirty queue.
+    startConnectivityWatch();
     const purchasesListener = addCustomerInfoListener((info) => {
       setCustomerInfo(info);
     });
@@ -193,6 +199,7 @@ export default function RootLayout() {
     return () => {
       authSubscription.unsubscribe();
       purchasesListener.remove();
+      stopConnectivityWatch();
     };
   }, []);
 
