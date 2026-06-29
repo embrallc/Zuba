@@ -22,6 +22,11 @@ function isFilePath(uri) {
 
 export const BUCKET = "inspection-images";
 
+// Name of the device photo-library album used when the user opts into
+// organizing saved inspection photos (Settings → Photos → "Organize in a Zuba
+// album"). Plain camera-roll saves don't touch this.
+const DEVICE_ALBUM = "Zuba";
+
 const PHOTOS_CACHE_DIR = `${FileSystem.cacheDirectory}photos/`;
 const MAX_DIMENSION = 1920;
 const COMPRESSION_QUALITY = 0.8;
@@ -281,6 +286,56 @@ export async function deleteCachedPhoto(detailSk) {
     });
   } catch (_e) {
     // cache file may simply not exist — nothing to surface
+  }
+}
+
+// Request the media-library permission needed to save a photo to the device.
+//   - `full: false` (default) → write-only ("Add Photos Only" on iOS), enough
+//     for a plain camera-roll save via saveToLibraryAsync.
+//   - `full: true` → full read-write, required to read/append an album.
+// Returns true when the granted access is sufficient for the requested mode.
+export async function ensureMediaWritePermission({ full = false } = {}) {
+  try {
+    // requestPermissionsAsync(writeOnly): pass true to ask for the lighter
+    // add-only permission, false to ask for full access.
+    const res = await MediaLibrary.requestPermissionsAsync(!full);
+    if (!res?.granted) return false;
+    // Album operations need read access too; "limited" iOS access can't
+    // enumerate/append our album reliably, so require full privileges there.
+    if (full && res.accessPrivileges && res.accessPrivileges !== "all") {
+      return false;
+    }
+    return true;
+  } catch (e) {
+    logError(e, `inspectionPhotos.ensureMediaWritePermission full=${full}`);
+    return false;
+  }
+}
+
+// Best-effort save of one already-cached photo to the device's photo library.
+// Never throws — a failed device-save must not block the cache/cloud pipeline.
+//   - album=false → save to the camera roll (saveToLibraryAsync; write-only ok).
+//   - album=true  → file the photo into the "Zuba" album (needs full access).
+// Caller is responsible for having obtained the matching permission first.
+export async function savePhotoToDevice(fileUri, { album = false } = {}) {
+  try {
+    if (!fileUri) return;
+    if (!album) {
+      await MediaLibrary.saveToLibraryAsync(fileUri);
+      return;
+    }
+    // Album path: create the asset, then drop it into the Zuba album. copyAsset
+    // = false moves the reference into the album instead of leaving a duplicate
+    // loose in the camera roll.
+    const asset = await MediaLibrary.createAssetAsync(fileUri);
+    const existing = await MediaLibrary.getAlbumAsync(DEVICE_ALBUM);
+    if (existing) {
+      await MediaLibrary.addAssetsToAlbumAsync([asset], existing, false);
+    } else {
+      await MediaLibrary.createAlbumAsync(DEVICE_ALBUM, asset, false);
+    }
+  } catch (e) {
+    logError(e, `inspectionPhotos.savePhotoToDevice album=${album}`);
   }
 }
 
