@@ -1,7 +1,12 @@
-import NetInfo from "@react-native-community/netinfo";
-
 import { logError } from "../db/logs";
 import { syncAll } from "./sync";
+
+// NetInfo is intentionally NOT imported at the top. It's a native module, and
+// its package throws at module-evaluation time when the native binary doesn't
+// include it (an old dev client not yet rebuilt). A top-level import would run
+// that throw during boot's module graph load — before any try/catch — and
+// white-screen the whole app. We lazy-require it inside startConnectivityWatch
+// instead, so a missing module is caught there and degrades gracefully.
 
 // Network-state awareness. The app is offline-first: local edits to owned data
 // queue via the `Synced = 0` dirty flag and push on the next syncAll. The job
@@ -33,6 +38,10 @@ let unsubscribe = null;
 export function startConnectivityWatch() {
   if (unsubscribe) return;
   try {
+    // Lazy-require so a binary missing the native module fails HERE, inside the
+    // guard, rather than crashing at a top-level import before this can catch it.
+    const mod = require("@react-native-community/netinfo");
+    const NetInfo = mod?.default ?? mod;
     unsubscribe = NetInfo.addEventListener((state) => {
       const next = isStateOnline(state);
       const cameOnline = next && !online;
