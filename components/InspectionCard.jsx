@@ -36,7 +36,7 @@ import { useMapStore } from "../stores/useMapStore";
 import { useSettingsStore } from "../stores/useSettingsStore";
 import { useSmsStore } from "../stores/useSmsStore";
 import { reconcileInspection } from "../utils/autoComms";
-import { generateInspectionReport } from "../utils/reports";
+import { deleteLocalReport, generateInspectionReport } from "../utils/reports";
 import { pushInspection, pushInspectionForm } from "../utils/sync";
 import RequestPaymentSheet from "./RequestPaymentSheet";
 
@@ -307,6 +307,10 @@ export default function InspectionCard({ inspection, onPress }) {
         message: `${clientLabel} marked complete.`,
         kind: "success",
       });
+      // Drop any cached PDF for this inspection — a completed report lives in the
+      // cloud and is re-fetched on demand from the archive, so caching it just
+      // grows the app's footprint. Fire-and-forget.
+      deleteLocalReport(inspection).catch(() => {});
       // Push the CLOSED status AND the walkthrough answers (so the server has
       // fresh form data to render), THEN nudge the reconciler so it snapshots
       // the org policy and auto-sends/holds the report. The form push must land

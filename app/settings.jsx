@@ -25,6 +25,7 @@ import { updateUserName } from "../db/users";
 import { useInspectionStore } from "../stores/useInspectionStore";
 import { useSettingsStore } from "../stores/useSettingsStore";
 import { ensureMediaWritePermission } from "../utils/inspectionPhotos";
+import { clearAllReportCache } from "../utils/reports";
 import { signOutAndClear, supabase } from "../utils/supabase";
 import { syncAll } from "../utils/sync";
 import { useSubscriptionStore } from "../stores/useSubscriptionStore";
@@ -159,6 +160,32 @@ export default function SettingsScreen() {
       setTimeout(() => setSyncStatus("idle"), 2500);
     }
   }
+  // Free up space: wipe the on-device report PDF cache. Reports re-download from
+  // the cloud on next view, so nothing is lost. (iOS has no per-app "clear cache"
+  // in OS settings, so this is the user's control on both platforms.)
+  function handleClearReportCache() {
+    Alert.alert(
+      "Clear cached reports",
+      "Remove report PDFs saved on this device to free up space? They'll re-download from the cloud the next time you open them.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Clear",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await clearAllReportCache();
+              Alert.alert("Done", "Cached reports were cleared.");
+            } catch (e) {
+              logError(e, "SettingsScreen.handleClearReportCache");
+              Alert.alert("Couldn't clear", "Please try again.");
+            }
+          },
+        },
+      ],
+    );
+  }
+
   // Main "save photos to this device" toggle. Enabling it asks for write-only
   // ("Add Photos") library access; if the user declines we leave the toggle
   // off and point them at iOS/Android Settings to change their mind.
@@ -639,6 +666,14 @@ export default function SettingsScreen() {
           onPress={() =>
             router.push({ pathname: "/archive", params: { type: "deleted" } })
           }
+        />
+
+        <Text style={styles.sectionLabel}>STORAGE</Text>
+
+        <NavRow
+          label="Clear cached reports"
+          description="Free up space by removing report PDFs saved on this device — they re-download from the cloud when you open them"
+          onPress={handleClearReportCache}
         />
 
         <SubscriptionSection
