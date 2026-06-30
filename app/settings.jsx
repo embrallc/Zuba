@@ -1,7 +1,7 @@
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { theme } from "@theme";
-import { useRouter } from "expo-router";
-import { useEffect, useRef, useState } from "react";
+import { useFocusEffect, useRouter } from "expo-router";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -17,6 +17,7 @@ import {
   View,
 } from "react-native";
 import { Guard } from "../components/Guard";
+import NotificationBadge from "../components/NotificationBadge";
 import { getAllInspections } from "../db/inspections";
 import { logError } from "../db/logs";
 import { getOrgTimezone, setOrgTimezone } from "../db/organizations";
@@ -82,6 +83,19 @@ export default function SettingsScreen() {
   const photoAlbumEnabled = useSettingsStore((s) => s.photoAlbumEnabled);
   const setPhotoAlbumEnabled = useSettingsStore((s) => s.setPhotoAlbumEnabled);
   const loadInspections = useInspectionStore((s) => s.load);
+  // Unread-cancellation badge (on the Cancelled archive row + the bounce).
+  const cancelCount = useSettingsStore((s) => s.unviewedCancelledCount);
+  const cancelPulse = useSettingsStore((s) => s.cancelBadgePulseKey);
+  const refreshCancelledCount = useSettingsStore((s) => s.refreshCancelledCount);
+  const bumpCancelBadgePulse = useSettingsStore((s) => s.bumpCancelBadgePulse);
+
+  // Recompute the count + replay the bounce each time Settings is entered.
+  useFocusEffect(
+    useCallback(() => {
+      refreshCancelledCount?.();
+      bumpCancelBadgePulse?.();
+    }, [refreshCancelledCount, bumpCancelBadgePulse]),
+  );
 
   // 'idle' | 'syncing' | 'done' | 'error'
   const [syncStatus, setSyncStatus] = useState("idle");
@@ -611,6 +625,15 @@ export default function SettingsScreen() {
           }
         />
         <NavRow
+          label="Cancelled Inspections"
+          description="View inspections clients cancelled by text and restore them if needed"
+          badge={cancelCount}
+          badgePulse={cancelPulse}
+          onPress={() =>
+            router.push({ pathname: "/archive", params: { type: "cancelled" } })
+          }
+        />
+        <NavRow
           label="Deleted Inspections"
           description="View deleted inspections and restore them if needed"
           onPress={() =>
@@ -1023,7 +1046,7 @@ function BusinessTimezoneCard({ orgSk }) {
   );
 }
 
-function NavRow({ label, description, onPress }) {
+function NavRow({ label, description, onPress, badge = 0, badgePulse = 0 }) {
   return (
     <TouchableOpacity
       style={rowStyles.container}
@@ -1036,6 +1059,11 @@ function NavRow({ label, description, onPress }) {
           <Text style={rowStyles.description}>{description}</Text>
         ) : null}
       </View>
+      <NotificationBadge
+        count={badge}
+        pulse={badgePulse}
+        style={rowStyles.badge}
+      />
       <MaterialCommunityIcons
         name="chevron-right"
         size={22}
@@ -1085,6 +1113,9 @@ const rowStyles = StyleSheet.create({
   description: {
     ...theme.typography.label,
     marginTop: 2,
+  },
+  badge: {
+    marginRight: theme.spacing.s,
   },
 });
 

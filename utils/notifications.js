@@ -122,12 +122,12 @@ export async function scheduleUpcomingApptNotif({
   try {
     if (!inspection?.InspectionSk) return null;
 
-    // Terminal-status gate. A completed/closed inspection must never carry a
-    // reminder. Checked before the ScheduledAt guard (and before any other
-    // gate) so that completing an inspection — which emits INSPECTION_UPDATED
-    // with Status='CLOSED' — actively cancels a previously-scheduled reminder
-    // rather than silently no-op'ing.
-    if (inspection.Status === "CLOSED") {
+    // Terminal-status gate. A completed/closed OR client-cancelled inspection
+    // must never carry a reminder. Checked before the ScheduledAt guard (and
+    // before any other gate) so that completing an inspection (INSPECTION_UPDATED
+    // with Status='CLOSED') or a client texting "X" (Status='CANCELLED') actively
+    // cancels a previously-scheduled reminder rather than silently no-op'ing.
+    if (inspection.Status === "CLOSED" || inspection.Status === "CANCELLED") {
       await cancelUpcomingApptNotif(inspection.InspectionSk);
       return null;
     }

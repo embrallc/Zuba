@@ -15,6 +15,7 @@ import {
 } from "react-native";
 import RequestPaymentSheet from "../components/RequestPaymentSheet";
 import {
+  getCancelledInspections,
   getCompletedInspections,
   getDeletedInspections,
   restoreInspection,
@@ -25,10 +26,11 @@ import { useBannerStore } from "../stores/useBannerStore";
 import { useInspectionStore } from "../stores/useInspectionStore";
 import { useSettingsStore } from "../stores/useSettingsStore";
 
-// Single screen serving two archives, selected by the `type` param:
+// Single screen serving three archives, selected by the `type` param:
 //   /archive?type=deleted    → soft-deleted rows (_deleted = 1)
 //   /archive?type=completed  → completed rows (Status = 'CLOSED')
-// Both let the user restore a record back into the active working set.
+//   /archive?type=cancelled  → client-cancelled rows (Status = 'CANCELLED')
+// All let the user restore a record back into the active working set.
 
 // Text columns the archive search scans (mirrors the My Day header search);
 // the formatted date string is matched separately in `filtered`.
@@ -56,17 +58,30 @@ const CONFIG = {
     actionLabel: "Reopen",
     load: getCompletedInspections,
   },
+  cancelled: {
+    title: "Cancelled Inspections",
+    icon: "close-circle-outline",
+    empty: "Nothing here. Inspections a client cancels by text will show up so you can restore them.",
+    actionLabel: "Restore",
+    load: getCancelledInspections,
+  },
 };
 
 export default function ArchiveScreen() {
   const router = useRouter();
   const params = useLocalSearchParams();
-  const type = params?.type === "completed" ? "completed" : "deleted";
+  const type =
+    params?.type === "completed" || params?.type === "cancelled"
+      ? params.type
+      : "deleted";
   const config = CONFIG[type];
 
   const addToStore = useInspectionStore((s) => s.add);
   const showBanner = useBannerStore((s) => s.show);
   const userProfile = useSettingsStore((s) => s.userProfile);
+  const markCancellationsViewed = useSettingsStore(
+    (s) => s.markCancellationsViewed,
+  );
 
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -103,7 +118,9 @@ export default function ArchiveScreen() {
     useCallback(() => {
       setLoading(true);
       reload();
-    }, [reload]),
+      // Opening the Cancelled archive clears the unread-cancellation badge.
+      if (type === "cancelled") markCancellationsViewed?.();
+    }, [reload, type, markCancellationsViewed]),
   );
 
   async function handleRestore(item) {
@@ -113,18 +130,20 @@ export default function ArchiveScreen() {
     setBusyId(sk);
     try {
       let restored;
-      if (type === "completed") {
-        restored = await setInspectionStatus(sk, "OPEN");
-      } else {
+      if (type === "deleted") {
         restored = await restoreInspection(sk);
+      } else {
+        // completed or cancelled → status back to OPEN (un-completes/un-cancels)
+        restored = await setInspectionStatus(sk, "OPEN");
       }
       // Re-add to the active store only if the row genuinely belongs there
-      // (not deleted, not still CLOSED). Restoring a deleted-but-completed
-      // row, for example, sends it back to the Completed archive instead.
+      // (not deleted, not still CLOSED/CANCELLED). Restoring a deleted-but-
+      // completed row, for example, sends it back to the Completed archive.
       const active =
         restored &&
         !restored._deleted &&
-        (restored.Status ?? "OPEN") !== "CLOSED";
+        (restored.Status ?? "OPEN") !== "CLOSED" &&
+        (restored.Status ?? "OPEN") !== "CANCELLED";
       if (active) addToStore(restored);
 
       setRows((prev) => prev.filter((r) => r.InspectionSk !== sk));

@@ -17,6 +17,7 @@ import {
 import Animated, { FadeInDown } from "react-native-reanimated";
 import InspectionCard from "../../components/InspectionCard";
 import MyDayDashboard from "../../components/MyDayDashboard";
+import NotificationBadge from "../../components/NotificationBadge";
 import { runDevQuery } from "../../db/devQuery";
 import { getAllInspections } from "../../db/inspections";
 import { logError } from "../../db/logs";
@@ -24,6 +25,7 @@ import { useDebouncedPress } from "../../hooks/useDebouncedPress";
 import { useMyDayRoute } from "../../hooks/useMyDayRoute";
 import { useInspectionStore } from "../../stores/useInspectionStore";
 import { useMapStore } from "../../stores/useMapStore";
+import { useSettingsStore } from "../../stores/useSettingsStore";
 import { syncAll } from "../../utils/sync";
 
 const FAB_SIZE = (theme?.layout?.iconSize?.l ?? 28) * 2;
@@ -71,6 +73,9 @@ export default function MyDayScreen() {
   const inspections = useInspectionStore((s) => s.inspections);
   const loadInspections = useInspectionStore((s) => s.load);
   const openGlobal = useMapStore((s) => s.openGlobal);
+  // Unread-cancellation badge over the Settings (menu) button.
+  const cancelCount = useSettingsStore((s) => s.unviewedCancelledCount);
+  const cancelPulse = useSettingsStore((s) => s.cancelBadgePulseKey);
 
   // My Day dashboard data. Fetches on mount; the hook handles location
   // permission, error banners, and inflight de-dupe.
@@ -204,6 +209,11 @@ export default function MyDayScreen() {
               name="menu"
               size={theme.layout.iconSize.l}
               color={theme.colors.icon}
+            />
+            <NotificationBadge
+              count={cancelCount}
+              pulse={cancelPulse}
+              style={styles.menuBadge}
             />
           </TouchableOpacity>
         </View>
@@ -347,6 +357,11 @@ const styles = StyleSheet.create({
   },
   headerBtn: {
     padding: theme.spacing.xs,
+  },
+  menuBadge: {
+    position: "absolute",
+    top: -2,
+    right: -2,
   },
 
   // Dashboard section — top 3/5

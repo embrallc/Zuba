@@ -1,5 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { create } from "zustand";
+import { getUnviewedCancelledCount } from "../db/inspections";
 import { logError } from "../db/logs";
 import {
   listNotificationSettings,
@@ -17,6 +18,7 @@ const KEYS = {
   apptReminderSms: "settings_apptReminderSmsEnabled",
   persistPhotos: "settings_persistPhotosToDevice",
   photoAlbum: "settings_photoAlbumEnabled",
+  cancelledViewedAt: "settings_cancelledViewedAt",
 };
 
 // Default OFF until the user opts in.
@@ -31,7 +33,7 @@ const DEFAULT_INTEGRATIONS = {
   googleCalendar: false,
 };
 
-export const useSettingsStore = create((set) => ({
+export const useSettingsStore = create((set, get) => ({
   showWeekends: false,
   userSk: null,
   // Cached from session.user_metadata at login. Authoritative copy lives on
@@ -70,6 +72,15 @@ export const useSettingsStore = create((set) => ({
   // it's a second opt-in revealed only after the main toggle is granted. Default OFF.
   photoAlbumEnabled: false,
 
+  // Unread-cancellation badge. cancelledViewedAt = epoch-ms of the last time the
+  // user opened the Cancelled archive; unviewedCancelledCount = CANCELLED rows
+  // whose cancellation is newer than that (derived from SQLite, not persisted).
+  // cancelBadgePulseKey: bump it to replay the badge's attention bounce
+  // (on app-enter + on entering Settings).
+  cancelledViewedAt: 0,
+  unviewedCancelledCount: 0,
+  cancelBadgePulseKey: 0,
+
   loadSettings: async () => {
     try {
       const [
@@ -83,6 +94,7 @@ export const useSettingsStore = create((set) => ({
         apptReminderSms,
         persistPhotos,
         photoAlbum,
+        cancelledViewedAt,
       ] = await Promise.all([
         AsyncStorage.getItem(KEYS.showWeekends),
         AsyncStorage.getItem(KEYS.userSk),
@@ -94,6 +106,7 @@ export const useSettingsStore = create((set) => ({
         AsyncStorage.getItem(KEYS.apptReminderSms),
         AsyncStorage.getItem(KEYS.persistPhotos),
         AsyncStorage.getItem(KEYS.photoAlbum),
+        AsyncStorage.getItem(KEYS.cancelledViewedAt),
       ]);
       set({
         showWeekends: showWeekends ? JSON.parse(showWeekends) : false,
@@ -114,12 +127,43 @@ export const useSettingsStore = create((set) => ({
           ? JSON.parse(persistPhotos)
           : false,
         photoAlbumEnabled: photoAlbum ? JSON.parse(photoAlbum) : false,
+        cancelledViewedAt: cancelledViewedAt
+          ? JSON.parse(cancelledViewedAt)
+          : 0,
       });
     } catch (e) {
       logError(e, "useSettingsStore.loadSettings");
       throw e;
     }
   },
+
+  // Recompute the unread-cancellation count from SQLite (CANCELLED rows newer
+  // than cancelledViewedAt). Call after the DB opens and whenever inspections
+  // change (DB_EVENTS.INSPECTION_UPDATED / the Realtime cancel handler).
+  refreshCancelledCount: async () => {
+    try {
+      const n = await getUnviewedCancelledCount(get().cancelledViewedAt);
+      set({ unviewedCancelledCount: n });
+    } catch (e) {
+      logError(e, "useSettingsStore.refreshCancelledCount");
+    }
+  },
+
+  // The user opened the Cancelled archive → everything is now "seen". Stamp the
+  // watermark forward and clear the badge.
+  markCancellationsViewed: async () => {
+    try {
+      const now = Date.now();
+      set({ cancelledViewedAt: now, unviewedCancelledCount: 0 });
+      await AsyncStorage.setItem(KEYS.cancelledViewedAt, JSON.stringify(now));
+    } catch (e) {
+      logError(e, "useSettingsStore.markCancellationsViewed");
+    }
+  },
+
+  // Replay the badge attention bounce (app-enter + entering Settings).
+  bumpCancelBadgePulse: () =>
+    set((s) => ({ cancelBadgePulseKey: s.cancelBadgePulseKey + 1 })),
 
   // Hydrate the notifications map from the SQLite NotificationSettings table.
   // SQLite is the authoritative local copy (cloud sync writes to it); AsyncStorage
