@@ -425,6 +425,10 @@ enabled = true
 [functions.ai-rewrite]
 verify_jwt = true
 
+[functions.appt-reminder-reply]
+# Twilio's servers hold no Supabase JWT; auth via the X-Twilio-Signature HMAC.
+verify_jwt = false
+
 [functions.delete-account]
 verify_jwt = true
 
@@ -452,6 +456,10 @@ verify_jwt = true
 [functions.revenuecat-webhook]
 # RevenueCat's servers hold no Supabase JWT; auth via shared RC_WEBHOOK_SECRET.
 verify_jwt = false
+
+[functions.send-appt-reminders]
+# Called server-to-server by the pg_cron hourly sweep with a service-role bearer.
+verify_jwt = true
 
 [functions.send-report-to-client]
 verify_jwt = true

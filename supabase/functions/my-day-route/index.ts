@@ -470,7 +470,8 @@ serve(async (req) => {
     // shrinks `remaining`, changes the fingerprint, and triggers a fresh plan
     // for the next stop. (`all` still counts them, so totalToday stays honest.)
     const remaining = all.filter((i) => {
-      if ((i.status ?? "OPEN") === "CLOSED") return false;
+      const st = i.status ?? "OPEN";
+      if (st === "CLOSED" || st === "CANCELLED") return false;
       const start = new Date(i.scheduled_at).getTime();
       return Number.isFinite(start) && start + apptMs > nowMs;
     });

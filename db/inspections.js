@@ -14,7 +14,7 @@ export async function getAllInspections() {
   try {
     return await db.getAllAsync(
       `SELECT * FROM Inspections
-       WHERE _deleted = 0 AND (Status IS NULL OR Status != 'CLOSED')
+       WHERE _deleted = 0 AND (Status IS NULL OR Status NOT IN ('CLOSED', 'CANCELLED'))
        ORDER BY ScheduledAt ASC`,
     );
   } catch (e) {
@@ -64,6 +64,39 @@ export async function getCompletedInspections() {
   } catch (e) {
     logError(e, "db/inspections.getCompletedInspections");
     throw e;
+  }
+}
+
+// Cancelled rows that aren't deleted, for the Archive → Cancelled restore
+// screen. A client texting "X" to their day-before reminder sets this status
+// server-side; the row arrives via Realtime/sync. Mirrors getCompletedInspections.
+export async function getCancelledInspections() {
+  try {
+    return await db.getAllAsync(
+      `SELECT * FROM Inspections
+       WHERE _deleted = 0 AND Status = 'CANCELLED'
+       ORDER BY ScheduledAt DESC`,
+    );
+  } catch (e) {
+    logError(e, "db/inspections.getCancelledInspections");
+    throw e;
+  }
+}
+
+// Count of cancellations the user hasn't viewed yet — those whose cancellation
+// (_lastChangedAt bump) is newer than the last time they opened the Cancelled
+// archive. Drives the unread badge over Settings + the Cancelled nav row.
+export async function getUnviewedCancelledCount(sinceMs) {
+  try {
+    const row = await db.getFirstAsync(
+      `SELECT COUNT(*) AS n FROM Inspections
+       WHERE _deleted = 0 AND Status = 'CANCELLED' AND _lastChangedAt > ?`,
+      [Number(sinceMs) || 0],
+    );
+    return row?.n ?? 0;
+  } catch (e) {
+    logError(e, "db/inspections.getUnviewedCancelledCount");
+    return 0;
   }
 }
 
@@ -321,7 +354,7 @@ export async function getActiveCalendarLinks(deviceId) {
       `SELECT InspectionSk, CalendarEventId, CalendarSnapshot, ScheduledAt,
               _lastChangedAt, Status
          FROM Inspections
-        WHERE _deleted = 0 AND (Status IS NULL OR Status != 'CLOSED')
+        WHERE _deleted = 0 AND (Status IS NULL OR Status NOT IN ('CLOSED', 'CANCELLED'))
           AND CalendarOwnerDeviceId = ? AND CalendarEventId IS NOT NULL`,
       [deviceId],
     );

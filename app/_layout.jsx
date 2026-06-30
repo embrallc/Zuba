@@ -25,6 +25,10 @@ import {
   startConnectivityWatch,
   stopConnectivityWatch,
 } from "../utils/connectivity";
+import {
+  startInspectionRealtime,
+  stopInspectionRealtime,
+} from "../utils/inspectionRealtime";
 import { setupGlobalErrorHandler } from "../utils/globalErrorHandler";
 import {
   cancelUpcomingApptNotif,
@@ -231,6 +235,14 @@ export default function RootLayout() {
     // Initial catch-up pull on entering the authed app (config is loaded by
     // loadUserData before `ready` flips true). Cheap no-op when sync is off.
     runPull().catch((e) => logError(e, "RootLayout.initialCalendarPull"));
+
+    // Live cancellation channel + the unread-cancellation badge. Recompute the
+    // count from SQLite and play the attention bounce on app-enter.
+    startInspectionRealtime();
+    const settings = useSettingsStore.getState();
+    settings.refreshCancelledCount?.();
+    settings.bumpCancelBadgePulse?.();
+
     const sub = AppState.addEventListener("change", (state) => {
       if (state === "active") {
         refreshSubscription().catch((e) =>
@@ -240,9 +252,16 @@ export default function RootLayout() {
         // assistant added/edited/deleted while we were backgrounded. Self-gates
         // on the calendar config, so this is a cheap no-op when sync is off.
         runPull().catch((e) => logError(e, "RootLayout.foregroundCalendarPull"));
+        // Refresh + re-pulse the cancellation badge on every foreground.
+        const s = useSettingsStore.getState();
+        s.refreshCancelledCount?.();
+        s.bumpCancelBadgePulse?.();
       }
     });
-    return () => sub.remove();
+    return () => {
+      sub.remove();
+      stopInspectionRealtime();
+    };
   }, [ready, isAuthed]);
 
   // Wire db-layer events to the notification scheduler. db/inspections.js
@@ -256,6 +275,9 @@ export default function RootLayout() {
   useEffect(() => {
     const handleInsertOrUpdate = (inspection) => {
       scheduleUpcomingApptNotif({ inspection });
+      // Keep the unread-cancellation badge in sync after any inspection change
+      // (a pulled/realtime cancel, or a restore from the Cancelled archive).
+      useSettingsStore.getState().refreshCancelledCount?.();
     };
     const handleDelete = (payload) => {
       cancelUpcomingApptNotif(payload?.InspectionSk);
