@@ -1,15 +1,19 @@
 // Report generation client orchestrator.
 //
-// Flow: syncAll (so the cloud has the freshest form data + photos — the edge
-// function reads Postgres/Storage, never the device) → invoke generate-report
-// → download the PDF once into the app sandbox → record the local path on the
-// inspection row. Reviewing/sharing afterwards never re-downloads.
+// Flow: syncAll (so the cloud has the freshest form data + photos — the worker
+// reads Postgres/Storage, never the device) → run the Railway worker job
+// (report_jobs row + Realtime) → download the finished PDF once into the app
+// sandbox → record the local path on the inspection row. Reviewing/sharing
+// afterwards never re-downloads.
+//
+// Restore (cache miss) still uses the generate-report Edge Function's
+// `action:"latest"` retrieval mode — that EF stays for now.
 
-import dayjs from "dayjs";
 import * as FileSystem from "expo-file-system/legacy";
 import { setInspectionLocalReport } from "../db/inspections";
 import { logError } from "../db/logs";
 import { useInspectionStore } from "../stores/useInspectionStore";
+import { isWorkerConfigured, startCloudReport } from "./reportJobs";
 import { supabase } from "./supabase";
 import { syncAll } from "./sync";
 
@@ -110,14 +114,58 @@ export async function getOrRestoreReport(inspection) {
   return restoreReportFromCloud(inspection);
 }
 
-// Generate (or regenerate) the report for one inspection. Returns
-// { path, pageCount, usedDraft, skippedPhotos } or throws with a
-// user-presentable `message`.
-export async function generateInspectionReport(inspection) {
+// Drive a worker report job to a terminal state, wrapping the create →
+// subscribe → kick flow (startCloudReport) in a Promise that resolves with the
+// completed row (carrying report_url) or rejects with a presentable error.
+// `onProgress(status)` receives each forward status: pending|processing|...
+function runWorkerJob(inspection, onProgress) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    startCloudReport(inspection, (row) => {
+      if (settled || !row?.status) return;
+      onProgress?.(row.status);
+      if (row.status === "completed") {
+        settled = true;
+        if (row.report_url) {
+          resolve(row);
+        } else {
+          const e = new Error("The report finished but no file came back.");
+          e.presentable = true;
+          reject(e);
+        }
+      } else if (row.status === "failed") {
+        settled = true;
+        const e = new Error(row.error || "The report failed to generate.");
+        e.presentable = true;
+        reject(e);
+      }
+    }).catch((e) => {
+      // startCloudReport reports a dispatch failure through the callback above
+      // (status:'failed'); this catch covers a throw before that (e.g. job
+      // insert failed). subscribeToJob cleans up its own channel on terminal.
+      if (!settled) {
+        settled = true;
+        reject(e);
+      }
+    });
+  });
+}
+
+// Generate (or regenerate) the report for one inspection via the Railway worker.
+// Returns { path, pageCount, usedDraft, skippedPhotos } or throws with a
+// user-presentable `message`. `onProgress` is optional (status strings).
+export async function generateInspectionReport(inspection, onProgress) {
   const sk = inspection?.InspectionSk;
   if (!sk) throw new Error("missing inspection");
+  if (!isWorkerConfigured()) {
+    const err = new Error(
+      "The report service isn't configured on this build. Please contact support.",
+    );
+    err.presentable = true;
+    throw err;
+  }
 
-  // Push local edits/photos first — the server renders from the cloud copy.
+  // Push local edits/photos first — the worker renders from the cloud copy.
   try {
     await syncAll();
   } catch (e) {
@@ -125,39 +173,49 @@ export async function generateInspectionReport(inspection) {
     // Continue — worst case the report reflects the last synced state.
   }
 
-  const { data, error } = await supabase.functions.invoke("generate-report", {
-    body: { inspectionSk: sk, tzOffsetMinutes: dayjs().utcOffset() },
-  });
+  // Worker job → completed row (report_url is a signed URL to the PDF).
+  const row = await runWorkerJob(inspection, onProgress);
+  const path = await downloadAndRecord(inspection, row.report_url, Date.now());
 
-  if (error) {
-    // Read the real server-side reason out of the FunctionsHttpError wrapper
-    // (same pattern as delete-account in settings).
-    let message = "Couldn't generate the report. Check your connection.";
-    try {
-      const body = await error.context?.json?.();
-      if (body?.error === "no_template") {
-        message =
-          body?.message ??
-          "No report template yet. Design one in Settings → Form Builder.";
-      } else if (body?.error) {
-        message = `Report generation failed (${body.error}).`;
-      }
-    } catch (_) {}
-    logError(error, `utils/reports.generate.invoke sk=${sk}`);
-    const err = new Error(message);
-    err.presentable = true;
-    throw err;
+  // The report_jobs row doesn't carry pageCount/usedDraft/skippedPhotos (those
+  // live on the worker side only), so the banner just reports success.
+  return { path, pageCount: null, usedDraft: false, skippedPhotos: 0 };
+}
+
+// Remove ONE inspection's cached PDF + clear its device-local pointer. Called
+// when an inspection is completed: a completed report lives in the cloud and is
+// re-fetched on demand, so keeping it cached just grows the app's footprint.
+// Best-effort — never throws.
+export async function deleteLocalReport(inspection) {
+  const sk = inspection?.InspectionSk;
+  if (!sk) return;
+  try {
+    const dir = `${REPORTS_DIR}${sk}/`;
+    const info = await FileSystem.getInfoAsync(dir);
+    if (info.exists) await FileSystem.deleteAsync(dir, { idempotent: true });
+  } catch (e) {
+    logError(e, `utils/reports.deleteLocalReport sk=${sk}`);
   }
-  if (!data?.signedUrl) {
-    throw new Error("Report service returned no file.");
+  try {
+    const updated = await setInspectionLocalReport(sk, null, null);
+    if (updated) {
+      const store = useInspectionStore.getState();
+      if (store.inspections[sk]) store.update(updated);
+    }
+  } catch (e) {
+    logError(e, `utils/reports.deleteLocalReport.clear sk=${sk}`);
   }
+}
 
-  const path = await downloadAndRecord(inspection, data.signedUrl, Date.now());
-
-  return {
-    path,
-    pageCount: data.pageCount ?? null,
-    usedDraft: !!data.usedDraft,
-    skippedPhotos: data.skippedPhotos ?? 0,
-  };
+// Wipe the entire reports cache (Settings → Clear cached reports). Stale
+// LastReportPath columns are harmless — getLocalReport returns null for a
+// missing file and the viewer restores from the cloud. Best-effort.
+export async function clearAllReportCache() {
+  try {
+    const info = await FileSystem.getInfoAsync(REPORTS_DIR);
+    if (info.exists) await FileSystem.deleteAsync(REPORTS_DIR, { idempotent: true });
+  } catch (e) {
+    logError(e, "utils/reports.clearAllReportCache");
+    throw e;
+  }
 }

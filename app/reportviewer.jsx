@@ -16,7 +16,7 @@ import * as MailComposer from "expo-mail-composer";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import * as Sharing from "expo-sharing";
 import * as SMS from "expo-sms";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Linking,
@@ -37,7 +37,6 @@ import {
   getOrRestoreReport,
   reportFileName,
 } from "../utils/reports";
-import { isWorkerConfigured, startCloudReport } from "../utils/reportJobs";
 
 let WebView = null;
 try {
@@ -74,19 +73,6 @@ export default function ReportViewerScreen() {
   const [path, setPath] = useState(null);
   const [generating, setGenerating] = useState(false);
 
-  // Cloud Run report pipeline (beta) — separate from the on-device generate
-  // above. Proves the app → Cloud Run → Storage → Realtime loop end to end.
-  const [cloudStatus, setCloudStatus] = useState("idle"); // idle|pending|processing|completed|failed
-  const [cloudUrl, setCloudUrl] = useState(null);
-  const [cloudError, setCloudError] = useState(null);
-  const cloudUnsubRef = useRef(null);
-  useEffect(
-    () => () => {
-      if (cloudUnsubRef.current) cloudUnsubRef.current();
-    },
-    [],
-  );
-
   useEffect(() => {
     if (!inspection) return; // wait for the store/SQLite lookup to resolve
     let alive = true;
@@ -119,31 +105,6 @@ export default function ReportViewerScreen() {
       });
     } finally {
       setGenerating(false);
-    }
-  });
-
-  const cloudBusy = cloudStatus === "pending" || cloudStatus === "processing";
-  const handleCloudGenerate = useDebouncedPress(async () => {
-    if (!inspection || cloudBusy) return;
-    // Tear down any prior subscription before starting a new job.
-    if (cloudUnsubRef.current) {
-      cloudUnsubRef.current();
-      cloudUnsubRef.current = null;
-    }
-    setCloudUrl(null);
-    setCloudError(null);
-    setCloudStatus("pending");
-    try {
-      const { unsubscribe } = await startCloudReport(inspection, (row) => {
-        if (row?.status) setCloudStatus(row.status);
-        if (row?.report_url) setCloudUrl(row.report_url);
-        if (row?.error) setCloudError(row.error);
-      });
-      cloudUnsubRef.current = unsubscribe;
-    } catch (e) {
-      logError(e, `ReportViewer.handleCloudGenerate sk=${inspectionSk}`);
-      setCloudStatus("failed");
-      setCloudError(e?.message ?? "Couldn't start the cloud report.");
     }
   });
 
@@ -361,54 +322,6 @@ export default function ReportViewerScreen() {
         </View>
       )}
 
-      {isWorkerConfigured() && (
-        <View style={styles.cloudCard}>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.cloudTitle}>Cloud report (beta)</Text>
-            <Text
-              style={[
-                styles.cloudStatusText,
-                cloudStatus === "failed" && { color: theme?.colors?.error },
-              ]}
-              numberOfLines={2}
-            >
-              {cloudStatusLabel(cloudStatus, cloudError)}
-            </Text>
-          </View>
-          {cloudStatus === "completed" && cloudUrl ? (
-            <TouchableOpacity
-              style={styles.cloudBtn}
-              onPress={() => Linking.openURL(cloudUrl).catch(() => {})}
-              activeOpacity={0.8}
-            >
-              <MaterialCommunityIcons name="open-in-new" size={16} color="#fff" />
-              <Text style={styles.cloudBtnText}>View</Text>
-            </TouchableOpacity>
-          ) : (
-            <TouchableOpacity
-              style={[styles.cloudBtn, cloudBusy && { opacity: 0.6 }]}
-              onPress={handleCloudGenerate}
-              disabled={cloudBusy}
-              activeOpacity={0.8}
-            >
-              {cloudBusy ? (
-                <ActivityIndicator size="small" color="#fff" />
-              ) : (
-                <>
-                  <MaterialCommunityIcons
-                    name="cloud-upload-outline"
-                    size={16}
-                    color="#fff"
-                  />
-                  <Text style={styles.cloudBtnText}>
-                    {cloudStatus === "failed" ? "Retry" : "Generate"}
-                  </Text>
-                </>
-              )}
-            </TouchableOpacity>
-          )}
-        </View>
-      )}
     </SafeAreaView>
   );
 }
@@ -435,21 +348,6 @@ function Nav({ router, title, subtitle }) {
       <View style={{ width: theme?.layout?.iconSize?.l }} />
     </View>
   );
-}
-
-function cloudStatusLabel(status, error) {
-  switch (status) {
-    case "pending":
-      return "Queued…";
-    case "processing":
-      return "Generating on the server…";
-    case "completed":
-      return "Ready — tap View";
-    case "failed":
-      return error ? `Failed: ${error}` : "Failed";
-    default:
-      return "Generate a fresh report on the server";
-  }
 }
 
 function Center({ icon, text, spinner }) {
@@ -561,40 +459,5 @@ const styles = StyleSheet.create({
     paddingVertical: theme?.spacing?.s,
     paddingHorizontal: theme?.spacing?.l,
     marginTop: theme?.spacing?.s,
-  },
-  cloudCard: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: theme?.spacing?.m,
-    paddingHorizontal: theme?.spacing?.m,
-    paddingVertical: theme?.spacing?.s,
-    backgroundColor: theme?.colors?.cardBackground,
-    borderTopWidth: theme?.layout?.borderWidth?.thin,
-    borderTopColor: theme?.colors?.input,
-  },
-  cloudTitle: {
-    ...(theme?.typography?.bodyBold ?? {}),
-    fontSize: 14,
-  },
-  cloudStatusText: {
-    ...(theme?.typography?.caption ?? {}),
-    color: theme?.colors?.textSubtle,
-    marginTop: 1,
-  },
-  cloudBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: theme?.spacing?.xs,
-    minWidth: 96,
-    backgroundColor: theme?.colors?.primary,
-    borderRadius: theme?.layout?.borderRadius?.full,
-    paddingVertical: theme?.spacing?.s,
-    paddingHorizontal: theme?.spacing?.m,
-  },
-  cloudBtnText: {
-    ...(theme?.typography?.bodyBold ?? {}),
-    color: "#fff",
-    fontSize: 14,
   },
 });

@@ -1,8 +1,8 @@
 // send-report-to-client Edge Function (internal-only).
 //
-// Ensures the inspection has a rendered PDF (generating one via generate-report
-// internal mode if needed), signs a long-TTL link, and emails it to the
-// inspection's report recipients via Resend. Called by reconcile-inspection;
+// Ensures the inspection has a rendered PDF (rendering one via the Railway
+// worker's /api/render-internal if needed), signs a long-TTL link, and emails it
+// to the inspection's report recipients via Resend. Called by reconcile-inspection;
 // it owns no state — the reconciler claims report_state='sending' around it.
 //
 // Auth: the caller must present the service-role key as the bearer (trusted
@@ -152,8 +152,17 @@ serve(async (req) => {
   storagePath = latest?.storage_path ?? null;
 
   if (!storagePath) {
+    // Render via the Railway worker (the sole renderer for the user-facing
+    // Generate button too). Service-role bearer = trusted server-to-server.
+    const workerUrl = (Deno.env.get("REPORT_WORKER_URL") ?? "").replace(/\/$/, "");
+    if (!workerUrl) {
+      logError("worker_not_configured", new Error("REPORT_WORKER_URL not set"), {
+        inspectionSk,
+      });
+      return json({ ok: false, error: "generate_failed" }, 200);
+    }
     try {
-      const res = await fetch(`${url}/functions/v1/generate-report`, {
+      const res = await fetch(`${workerUrl}/api/render-internal`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${serviceKey}`,
@@ -161,7 +170,6 @@ serve(async (req) => {
         },
         body: JSON.stringify({
           inspectionSk,
-          internal: true,
           tzOffsetMinutes: tzOffsetMinutes(orgTz),
         }),
       });

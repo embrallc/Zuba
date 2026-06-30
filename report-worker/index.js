@@ -9,7 +9,7 @@ import {
   signReport,
   uploadReport,
 } from "./lib/jobs.js";
-import { getUserFromJwt, isConfigured } from "./lib/supabase.js";
+import { admin, getUserFromJwt, isConfigured } from "./lib/supabase.js";
 
 const app = express();
 app.use(express.json({ limit: "1mb" }));
@@ -89,6 +89,91 @@ app.post("/api/generate-report", async (req, res) => {
     userId: user.id,
     tzOffsetMin,
   });
+});
+
+// POST /api/render-internal
+// Body: { inspectionSk, tzOffsetMinutes? }   Header: Authorization: Bearer <SERVICE_ROLE_KEY>
+//
+// Server-to-server render for the auto-send-on-complete path (the
+// send-report-to-client Edge Function). Unlike /api/generate-report this has NO
+// user JWT and NO report_jobs row — auth is the service-role key both sides hold
+// — and it renders SYNCHRONOUSLY, returning the storage path so the caller can
+// sign + email it. The PDF + inspection_reports audit row are produced exactly
+// like the job path (same renderer), so a later manual view/restore finds it.
+app.post("/api/render-internal", async (req, res) => {
+  if (!isConfigured) {
+    return res.status(503).json({
+      error: "server_misconfigured",
+      detail: "SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not set on the worker",
+    });
+  }
+
+  // Auth: the bearer must be the service-role key (trusted server-to-server).
+  const token = (req.headers.authorization || "").replace(/^Bearer\s+/i, "");
+  if (!token || token !== process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    return res.status(401).json({ error: "unauthorized" });
+  }
+
+  const { inspectionSk } = req.body ?? {};
+  const tzOffsetMin = Number.isFinite(req.body?.tzOffsetMinutes)
+    ? Number(req.body.tzOffsetMinutes)
+    : 0;
+  if (!inspectionSk) {
+    return res.status(400).json({ error: "missing_fields", required: ["inspectionSk"] });
+  }
+
+  try {
+    // Resolve the owner + org from the inspection (service role).
+    const { data: insp, error: inspErr } = await admin
+      .from("inspections")
+      .select("user_id")
+      .eq("inspection_sk", inspectionSk)
+      .maybeSingle();
+    if (inspErr) throw new Error(`inspection lookup: ${inspErr.message}`);
+    if (!insp) return res.status(404).json({ error: "inspection_not_found" });
+    const userId = insp.user_id;
+    let orgId = null;
+    if (userId) {
+      const { data: u } = await admin
+        .from("users")
+        .select("org_sk")
+        .eq("id", userId)
+        .maybeSingle();
+      orgId = u?.org_sk ?? null;
+    }
+
+    const { bytes, pageCount } = await renderInspectionReport({
+      inspectionSk,
+      userId,
+      orgSk: orgId,
+      tzOffsetMin,
+    });
+    const storagePath = buildStoragePath({ orgId, userId, inspectionId: inspectionSk });
+    await uploadReport(storagePath, bytes);
+    await recordReport({
+      inspectionId: inspectionSk,
+      orgId,
+      userId,
+      storagePath,
+      sizeBytes: bytes.length,
+      pageCount,
+    });
+    return res.status(200).json({
+      storagePath,
+      pageCount,
+      sizeBytes: bytes.length,
+      generatedAt: new Date().toISOString(),
+    });
+  } catch (e) {
+    const message = e?.message ?? String(e);
+    console.error(`[worker] render-internal FAILED (${inspectionSk}):`, message);
+    await logToCloud({
+      message,
+      context: `render-internal inspection=${inspectionSk}`,
+      stack: e?.stack,
+    });
+    return res.status(500).json({ error: "render_failed", detail: message });
+  }
 });
 
 async function generateInBackground({ jobId, inspectionId, orgId, userId, tzOffsetMin }) {
