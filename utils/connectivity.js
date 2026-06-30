@@ -1,12 +1,17 @@
+import { NativeModules } from "react-native";
 import { logError } from "../db/logs";
 import { syncAll } from "./sync";
 
-// NetInfo is intentionally NOT imported at the top. It's a native module, and
-// its package throws at module-evaluation time when the native binary doesn't
-// include it (an old dev client not yet rebuilt). A top-level import would run
-// that throw during boot's module graph load — before any try/catch — and
-// white-screen the whole app. We lazy-require it inside startConnectivityWatch
-// instead, so a missing module is caught there and degrades gracefully.
+// NetInfo is intentionally NOT imported at the top, and we don't even require()
+// it blindly. The @react-native-community/netinfo package THROWS at module-
+// evaluation time when the native module isn't in the binary (a dev client
+// built before the dependency was added). Crucially, a try/catch around the
+// require can't save us: Metro's dev module loader reports that eval throw as a
+// FATAL via ErrorUtils.reportFatalError BEFORE re-throwing to our catch, so the
+// global error handler still surfaces it. The only clean guard is to detect the
+// native module the EXACT way netinfo does — NativeModules.RNCNetInfo — and skip
+// loading the package entirely when it's absent. (If that's falsy, netinfo
+// couldn't work anyway, so this agrees with the package 1:1.)
 
 // Network-state awareness. The app is offline-first: local edits to owned data
 // queue via the `Synced = 0` dirty flag and push on the next syncAll. The job
@@ -37,9 +42,16 @@ let unsubscribe = null;
 // boot/refresh sync already in flight rather than duplicating it).
 export function startConnectivityWatch() {
   if (unsubscribe) return;
+  // Bail BEFORE touching the netinfo package if its native module isn't in this
+  // binary — otherwise requiring it would trigger a Metro fatal we can't catch.
+  if (!NativeModules?.RNCNetInfo) {
+    console.log(
+      "[connectivity] NetInfo native module not in this binary; skipping watch until a rebuild.",
+    );
+    return;
+  }
+
   try {
-    // Lazy-require so a binary missing the native module fails HERE, inside the
-    // guard, rather than crashing at a top-level import before this can catch it.
     const mod = require("@react-native-community/netinfo");
     const NetInfo = mod?.default ?? mod;
     unsubscribe = NetInfo.addEventListener((state) => {

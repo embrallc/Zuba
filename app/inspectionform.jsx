@@ -17,7 +17,6 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import VoiceFab from "../components/VoiceFab";
 import AiRewriteSheet from "../components/walkthrough/AiRewriteSheet";
 import WalkField, { PhotoModal } from "../components/walkthrough/WalkField";
 import { logError } from "../db/logs";
@@ -88,28 +87,6 @@ export default function InspectionFormScreen() {
   const answersRef = useRef({ sections: {} });
   const dirtyRef = useRef(false);
   const saveTimer = useRef(null);
-
-  // Keyboard metrics so the voice mic floats just above the keyboard while a
-  // text field is open (and drops to the corner when it's dismissed).
-  const [keyboardVisible, setKeyboardVisible] = useState(false);
-  const [keyboardHeight, setKeyboardHeight] = useState(0);
-
-  useEffect(() => {
-    const show = Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
-    const hide = Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
-    const onShow = Keyboard.addListener(show, (e) => {
-      setKeyboardVisible(true);
-      setKeyboardHeight(e.endCoordinates?.height ?? 0);
-    });
-    const onHide = Keyboard.addListener(hide, () => {
-      setKeyboardVisible(false);
-      setKeyboardHeight(0);
-    });
-    return () => {
-      onShow.remove();
-      onHide.remove();
-    };
-  }, []);
 
   // ── Load: snapshot the published template on first open ──────────────────
   useEffect(() => {
@@ -730,13 +707,6 @@ export default function InspectionFormScreen() {
             )}
           </ScrollView>
         </KeyboardAvoidingView>
-      )}
-
-      {!loading && schema && (
-        <VoiceFab
-          keyboardVisible={keyboardVisible}
-          keyboardHeight={keyboardHeight}
-        />
       )}
 
       <PhotoModal

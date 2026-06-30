@@ -15,7 +15,6 @@ import {
   View,
 } from "react-native";
 import KeyboardToolbar from "../KeyboardToolbar";
-import { useVoiceField } from "../../hooks/useVoiceField";
 import { SEVERITY_LEVELS } from "../../shared/walkthroughSchema";
 import { resolvePhotoUri } from "../../utils/inspectionPhotos";
 
@@ -51,16 +50,12 @@ function TextField({ field, value, onChange, ai }) {
   const [focused, setFocused] = useState(false);
   const multiline = variant === "multiline";
 
-  // One setter for both sources of input: the keyboard and voice dictation.
-  // Updating local state + propagating up keeps typing smooth, and lets the
-  // voice engine write straight into this field once it's the focused target.
+  // Update local state + propagate up. Local state keeps typing smooth; the
+  // parent persists to the answers ref on a debounce.
   const applyText = (t) => {
     setText(t);
     onChange(t);
   };
-  // Register this input with the dictation engine on focus; whatever the user
-  // last tapped becomes the field new transcripts land in.
-  const voice = useVoiceField(text, applyText);
 
   // Adopt external value changes (e.g. an accepted AI rewrite applied from the
   // parent) — but only while unfocused, so a stray re-render can't clobber
@@ -108,10 +103,7 @@ function TextField({ field, value, onChange, ai }) {
         ]}
         value={text}
         onChangeText={applyText}
-        onFocus={() => {
-          setFocused(true);
-          voice.onFocus();
-        }}
+        onFocus={() => setFocused(true)}
         onBlur={() => setFocused(false)}
         multiline={multiline}
         placeholder={multiline ? "Type here…" : ""}
@@ -358,14 +350,10 @@ export function PhotoModal({
     };
   }, []);
 
-  // Same dual-source setter as the inline text fields, so voice can dictate
-  // a photo note too. Enable the mic before opening the photo — the modal
-  // covers the floating button, but the recognition session keeps running.
   const applyNote = (t) => {
     setNote(t);
     onNoteChange(t);
   };
-  const voice = useVoiceField(note, applyNote);
 
   useEffect(() => {
     setNote(photoRef?.note ?? "");
@@ -449,7 +437,6 @@ export function PhotoModal({
             style={s.modalNote}
             value={note}
             onChangeText={applyNote}
-            onFocus={voice.onFocus}
             placeholder="Add a note for this photo…"
             placeholderTextColor={theme?.colors?.textFine}
             multiline
