@@ -8,16 +8,12 @@ import {
   SafeAreaView,
   ScrollView,
   StyleSheet,
-  Switch,
   Text,
   TouchableOpacity,
   View,
 } from "react-native";
 import { logError } from "../db/logs";
-import {
-  getOrgPaymentStatus,
-  setOrgPaymentPolicy,
-} from "../db/organizations";
+import { getOrgPaymentStatus } from "../db/organizations";
 import { useSettingsStore } from "../stores/useSettingsStore";
 import { refreshPaymentStatus, startStripeOnboarding } from "../utils/payments";
 
@@ -52,7 +48,14 @@ export default function PaymentsSettingsScreen() {
       await startStripeOnboarding();
       // Regardless of how the browser closed, pull the live capability flags.
       await refreshPaymentStatus();
-      await reload();
+      const fresh = await getOrgPaymentStatus(orgSk);
+      setStatus(fresh);
+      setLoading(false);
+      // Newly live → take them straight to Automatic Document Send so they see
+      // the invoice + payment-gate toggles that just unlocked.
+      if (fresh?.stripe_charges_enabled) {
+        router.push("/autodocsend");
+      }
     } catch (e) {
       logError(e, "PaymentsSettings.handleSetup");
       Alert.alert(
@@ -78,18 +81,6 @@ export default function PaymentsSettingsScreen() {
     }
   }
 
-  async function toggle(key, val) {
-    const prev = status;
-    setStatus((s) => ({ ...s, [key]: val }));
-    try {
-      await setOrgPaymentPolicy(orgSk, { [key]: val });
-    } catch (e) {
-      logError(e, `PaymentsSettings.toggle ${key}`);
-      setStatus(prev);
-      Alert.alert("Couldn't save", "That setting didn't save. Please try again.");
-    }
-  }
-
   return (
     <SafeAreaView style={styles.safe}>
       <View style={styles.navbar}>
@@ -103,7 +94,7 @@ export default function PaymentsSettingsScreen() {
             color={theme.colors.icon}
           />
         </TouchableOpacity>
-        <Text style={styles.navTitle}>Payments</Text>
+        <Text style={styles.navTitle}>Payment Setup</Text>
         <View style={{ width: theme.layout.iconSize.l }} />
       </View>
 
@@ -192,28 +183,48 @@ export default function PaymentsSettingsScreen() {
               )}
             </View>
 
-            {/* Policy toggles — owner decides the report/payment flow */}
+            {/* Once live: account status + a pointer to Automatic Document
+                Send, which is where the report / invoice / payment-gate toggles
+                now live (the report toggle works with or without payments). */}
             {active && (
               <>
-                <Text style={styles.sectionLabel}>REPORT &amp; PAYMENT FLOW</Text>
-                <SettingRow
-                  label="Auto-send invoice on complete"
-                  description="When you complete an inspection, automatically create and send the client a payment request."
-                  value={!!status?.auto_send_invoice}
-                  onValueChange={(v) => toggle("auto_send_invoice", v)}
-                />
-                <SettingRow
-                  label="Auto-send report on complete"
-                  description="Email the client their report automatically when the inspection is completed."
-                  value={!!status?.auto_send_report}
-                  onValueChange={(v) => toggle("auto_send_report", v)}
-                />
-                <SettingRow
-                  label="Require payment first"
-                  description="Hold the report until the client has paid. Once payment clears, the report is released automatically."
-                  value={!!status?.require_payment_first}
-                  onValueChange={(v) => toggle("require_payment_first", v)}
-                />
+                <View style={styles.card}>
+                  <Text style={styles.cardTitle}>Account</Text>
+                  <InfoRow
+                    label="Charges enabled"
+                    ok={!!status?.stripe_charges_enabled}
+                  />
+                  <InfoRow
+                    label="Payouts enabled"
+                    ok={!!status?.stripe_payouts_enabled}
+                  />
+                  <InfoRow
+                    label="Details submitted"
+                    ok={!!status?.stripe_details_submitted}
+                  />
+                  {status?.stripe_account_id ? (
+                    <Text style={styles.acctId}>
+                      Account {status.stripe_account_id}
+                    </Text>
+                  ) : null}
+                </View>
+
+                <View style={styles.card}>
+                  <Text style={styles.cardBody}>
+                    Choose what's sent automatically when you complete an
+                    inspection — including auto-sending invoices and holding
+                    reports until the client pays — in Automatic Document Send.
+                  </Text>
+                  <TouchableOpacity
+                    style={[styles.btn, styles.btnPrimary]}
+                    onPress={() => router.push("/autodocsend")}
+                    activeOpacity={0.85}
+                  >
+                    <Text style={styles.btnPrimaryTxt}>
+                      Automatic Document Send
+                    </Text>
+                  </TouchableOpacity>
+                </View>
               </>
             )}
           </>
@@ -223,21 +234,15 @@ export default function PaymentsSettingsScreen() {
   );
 }
 
-function SettingRow({ label, description, value, onValueChange }) {
+function InfoRow({ label, ok }) {
   return (
-    <View style={styles.row}>
-      <View style={styles.rowText}>
-        <Text style={styles.rowLabel}>{label}</Text>
-        {description ? (
-          <Text style={styles.rowDescription}>{description}</Text>
-        ) : null}
-      </View>
-      <Switch
-        value={value}
-        onValueChange={onValueChange}
-        trackColor={{ false: theme.colors.input, true: theme.colors.primary }}
-        thumbColor="#fff"
+    <View style={styles.infoRow}>
+      <MaterialCommunityIcons
+        name={ok ? "check-circle" : "progress-clock"}
+        size={16}
+        color={ok ? theme.colors.success : theme.colors.warning}
       />
+      <Text style={styles.infoLabel}>{label}</Text>
     </View>
   );
 }
@@ -291,6 +296,18 @@ const styles = StyleSheet.create({
   btnDisabled: { opacity: theme.layout.opacity.disabled },
   refreshLink: { alignItems: "center", paddingVertical: theme.spacing.s, marginTop: theme.spacing.xs },
   refreshTxt: { ...theme.typography.label, color: theme.colors.primary, fontWeight: "600" },
+  infoRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing.xs,
+    marginTop: theme.spacing.s,
+  },
+  infoLabel: { ...theme.typography.label, color: theme.colors.text },
+  acctId: {
+    ...theme.typography.caption,
+    color: theme.colors.textSubtle,
+    marginTop: theme.spacing.s,
+  },
   sectionLabel: {
     ...theme.typography.overline,
     marginTop: theme.spacing.s,
