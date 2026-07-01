@@ -18,7 +18,7 @@
 // runaway/abuse and keep repeats free — NOT to ration legitimate use.
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "npm:@supabase/supabase-js@2";
 
 declare const Deno: { env: { get(name: string): string | undefined } };
 declare const crypto: {

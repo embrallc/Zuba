@@ -19,7 +19,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import {
   createClient,
   SupabaseClient,
-} from "https://esm.sh/@supabase/supabase-js@2";
+} from "npm:@supabase/supabase-js@2";
 import { logCloudEvent } from "../_shared/logToCloud.ts";
 
 declare const Deno: { env: { get(name: string): string | undefined } };

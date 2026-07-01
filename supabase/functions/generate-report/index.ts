@@ -24,12 +24,12 @@
 // (JWT verification stays ON — only the app calls this.)
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "npm:@supabase/supabase-js@2";
 import {
   PDFDocument,
   StandardFonts,
   rgb,
-} from "https://esm.sh/pdf-lib@1.17.1";
+} from "npm:pdf-lib@1.17.1";
 // Keystone shared with the browser editor: turns a walkthrough template into a
 // report layout. Used here as the zero-config fallback when an org never opens
 // the report designer. SEVERITY_LEVELS gives the canonical severity colors.
