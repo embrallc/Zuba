@@ -352,7 +352,7 @@ export async function getActiveCalendarLinks(deviceId) {
   try {
     return await db.getAllAsync(
       `SELECT InspectionSk, CalendarEventId, CalendarSnapshot, ScheduledAt,
-              _lastChangedAt, Status
+              _lastChangedAt, Status, Synced
          FROM Inspections
         WHERE _deleted = 0 AND (Status IS NULL OR Status NOT IN ('CLOSED', 'CANCELLED'))
           AND CalendarOwnerDeviceId = ? AND CalendarEventId IS NOT NULL`,
