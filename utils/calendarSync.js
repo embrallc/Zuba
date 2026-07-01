@@ -26,6 +26,7 @@ import { DB_EVENTS, subscribe } from "../db/events";
 import {
   getActiveCalendarLinks,
   getInspectionById,
+  getRetiredCalendarLinks,
   insertInspection,
   setInspectionCalendarFields,
   softDeleteInspection,
@@ -481,9 +482,14 @@ async function handleUpsert(insp) {
     const ownedByMe = !owner || owner === cfg.deviceId;
 
     // Terminal → the appointment is no longer on the active schedule; mirror
-    // notifications' cancel-on-close by removing the calendar event.
+    // notifications' cancel-on-close by removing the calendar event. CANCELLED
+    // counts (e.g. a client texting "X" to their reminder): the event must come
+    // off the calendar, not linger to be re-imported as a duplicate.
     const terminal =
-      insp.Status === "CLOSED" || insp._deleted === 1 || insp._deleted === true;
+      insp.Status === "CLOSED" ||
+      insp.Status === "CANCELLED" ||
+      insp._deleted === 1 ||
+      insp._deleted === true;
     if (terminal) {
       if (eventId && ownedByMe) {
         if (!(await requestCalendarAccess())) return;
@@ -724,12 +730,19 @@ export async function runPull() {
       links.map((l) => [l.CalendarEventId, l]),
     );
 
+    // Events we own whose inspection has gone terminal (cancelled/completed/
+    // deleted). Matched here so a stale tagged event is cleaned up and — crucially
+    // — never re-imported as a duplicate (e.g. after a text-reply "X" cancel).
+    const retired = await getRetiredCalendarLinks(cfg.deviceId);
+    const retiredByEventId = new Map(retired.map((l) => [l.CalendarEventId, l]));
+
     const seen = new Set();
     let nKnown = 0;
     let nTagged = 0;
     let nImported = 0;
     let nUntagged = 0;
     let nAllDay = 0;
+    let nRetired = 0;
     for (const ev of events || []) {
       if (ev.allDay) {
         nAllDay++;
@@ -754,6 +767,18 @@ export async function runPull() {
         continue;
       }
 
+      // Owned by a terminal (cancelled/completed/deleted) inspection → the
+      // appointment is off; drop the stale event and DON'T re-import it. This is
+      // what stops a text-reply cancel from spawning a duplicate inspection.
+      const retiredLink = retiredByEventId.get(ev.id);
+      if (retiredLink) {
+        seen.add(ev.id);
+        // eslint-disable-next-line no-await-in-loop
+        await removeEventForInspection(retiredLink.InspectionSk, ev.id);
+        nRetired++;
+        continue;
+      }
+
       // Unknown to us → only import if it's tagged for Zuba.
       if (hasToken(ev.title) || hasToken(ev.notes)) {
         nTagged++;
@@ -767,7 +792,8 @@ export async function runPull() {
     }
     console.log(
       `[calendar] runPull summary — known=${nKnown} tagged=${nTagged} ` +
-        `imported=${nImported} untagged(ignored)=${nUntagged} allDay(skipped)=${nAllDay}`,
+        `imported=${nImported} retired(removed)=${nRetired} ` +
+        `untagged(ignored)=${nUntagged} allDay(skipped)=${nAllDay}`,
     );
 
     // Owned links whose event vanished from the window → deleted on the
@@ -795,10 +821,11 @@ export async function runPull() {
 
     // Only record when the pull actually changed something — this runs on every
     // app foreground, so a quiet run would just be noise.
-    if (nImported > 0 || nDeleted > 0) {
+    if (nImported > 0 || nDeleted > 0 || nRetired > 0) {
       logEvent("calendar.synced", {
         imported: nImported,
         deleted: nDeleted,
+        retired: nRetired,
         known: nKnown,
       });
     }

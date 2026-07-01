@@ -364,6 +364,29 @@ export async function getActiveCalendarLinks(deviceId) {
   }
 }
 
+// Inspections this device owns a calendar event for that have gone TERMINAL
+// (cancelled / completed / deleted) yet still carry a CalendarEventId. The pull
+// reconciler uses these to (a) remove the now-stale iOS event and (b) — critically
+// — recognize its event as ours so it is NOT re-imported as a duplicate. This is
+// the backstop for a status flip that never ran the calendar push handler, e.g. a
+// text-reply "X" cancel (status set in the cloud → arrives via realtime/sync) or a
+// change applied while the app was backgrounded.
+export async function getRetiredCalendarLinks(deviceId) {
+  if (!deviceId) return [];
+  try {
+    return await db.getAllAsync(
+      `SELECT InspectionSk, CalendarEventId
+         FROM Inspections
+        WHERE CalendarOwnerDeviceId = ? AND CalendarEventId IS NOT NULL
+          AND (_deleted = 1 OR Status IN ('CLOSED', 'CANCELLED'))`,
+      [deviceId],
+    );
+  } catch (e) {
+    logError(e, "db/inspections.getRetiredCalendarLinks");
+    return [];
+  }
+}
+
 // Un-delete a soft-deleted inspection (_deleted 1 → 0). Bumps _version +
 // clears Synced. Emits INSPECTION_UPDATED with the full row so a future
 // appointment gets its reminder rescheduled (the scheduler's own gates skip
