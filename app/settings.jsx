@@ -1012,8 +1012,24 @@ function BusinessTimezoneCard({ orgSk }) {
     (async () => {
       const tz = await getOrgTimezone(orgSk);
       if (cancelled) return;
-      setSavedTz(tz);
-      setStatus("idle");
+      if (tz) {
+        setSavedTz(tz);
+        setStatus("idle");
+        return;
+      }
+      // No timezone persisted yet → the reminder job would skip this org. Write
+      // the owner's DETECTED device zone now so it's both accurate and non-null.
+      // This card is owner-only (RLS-safe), and it runs whenever the owner opens
+      // Settings, so orgs self-heal from the null default.
+      try {
+        await setOrgTimezone(orgSk, detected);
+        if (!cancelled) setSavedTz(detected);
+      } catch (e) {
+        // Non-fatal: `active` still shows `detected`, and the owner can tap to set
+        // it; the reminder job also falls back to Central for a still-null org.
+        if (!cancelled) logError(e, `SettingsScreen.BusinessTimezoneCard.persistDefault tz=${detected}`);
+      }
+      if (!cancelled) setStatus("idle");
     })();
     return () => {
       cancelled = true;
