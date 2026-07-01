@@ -21,6 +21,7 @@
 // / ties → calendar wins).
 
 import * as Calendar from "expo-calendar";
+import * as Location from "expo-location";
 import { DB_EVENTS, subscribe } from "../db/events";
 import {
   getActiveCalendarLinks,
@@ -161,6 +162,82 @@ function parseUsAddress(location) {
     out.line1 = before || null;
   }
   return out;
+}
+
+// Full state name → USPS abbreviation, so a reverse-geocode that returns
+// "California" is stored the same 2-letter way as the rest of the app.
+const STATE_NAME_TO_ABBR = {
+  alabama: "AL", alaska: "AK", arizona: "AZ", arkansas: "AR", california: "CA",
+  colorado: "CO", connecticut: "CT", delaware: "DE", florida: "FL", georgia: "GA",
+  hawaii: "HI", idaho: "ID", illinois: "IL", indiana: "IN", iowa: "IA",
+  kansas: "KS", kentucky: "KY", louisiana: "LA", maine: "ME", maryland: "MD",
+  massachusetts: "MA", michigan: "MI", minnesota: "MN", mississippi: "MS",
+  missouri: "MO", montana: "MT", nebraska: "NE", nevada: "NV",
+  "new hampshire": "NH", "new jersey": "NJ", "new mexico": "NM", "new york": "NY",
+  "north carolina": "NC", "north dakota": "ND", ohio: "OH", oklahoma: "OK",
+  oregon: "OR", pennsylvania: "PA", "rhode island": "RI", "south carolina": "SC",
+  "south dakota": "SD", tennessee: "TN", texas: "TX", utah: "UT", vermont: "VT",
+  virginia: "VA", washington: "WA", "west virginia": "WV", wisconsin: "WI",
+  wyoming: "WY", "district of columbia": "DC", "puerto rico": "PR",
+};
+
+// Normalize a reverse-geocode region (iOS usually already gives "CA"; Android /
+// some locales give the full name) to a 2-letter code; keep the regex fallback
+// when we can't map it.
+function normalizeState(region, fallbackState) {
+  const r = typeof region === "string" ? region.trim() : "";
+  if (!r) return fallbackState ?? null;
+  if (r.length === 2 && US_STATES.has(r.toUpperCase())) return r.toUpperCase();
+  const mapped = STATE_NAME_TO_ABBR[r.toLowerCase()];
+  if (mapped) return mapped;
+  return fallbackState ?? (r.length === 2 ? r.toUpperCase() : null);
+}
+
+// Resolve a free-text calendar location into canonical, consistently-formatted
+// address fields by round-tripping through the OS geocoder — the SAME geocoder
+// the Add-Inspection screen uses (no API key, no server). This is what makes a
+// "current location" pin and a typed address land identically: both resolve to
+// the same coordinates, and reverse-geocoding those coords yields one canonical
+// structured address. Best-effort: any failure (throttle, offline, no match)
+// falls back to the regex parse, so we never block the import or lose data.
+// Returns { line1, city, state, zip, lat, lng }.
+async function resolveEventAddress(rawLocation) {
+  const fb = parseUsAddress(rawLocation);
+  const raw = typeof rawLocation === "string" ? rawLocation.trim() : "";
+  const base = { line1: fb.line1, city: fb.city, state: fb.state, zip: fb.zip, lat: null, lng: null };
+  if (!raw) return base;
+  try {
+    const geo = await Location.geocodeAsync(raw);
+    const first = geo?.[0];
+    if (first?.latitude == null || first?.longitude == null) return base;
+    const lat = first.latitude;
+    const lng = first.longitude;
+    let rev = [];
+    try {
+      rev = await Location.reverseGeocodeAsync({ latitude: lat, longitude: lng });
+    } catch (_) {
+      // Have coords but no structured breakdown — keep the regex fields + coords.
+      return { ...base, lat, lng };
+    }
+    const p = rev?.[0];
+    if (!p) return { ...base, lat, lng };
+    const line1 =
+      [p.streetNumber, p.street].filter(Boolean).join(" ").trim() ||
+      p.name ||
+      fb.line1 ||
+      null;
+    return {
+      line1,
+      city: p.city ?? fb.city ?? null,
+      state: normalizeState(p.region, fb.state),
+      zip: p.postalCode ?? fb.zip ?? null,
+      lat,
+      lng,
+    };
+  } catch (e) {
+    logError(e, `calendarSync.resolveEventAddress addr="${raw.slice(0, 60)}"`);
+    return base;
+  }
 }
 
 function toIso(d) {
@@ -538,7 +615,11 @@ async function importEventAsInspection(ev, cfg) {
   // Extract follow-up contact info; the notes body itself is NOT mapped to
   // Summary (report content) — a dedicated customer-notes field is V2.
   const { phone, email, emails } = extractContact(ev.notes || "");
-  const addr = parseUsAddress(ev.location || "");
+  // Round-trip the (possibly messy) calendar location through the OS geocoder so
+  // it lands in canonical structured fields regardless of how it was entered;
+  // also captures lat/lng so the imported inspection shows on the map. Falls back
+  // to the regex parse on any geocode failure.
+  const addr = await resolveEventAddress(ev.location || "");
   const data = {
     UserSk: userSk,
     FullName: stripToken(ev.title) || "Inspection",
@@ -546,6 +627,8 @@ async function importEventAsInspection(ev, cfg) {
     City: addr.city,
     State: addr.state,
     ZipCode: addr.zip,
+    Latitude: addr.lat,
+    Longitude: addr.lng,
     Phone: phone,
     Email: email,
     // Every email found gets the report; the first is the invoice/payer default —
