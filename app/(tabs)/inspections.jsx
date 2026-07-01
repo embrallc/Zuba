@@ -14,11 +14,13 @@ import {
 } from "react-native";
 import Animated, { FadeInDown } from "react-native-reanimated";
 import InspectionCard from "../../components/InspectionCard";
+import NotificationBadge from "../../components/NotificationBadge";
 import { runDevQuery } from "../../db/devQuery";
 import { getAllLogs, logError } from "../../db/logs";
 import { useDebouncedPress } from "../../hooks/useDebouncedPress";
 import { useInspectionStore } from "../../stores/useInspectionStore";
 import { useMapStore } from "../../stores/useMapStore";
+import { useSettingsStore } from "../../stores/useSettingsStore";
 
 const SEARCH_FIELDS = [
   "FullName",
@@ -35,10 +37,21 @@ export default function InspectionsScreen() {
   const [query, setQuery] = useState("");
   const [pulseKey, setPulseKey] = useState(0);
 
+  // Unread-cancellation badge over the menu (settings) button — same store
+  // fields the My Day + Settings badges use, so all three stay in lockstep.
+  const cancelCount = useSettingsStore((s) => s.unviewedCancelledCount);
+  const cancelPulse = useSettingsStore((s) => s.cancelBadgePulseKey);
+  const refreshCancelledCount = useSettingsStore((s) => s.refreshCancelledCount);
+  const bumpCancelBadgePulse = useSettingsStore((s) => s.bumpCancelBadgePulse);
+
   useFocusEffect(
     useCallback(() => {
       setPulseKey((k) => k + 1);
-    }, []),
+      // Recompute the count + replay the bounce whenever this screen is entered,
+      // so switching to it with unviewed cancellations draws attention.
+      refreshCancelledCount?.();
+      bumpCancelBadgePulse?.();
+    }, [refreshCancelledCount, bumpCancelBadgePulse]),
   );
   const router = useRouter();
   const sortedIds = useInspectionStore((s) => s.sortedIds);
@@ -138,6 +151,11 @@ export default function InspectionsScreen() {
               name="menu"
               size={theme.layout.iconSize.l}
               color={theme.colors.icon}
+            />
+            <NotificationBadge
+              count={cancelCount}
+              pulse={cancelPulse}
+              style={styles.menuBadge}
             />
           </TouchableOpacity>
         </View>
@@ -250,6 +268,11 @@ const styles = StyleSheet.create({
   },
   headerBtn: {
     padding: theme.spacing.xs,
+  },
+  menuBadge: {
+    position: "absolute",
+    top: -2,
+    right: -2,
   },
   list: {
     paddingTop: theme.spacing.s,
