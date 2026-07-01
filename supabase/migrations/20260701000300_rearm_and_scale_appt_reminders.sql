@@ -78,9 +78,12 @@ create index if not exists idx_inspections_due_reminder
 -- The coarse scheduled_at band lets the partial index prune before the exact
 -- tz-date equality runs on the survivors. Null org timezone falls back to Central
 -- (paired with the client healing the org's real device zone on first load).
+-- NOTE: org_sk is UUID on both organizations and users (see
+-- 20260518020000_org_sk_server_uuid.sql), so p_org_sk must be uuid — comparing a
+-- uuid column to a text param throws "operator does not exist: uuid = text".
 create or replace function public.due_appt_reminders(
   p_min_hour int default 9,
-  p_org_sk   text default null
+  p_org_sk   uuid default null
 )
 returns table (
   inspection_sk  text,
@@ -118,5 +121,5 @@ as $$
 $$;
 
 -- Internal only — the sweep EF calls this with the service-role key.
-revoke all on function public.due_appt_reminders(int, text) from public, anon, authenticated;
-grant execute on function public.due_appt_reminders(int, text) to service_role;
+revoke all on function public.due_appt_reminders(int, uuid) from public, anon, authenticated;
+grant execute on function public.due_appt_reminders(int, uuid) to service_role;
