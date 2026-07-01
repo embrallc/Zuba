@@ -557,8 +557,9 @@ function calendarWins(ev, link) {
   return true; // Android (no event timestamp) / unknown → calendar wins
 }
 
-// Map a calendar event onto an existing inspection (merge — never clobber
-// inspector-entered fields like phone/email/address with empties).
+// Map a calendar event onto an existing inspection when the calendar WINS
+// (newest-wins). Phone/email only fill empties; the ADDRESS is two-way — a
+// changed, non-empty location is an intentional overwrite and flows through.
 async function applyEventToInspection(sk, ev, cfg) {
   const cur = await getInspectionById(sk);
   if (!cur) return;
@@ -569,12 +570,30 @@ async function applyEventToInspection(sk, ev, cfg) {
   const merged = {
     ...cur,
     FullName: stripToken(ev.title) || cur.FullName || null,
-    // Only fill from the event when the inspector hasn't already entered one —
-    // never clobber a value they typed in-app.
+    // Phone/email only FILL empties — never clobber a value typed in-app.
     Phone: cur.Phone || phone || null,
     Email: cur.Email || email || null,
     ScheduledAt: toIso(ev.startDate) || cur.ScheduledAt,
   };
+
+  // Address is TWO-WAY. We're on the calendar-wins branch (the event is newer
+  // than the inspection per newest-wins), so a changed location is an intentional
+  // overwrite — re-geocode it into the structured fields exactly like on import.
+  // Guards: only when the location ACTUALLY changed vs the last snapshot (so a
+  // time-only edit doesn't needlessly re-geocode / re-snap), and only when it's
+  // non-empty (a cleared calendar location must not wipe an entered address).
+  const rawLoc = (ev.location || "").trim();
+  const prevLoc = (parseSnapshot(cur.CalendarSnapshot)?.location || "").trim();
+  if (rawLoc && rawLoc !== prevLoc) {
+    const addr = await resolveEventAddress(rawLoc);
+    merged.AddressLine1 = addr.line1;
+    merged.City = addr.city;
+    merged.State = addr.state;
+    merged.ZipCode = addr.zip;
+    merged.Latitude = addr.lat;
+    merged.Longitude = addr.lng;
+  }
+
   applyingRemote = true;
   let updated = null;
   try {
