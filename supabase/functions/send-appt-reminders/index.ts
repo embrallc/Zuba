@@ -26,6 +26,10 @@ declare const Deno: { env: { get(name: string): string | undefined } };
 const TAG = "[send-appt-reminders]";
 const SOURCE = "ef:send-appt-reminders";
 const SEND_HOUR = 10; // 10am local
+// Fallback for an org that hasn't had its timezone persisted yet (the client
+// heals it to the owner's device zone on first Settings load). Without this a
+// null-timezone org would be silently skipped and never send reminders.
+const DEFAULT_TZ = "America/Chicago";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -199,11 +203,12 @@ serve(async (req) => {
   let failed = 0;
   let skippedNoPhone = 0;
 
-  // Orgs with a configured timezone whose local hour is the send hour.
+  // Every org whose local hour is the send hour. A null timezone (owner hasn't
+  // set it yet) falls back to Central so its reminders still fire, rather than
+  // being silently excluded from the sweep.
   const { data: orgs, error: orgErr } = await admin
     .from("organizations")
-    .select("org_sk, timezone")
-    .not("timezone", "is", null);
+    .select("org_sk, timezone");
   if (orgErr) {
     logError("orgs_query_failed", orgErr);
     return json({ error: "db_error" }, 500);
@@ -211,7 +216,7 @@ serve(async (req) => {
 
   for (const org of orgs ?? []) {
     if (body.orgSk && org.org_sk !== body.orgSk) continue;
-    const tz = org.timezone as string;
+    const tz = (org.timezone as string) || DEFAULT_TZ;
     let localHour: number;
     let tomorrowStartMs: number;
     let dayAfterStartMs: number;
