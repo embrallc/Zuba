@@ -23,10 +23,12 @@ import {
   createClient,
   SupabaseClient,
 } from "https://esm.sh/@supabase/supabase-js@2";
+import { logCloudEvent } from "../_shared/logToCloud.ts";
 
 declare const Deno: { env: { get(name: string): string | undefined } };
 
 const TAG = "[appt-reminder-reply]";
+const SOURCE = "ef:appt-reminder-reply";
 
 const REPLY_CANCELLED = "Your inspection has been cancelled.";
 const REPLY_CONFIRMED = "Thanks! See you then.";
@@ -196,6 +198,9 @@ serve(async (req) => {
         return twiml();
       }
       logInfo("cancelled", { targetSk, norm });
+      void logCloudEvent(admin, SOURCE, "reminder.replied", {
+        data: { action: "cancel", targetSk },
+      });
       return twiml(autoReply ? REPLY_CANCELLED : undefined);
     }
     // Known customer but nothing upcoming-not-today to cancel (e.g. same-day job).
@@ -205,6 +210,9 @@ serve(async (req) => {
 
   if (first === "c") {
     logInfo("confirmed", { norm, targetSk });
+    void logCloudEvent(admin, SOURCE, "reminder.replied", {
+      data: { action: "confirm", targetSk },
+    });
     return twiml(autoReply ? REPLY_CONFIRMED : undefined);
   }
 

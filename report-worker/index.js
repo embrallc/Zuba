@@ -168,9 +168,12 @@ app.post("/api/render-internal", async (req, res) => {
     const message = e?.message ?? String(e);
     console.error(`[worker] render-internal FAILED (${inspectionSk}):`, message);
     await logToCloud({
+      level: "error",
+      event: "report.failed",
       message,
       context: `render-internal inspection=${inspectionSk}`,
       stack: e?.stack,
+      data: { inspectionSk, source: "autosend" },
     });
     return res.status(500).json({ error: "render_failed", detail: message });
   }
@@ -217,11 +220,15 @@ async function generateInBackground({ jobId, inspectionId, orgId, userId, tzOffs
     const message = e?.message ?? String(e);
     console.error(`[worker] job ${jobId} FAILED:`, message);
     await logToCloud({
+      level: "error",
+      event: "report.failed",
       message,
       context: `generate-report job=${jobId} inspection=${inspectionId}`,
       stack: e?.stack,
+      data: { inspectionSk: inspectionId, source: "manual" },
       jobId,
       userId,
+      orgId,
     });
     try {
       await setJobStatus(jobId, { status: "failed", error: message });

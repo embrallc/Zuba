@@ -1,7 +1,10 @@
-// Minimal global error capture (pre-launch we'll expand this into the full
-// observability layer + cloud app_logs sync). For now it catches errors that
-// escape every try/catch and routes them to logError — which prints to the
-// console AND writes to the AppLogs table — so nothing fails silently.
+// Global error capture — two of the three catch-all legs (the third is the
+// top-level React Error Boundary in components/AppErrorBoundary.jsx, which
+// catches render/lifecycle throws these hooks can't see). Anything that escapes
+// every try/catch is routed to logError, which prints to the console AND writes
+// to the AppLogs buffer — from there utils/logShipper.js batches it to the cloud
+// app_logs table. Tagged 'globalError'/'globalError:fatal' (uncaught) and
+// 'unhandledRejection:<id>' (rejected promises) so the catch-all is queryable.
 
 import { logError } from "../db/logs";
 

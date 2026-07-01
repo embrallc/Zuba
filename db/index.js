@@ -28,12 +28,20 @@ export function initializeDatabase(userId) {
     PRAGMA journal_mode = WAL;
     PRAGMA foreign_keys = ON;
 
+    -- App log + telemetry buffer. Doubles as the durable offline queue for the
+    -- cloud log shipper: rows are written with Synced = 0 and flipped to 1 once
+    -- batch-shipped to the cloud app_logs table. Event/Data carry success-
+    -- telemetry (logEvent); SessionId groups one app launch.
     CREATE TABLE IF NOT EXISTS AppLogs (
       LogSk TEXT PRIMARY KEY NOT NULL,
       Level TEXT,
       Message TEXT,
       StackTrace TEXT,
       Context TEXT,
+      Event TEXT,
+      Data TEXT,
+      SessionId TEXT,
+      Synced INTEGER NOT NULL DEFAULT 0,
       CreatedAt INTEGER
     );
 
@@ -357,6 +365,18 @@ export function initializeDatabase(userId) {
       UNIQUE(UserId, NotificationName)
     )`);
   } catch (_) {}
+
+  // Patch AppLogs for existing databases: telemetry + offline-shipper columns.
+  for (const col of [
+    "Event TEXT",
+    "Data TEXT",
+    "SessionId TEXT",
+    "Synced INTEGER NOT NULL DEFAULT 0",
+  ]) {
+    try {
+      _db.execSync(`ALTER TABLE AppLogs ADD COLUMN ${col}`);
+    } catch (_) {}
+  }
 
   // Add Synced column to all sync-eligible tables
   const syncTables = [

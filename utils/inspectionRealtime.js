@@ -1,6 +1,6 @@
 import { DB_EVENTS, emit } from "../db/events";
 import { db } from "../db/index";
-import { logError } from "../db/logs";
+import { logError, logWarn } from "../db/logs";
 import { useInspectionStore } from "../stores/useInspectionStore";
 import { useSettingsStore } from "../stores/useSettingsStore";
 import { supabase } from "./supabase";
@@ -43,11 +43,15 @@ export async function startInspectionRealtime() {
         },
       )
       .subscribe((status, err) => {
-        // Don't hard-fail on a realtime error — pull-sync is the backstop — but
-        // log a chronically broken subscription so it's visible.
+        // A dropped socket (e.g. 1001 "Stream end" on backgrounding / a network
+        // blip / WS idle-timeout) surfaces here as CHANNEL_ERROR/TIMED_OUT.
+        // realtime-js auto-reconnects and the manifest-diff pull-sync is the
+        // backstop, so this is NON-FATAL and expected. Log at WARN (not error) so
+        // a transient blip isn't alarming, while a chronically broken channel is
+        // still visible.
         if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
-          logError(
-            new Error(`inspections realtime ${status}: ${err?.message ?? ""}`),
+          logWarn(
+            `inspections realtime ${status}: ${err?.message ?? "disconnected"}`,
             "inspectionRealtime.subscribe",
           );
         }

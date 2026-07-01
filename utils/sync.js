@@ -1,6 +1,6 @@
 import dayjs from "dayjs";
 import { db } from "../db/index";
-import { logError } from "../db/logs";
+import { logError, logEvent } from "../db/logs";
 import { cacheTemplate } from "../db/walkthroughForms";
 import { useInspectionStore } from "../stores/useInspectionStore";
 import { uploadInspectionPhoto } from "./inspectionPhotos";
@@ -672,6 +672,7 @@ function looksLikePhotoArray(value) {
 async function uploadAnswerPhotos(answers, { orgSk, userId }) {
   let changed = false;
   let pending = false;
+  let uploadedCount = 0;
   const sections = answers?.sections;
   if (!sections || typeof sections !== "object") return { changed, pending };
   for (const sec of Object.values(sections)) {
@@ -696,6 +697,7 @@ async function uploadAnswerPhotos(answers, { orgSk, userId }) {
           if (uploaded) {
             ref.cloudUri = uploaded;
             changed = true;
+            uploadedCount++;
           } else {
             pending = true; // upload failed — retry next sync
           }
@@ -703,6 +705,7 @@ async function uploadAnswerPhotos(answers, { orgSk, userId }) {
       }
     }
   }
+  if (uploadedCount > 0) logEvent("photo.uploaded", { count: uploadedCount });
   return { changed, pending };
 }
 
@@ -973,6 +976,7 @@ export function syncAll() {
 }
 
 async function doSyncAll() {
+  const startedAt = Date.now();
   try {
     console.log("[sync] syncAll starting");
     const {
@@ -1069,6 +1073,11 @@ async function doSyncAll() {
       console.warn(
         `[sync] skipping prune — ${pullFailures} pull step(s) failed`,
       );
+      logEvent("sync.failed", {
+        durationMs: Date.now() - startedAt,
+        pullFailures,
+        reason: "pull_failed_prune_skipped",
+      });
       return;
     }
     try {
@@ -1085,8 +1094,19 @@ async function doSyncAll() {
     }
 
     console.log("[sync] syncAll complete");
+    logEvent("sync.completed", {
+      durationMs: Date.now() - startedAt,
+      inspections: inspectionSks.size,
+      forms: inspectionFormSks.size,
+      smsTemplates: smsTplSks.size,
+      smsStatus: smsStatusSks.size,
+    });
   } catch (e) {
     console.error("[sync] syncAll uncaught error:", e?.message, e?.stack);
     logError(e, "sync/syncAll");
+    logEvent("sync.failed", {
+      durationMs: Date.now() - startedAt,
+      reason: "uncaught",
+    });
   }
 }

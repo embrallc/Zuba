@@ -23,10 +23,12 @@ import {
   createClient,
   SupabaseClient,
 } from "https://esm.sh/@supabase/supabase-js@2";
+import { logCloudEvent } from "../_shared/logToCloud.ts";
 
 declare const Deno: { env: { get(name: string): string | undefined } };
 
 const TAG = "[reconcile-inspection]";
+const SOURCE = "ef:reconcile-inspection";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -188,6 +190,15 @@ serve(async (req) => {
       policyAutoSendReport: pSend,
       reportState: insp.report_state,
     });
+    // Only emit the "skipped" telemetry once — when the report is still pending
+    // (i.e. this is the completion-time decision), not on every idempotent re-run.
+    if ((insp.report_state ?? "pending") === "pending") {
+      void logCloudEvent(admin, SOURCE, "autosend.skipped", {
+        data: { inspectionSk, reason: "auto_send_off" },
+        userId: insp.user_id,
+        orgSk,
+      });
+    }
     return json({ ok: true, reportState: insp.report_state, reason: "auto_send_off" });
   }
 
@@ -198,6 +209,11 @@ serve(async (req) => {
   if (!gateOk) {
     if (insp.report_state === "pending" || insp.report_state === "failed") {
       await bumpedUpdate(admin, inspectionSk, { report_state: "held" });
+      void logCloudEvent(admin, SOURCE, "autosend.held", {
+        data: { inspectionSk, reason: "awaiting_payment" },
+        userId: insp.user_id,
+        orgSk,
+      });
     }
     logInfo("hold_awaiting_payment", {
       inspectionSk,
@@ -261,5 +277,17 @@ serve(async (req) => {
     report_state: success ? "sent" : "failed",
   });
   logInfo("converged", { inspectionSk, sent: success, detail });
+  // Authoritative auto-send outcome (single source of truth — send-report-to-
+  // client doesn't emit its own; its failure reason flows up here as `detail`).
+  void logCloudEvent(
+    admin,
+    SOURCE,
+    success ? "autosend.sent" : "autosend.failed",
+    {
+      data: { inspectionSk, ...(success ? {} : { detail: detail ?? null }) },
+      userId: insp.user_id,
+      orgSk,
+    },
+  );
   return json({ ok: true, reportState: success ? "sent" : "failed", detail });
 });

@@ -15,6 +15,7 @@ import {
   View,
 } from "react-native";
 import { wipeDatabase } from "../db/devQuery";
+import { logError, logEvent } from "../db/logs";
 import { supabase } from "../utils/supabase";
 
 export default function LoginScreen() {
@@ -67,8 +68,10 @@ export default function LoginScreen() {
         if (signUpError) throw signUpError;
       }
 
+      logEvent(mode === "signin" ? "auth.signin" : "auth.signup");
       router.replace("/(tabs)");
     } catch (e) {
+      logError(e, `login.handleSubmit:${mode}`);
       setError(e.message ?? "Something went wrong. Please try again.");
     } finally {
       setLoading(false);
