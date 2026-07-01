@@ -79,18 +79,26 @@ function stripToken(s) {
 // US-style phone number out of the text and strip them so they don't linger in
 // the Summary. Best-effort: order email-first so the phone matcher never grabs
 // digits inside an address.
-const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/;
+const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
 const PHONE_RE = /(?:\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/;
 
 function extractContact(text) {
   let cleaned = typeof text === "string" ? text : "";
-  let email = null;
-  let phone = null;
-  const em = cleaned.match(EMAIL_RE);
-  if (em) {
-    email = em[0].trim().toLowerCase();
-    cleaned = cleaned.replace(em[0], " ");
+  // Capture EVERY email in the notes (an assistant may list the buyer + the
+  // agent + a spouse) — de-duped case-insensitively, first-seen order. `email`
+  // is the first (primary); `emails` carries them all for the recipient fan-out.
+  const emails = [];
+  const seen = new Set();
+  for (const m of cleaned.matchAll(EMAIL_RE)) {
+    const e = m[0].trim().toLowerCase();
+    if (e && !seen.has(e)) {
+      seen.add(e);
+      emails.push(e);
+    }
   }
+  if (emails.length) cleaned = cleaned.replace(EMAIL_RE, " ");
+
+  let phone = null;
   const ph = cleaned.match(PHONE_RE);
   if (ph) {
     phone = ph[0].trim();
@@ -100,7 +108,59 @@ function extractContact(text) {
     .replace(/[ \t]{2,}/g, " ")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
-  return { phone, email, cleaned };
+  return { phone, email: emails[0] ?? null, emails, cleaned };
+}
+
+// US state/territory abbreviations — used to validate the 2-letter token we peel
+// off as the state, so a random 2-letter word before the ZIP isn't mistaken for one.
+const US_STATES = new Set([
+  "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID", "IL",
+  "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT",
+  "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI",
+  "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY",
+  "DC", "PR", "VI", "GU", "AS", "MP",
+]);
+
+// Best-effort US address parse from a free-text calendar location. Apple/Google
+// usually render "123 Main St, City, ST 62704, United States". We anchor on the
+// ZIP (the LAST 5-digit run — the street number is never last), read the 2-letter
+// state right before it, DISCARD anything after the ZIP (the country), and treat
+// the remainder as the street, peeling a trailing comma-segment as the city.
+// Anything we can't confidently split stays whole in line1 — we never lose data.
+function parseUsAddress(location) {
+  const raw = typeof location === "string" ? location.trim() : "";
+  const out = { line1: raw || null, city: null, state: null, zip: null };
+  if (!raw) return out;
+
+  const zips = [...raw.matchAll(/\b\d{5}(?:-\d{4})?\b/g)];
+  if (zips.length === 0) return out; // no ZIP → leave the whole string in line1
+
+  const zm = zips[zips.length - 1]; // last 5-digit run = the ZIP
+  out.zip = zm[0];
+  // Everything before the ZIP; everything after it (the country) is dropped.
+  let before = raw.slice(0, zm.index).replace(/[\s,]+$/, "").trim();
+
+  // State = a VALID 2-letter abbreviation standing alone right before the ZIP.
+  const st = before.match(/(?:^|[\s,])([A-Za-z]{2})$/);
+  if (st && US_STATES.has(st[1].toUpperCase())) {
+    out.state = st[1].toUpperCase();
+    before = before.slice(0, before.length - st[0].length).replace(/[\s,]+$/, "").trim();
+  }
+
+  // Remainder → street (+ city). If comma-delimited, the last segment is almost
+  // always the city; otherwise keep it all in line1.
+  if (before.includes(",")) {
+    const parts = before.split(",").map((p) => p.trim()).filter(Boolean);
+    if (parts.length >= 2) {
+      out.city = parts[parts.length - 1];
+      out.line1 = parts.slice(0, -1).join(", ") || null;
+    } else {
+      out.line1 = before || null;
+    }
+  } else {
+    out.line1 = before || null;
+  }
+  return out;
 }
 
 function toIso(d) {
@@ -477,13 +537,24 @@ async function importEventAsInspection(ev, cfg) {
   const settings = useSettingsStore.getState();
   // Extract follow-up contact info; the notes body itself is NOT mapped to
   // Summary (report content) — a dedicated customer-notes field is V2.
-  const { phone, email } = extractContact(ev.notes || "");
+  const { phone, email, emails } = extractContact(ev.notes || "");
+  const addr = parseUsAddress(ev.location || "");
   const data = {
     UserSk: userSk,
     FullName: stripToken(ev.title) || "Inspection",
-    AddressLine1: ev.location || null,
+    AddressLine1: addr.line1,
+    City: addr.city,
+    State: addr.state,
+    ZipCode: addr.zip,
     Phone: phone,
     Email: email,
+    // Every email found gets the report; the first is the invoice/payer default —
+    // mirrors the in-app recipient model ({ report:[], invoice:[] }). Left unset
+    // (→ default '[]') when the notes carried no email.
+    ReportRecipients:
+      emails && emails.length
+        ? JSON.stringify({ report: emails, invoice: [emails[0]] })
+        : undefined,
     ScheduledAt: toIso(ev.startDate),
     HasApptReminder: settings?.apptReminderSmsEnabled ? 1 : 0,
   };
