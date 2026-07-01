@@ -19,10 +19,12 @@ import {
   createClient,
   SupabaseClient,
 } from "https://esm.sh/@supabase/supabase-js@2";
+import { logCloudEvent } from "../_shared/logToCloud.ts";
 
 declare const Deno: { env: { get(name: string): string | undefined } };
 
 const TAG = "[send-appt-reminders]";
+const SOURCE = "ef:send-appt-reminders";
 const SEND_HOUR = 10; // 10am local
 
 const corsHeaders = {
@@ -300,5 +302,12 @@ serve(async (req) => {
 
   const summary = { ok: true, orgsInWindow, sent, failed, skippedNoPhone };
   logInfo("sweep_done", summary);
+  // Only record a telemetry row when the sweep actually did something — most
+  // hourly runs are no-ops (no org in its 10am window) and would just be noise.
+  if (sent > 0 || failed > 0) {
+    void logCloudEvent(admin, SOURCE, failed > 0 ? "reminder.failed" : "reminder.sent", {
+      data: { orgsInWindow, sent, failed, skippedNoPhone },
+    });
+  }
   return json(summary);
 });

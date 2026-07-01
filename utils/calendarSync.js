@@ -30,7 +30,7 @@ import {
   softDeleteInspection,
   updateInspection,
 } from "../db/inspections";
-import { logError } from "../db/logs";
+import { logError, logEvent } from "../db/logs";
 import { useCalendarStore } from "../stores/useCalendarStore";
 import { useInspectionStore } from "../stores/useInspectionStore";
 import { useSettingsStore } from "../stores/useSettingsStore";
@@ -603,6 +603,7 @@ export async function runPull() {
     // simply out of range, not deleted).
     const startMs = windowStart.getTime();
     const endMs = windowEnd.getTime();
+    let nDeleted = 0;
     for (const l of links) {
       if (seen.has(l.CalendarEventId)) continue;
       if (!l.ScheduledAt) continue;
@@ -616,6 +617,17 @@ export async function runPull() {
         applyingRemote = false;
       }
       useInspectionStore.getState().remove(l.InspectionSk);
+      nDeleted++;
+    }
+
+    // Only record when the pull actually changed something — this runs on every
+    // app foreground, so a quiet run would just be noise.
+    if (nImported > 0 || nDeleted > 0) {
+      logEvent("calendar.synced", {
+        imported: nImported,
+        deleted: nDeleted,
+        known: nKnown,
+      });
     }
   } catch (e) {
     logError(e, "calendarSync.runPull");

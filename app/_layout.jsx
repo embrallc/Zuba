@@ -9,6 +9,7 @@ import {
   configureReanimatedLogger,
   ReanimatedLogLevel,
 } from "react-native-reanimated";
+import AppErrorBoundary from "../components/AppErrorBoundary";
 import TopBanner from "../components/TopBanner";
 import { DB_EVENTS, subscribe } from "../db/events";
 import { initializeDatabase } from "../db/index";
@@ -25,6 +26,7 @@ import {
   startConnectivityWatch,
   stopConnectivityWatch,
 } from "../utils/connectivity";
+import { startLogShipper, stopLogShipper } from "../utils/logShipper";
 import {
   startInspectionRealtime,
   stopInspectionRealtime,
@@ -147,6 +149,8 @@ export default function RootLayout() {
     configurePurchases();
     // Watch connectivity so a reconnect immediately flushes the dirty queue.
     startConnectivityWatch();
+    // Batch-ship buffered logs/telemetry to the cloud app_logs table.
+    startLogShipper();
     const purchasesListener = addCustomerInfoListener((info) => {
       setCustomerInfo(info);
     });
@@ -204,6 +208,7 @@ export default function RootLayout() {
       authSubscription.unsubscribe();
       purchasesListener.remove();
       stopConnectivityWatch();
+      stopLogShipper();
     };
   }, []);
 
@@ -370,7 +375,8 @@ export default function RootLayout() {
   }
 
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
+    <AppErrorBoundary>
+      <GestureHandlerRootView style={{ flex: 1 }}>
       <StatusBar
         style="dark"
         translucent={false}
@@ -462,6 +468,7 @@ export default function RootLayout() {
       {/* Global drop-down notification banner. Sits above every screen so
           any module can call showBanner(...) without per-screen wiring. */}
       <TopBanner />
-    </GestureHandlerRootView>
+      </GestureHandlerRootView>
+    </AppErrorBoundary>
   );
 }

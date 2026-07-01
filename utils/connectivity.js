@@ -37,6 +37,15 @@ function isStateOnline(state) {
 
 let unsubscribe = null;
 
+// Reconnect subscribers (e.g. the log shipper). Kept as a one-way registration
+// so connectivity never has to import those modules (avoids an import cycle):
+// they call addReconnectListener(fn) and we invoke fn on the offline->online edge.
+const reconnectListeners = new Set();
+export function addReconnectListener(fn) {
+  reconnectListeners.add(fn);
+  return () => reconnectListeners.delete(fn);
+}
+
 // Subscribe once at boot. On an offline -> online edge, flush the dirty queue
 // with syncAll() (idempotent + re-entrancy guarded, so it coalesces with any
 // boot/refresh sync already in flight rather than duplicating it).
@@ -63,6 +72,14 @@ export function startConnectivityWatch() {
           syncAll();
         } catch (e) {
           logError(e, "connectivity/flushOnReconnect");
+        }
+        // Notify reconnect subscribers (log shipper, etc.).
+        for (const fn of reconnectListeners) {
+          try {
+            fn();
+          } catch (e) {
+            logError(e, "connectivity/reconnectListener");
+          }
         }
       }
     });

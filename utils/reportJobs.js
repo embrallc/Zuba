@@ -7,7 +7,7 @@
 // the subscription.
 
 import dayjs from "dayjs";
-import { logError } from "../db/logs";
+import { logError, logWarn } from "../db/logs";
 import { useSettingsStore } from "../stores/useSettingsStore";
 import { supabase } from "./supabase";
 
@@ -148,11 +148,12 @@ export function subscribeToJob(jobId, onRow) {
       },
     )
     .subscribe((status, err) => {
-      // Don't hard-fail on a realtime error — the poll backstop covers it — but
-      // log it so a chronically broken subscription is visible.
+      // Transient socket drops (CHANNEL_ERROR/TIMED_OUT) are expected and
+      // self-healing; the poll backstop covers the gap. Log at WARN (not error)
+      // so a blip isn't alarming, while a chronically broken channel stays visible.
       if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
-        logError(
-          new Error(`report_jobs realtime ${status}: ${err?.message ?? ""}`),
+        logWarn(
+          `report_jobs realtime ${status}: ${err?.message ?? "disconnected"}`,
           `reportJobs.subscribeToJob job=${jobId}`,
         );
       }

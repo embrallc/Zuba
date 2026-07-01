@@ -2,7 +2,7 @@ import * as Linking from "expo-linking";
 import * as WebBrowser from "expo-web-browser";
 import { Share } from "react-native";
 import { setInspectionPaymentStateLocal } from "../db/inspections";
-import { logError } from "../db/logs";
+import { logError, logEvent } from "../db/logs";
 import { useInspectionStore } from "../stores/useInspectionStore";
 import { pushInspection } from "./sync";
 import { supabase } from "./supabase";
@@ -104,6 +104,8 @@ export async function requestPayment(inspectionSk, amountCents) {
 
   const data = await invoke("stripe-create-checkout", { inspectionSk, amountCents });
   if (!data?.checkoutUrl) throw new Error("No payment link was returned.");
+
+  logEvent("payment.requested", { sk: inspectionSk, amountCents });
 
   // Optimistic UI: the server already set 'requested' + bumped _version. Reflect
   // it BOTH in SQLite (so the archive badge + a later reopen keep showing it) and

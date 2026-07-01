@@ -76,24 +76,31 @@ export async function recordReport({
   }
 }
 
-// Server-side error sink. Best-effort — logging must never throw.
+// Server-side telemetry sink (errors + events). Best-effort — never throws.
+// Shares the app_logs schema with the device shipper + EF _shared/logToCloud.
 export async function logToCloud({
   level = "error",
+  event,
   message,
   context,
   stack,
+  data,
   jobId,
   userId,
+  orgId,
   source = "report-worker",
 }) {
   try {
     await admin.from("app_logs").insert({
-      level,
-      message: message ?? null,
+      level: level ?? (event ? "event" : "error"),
+      event: event ?? null,
+      message: message ?? event ?? null,
       context: context ?? null,
       stack: stack ?? null,
+      data: data ?? null,
       job_id: jobId ?? null,
       user_id: userId ?? null,
+      org_sk: orgId ?? null,
       source,
     });
   } catch (e) {

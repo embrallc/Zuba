@@ -11,7 +11,7 @@
 
 import * as FileSystem from "expo-file-system/legacy";
 import { setInspectionLocalReport } from "../db/inspections";
-import { logError } from "../db/logs";
+import { logError, logEvent } from "../db/logs";
 import { useInspectionStore } from "../stores/useInspectionStore";
 import { isWorkerConfigured, startCloudReport } from "./reportJobs";
 import { supabase } from "./supabase";
@@ -165,21 +165,37 @@ export async function generateInspectionReport(inspection, onProgress) {
     throw err;
   }
 
-  // Push local edits/photos first — the worker renders from the cloud copy.
+  const startedAt = Date.now();
   try {
-    await syncAll();
+    // Push local edits/photos first — the worker renders from the cloud copy.
+    try {
+      await syncAll();
+    } catch (e) {
+      logError(e, "utils/reports.generate.sync");
+      // Continue — worst case the report reflects the last synced state.
+    }
+
+    // Worker job → completed row (report_url is a signed URL to the PDF).
+    const row = await runWorkerJob(inspection, onProgress);
+    const path = await downloadAndRecord(inspection, row.report_url, Date.now());
+
+    logEvent("report.generated", {
+      sk,
+      source: "manual",
+      durationMs: Date.now() - startedAt,
+    });
+    // The report_jobs row doesn't carry pageCount/usedDraft/skippedPhotos (those
+    // live on the worker side only), so the banner just reports success.
+    return { path, pageCount: null, usedDraft: false, skippedPhotos: 0 };
   } catch (e) {
-    logError(e, "utils/reports.generate.sync");
-    // Continue — worst case the report reflects the last synced state.
+    logEvent("report.failed", {
+      sk,
+      source: "manual",
+      durationMs: Date.now() - startedAt,
+      reason: e?.message ?? String(e),
+    });
+    throw e;
   }
-
-  // Worker job → completed row (report_url is a signed URL to the PDF).
-  const row = await runWorkerJob(inspection, onProgress);
-  const path = await downloadAndRecord(inspection, row.report_url, Date.now());
-
-  // The report_jobs row doesn't carry pageCount/usedDraft/skippedPhotos (those
-  // live on the worker side only), so the banner just reports success.
-  return { path, pageCount: null, usedDraft: false, skippedPhotos: 0 };
 }
 
 // Remove ONE inspection's cached PDF + clear its device-local pointer. Called

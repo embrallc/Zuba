@@ -28,7 +28,7 @@ import Animated, {
   withTiming,
 } from "react-native-reanimated";
 import { setInspectionStatus, softDeleteInspection } from "../db/inspections";
-import { logError } from "../db/logs";
+import { logError, logEvent } from "../db/logs";
 import { useDebouncedPress } from "../hooks/useDebouncedPress";
 import { useBannerStore } from "../stores/useBannerStore";
 import { useInspectionStore } from "../stores/useInspectionStore";
@@ -303,6 +303,7 @@ export default function InspectionCard({ inspection, onPress }) {
     try {
       await setInspectionStatus(inspection.InspectionSk, "CLOSED");
       removeFromStore(inspection.InspectionSk);
+      logEvent("inspection.completed", { sk: inspection.InspectionSk });
       showBanner({
         message: `${clientLabel} marked complete.`,
         kind: "success",
@@ -322,7 +323,12 @@ export default function InspectionCard({ inspection, onPress }) {
         pushInspectionForm(inspection.InspectionSk),
       ])
         .then(() => reconcileInspection(inspection.InspectionSk))
-        .catch(() => {});
+        .catch((e) =>
+          logError(
+            e,
+            `InspectionCard.handleComplete.reconcile sk=${inspection.InspectionSk}`,
+          ),
+        );
     } catch (e) {
       logError(
         e,

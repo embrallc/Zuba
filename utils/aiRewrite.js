@@ -5,7 +5,7 @@
 // the caller shows for review. The function holds the Gemini key — we never
 // call Google from the device.
 
-import { logError } from "../db/logs";
+import { logError, logEvent } from "../db/logs";
 import { supabase } from "./supabase";
 
 // Throws an Error whose `.code` is the server reason ("rate_limited",
@@ -40,6 +40,7 @@ export async function requestRewrite({
     e.code = "empty_rewrite";
     throw e;
   }
+  logEvent("airewrite.success", { regenerate });
   return rewrite;
 }
 
