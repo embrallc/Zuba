@@ -1,15 +1,16 @@
-// send-appt-reminders Edge Function — outbound day-before SMS reminders.
+// send-appt-reminders Edge Function — day-before appointment SMS reminders.
 //
-// Invoked hourly by pg_cron (service-role bearer). Each run is a sweep:
-//   - For every org with a timezone, check its LOCAL hour. Only orgs where it's
-//     currently 10:00 local are in their send window (so one hourly cron fans
-//     out across all timezones; each org fires once/day).
-//   - For those orgs, find inspections scheduled for TOMORROW (org-local) that
-//     opted into a reminder and haven't been sent yet, and text the client.
-//   - Flip appt_reminder_status PENDING→SENT (idempotent: one send per job).
+// Invoked hourly by pg_cron (service-role bearer). Each run asks the DB, via the
+// set-based `due_appt_reminders()` function, for exactly the inspections to text
+// right now: opted-in, still PENDING, not deleted/cancelled/closed, with a phone,
+// whose appointment is TOMORROW in the org's timezone and whose org-local hour is
+// at/after the 9am floor (no texts before 9am; no upper cap). Then it texts each
+// client and flips appt_reminder_status PENDING->SENT (idempotent: one send per
+// PENDING episode — a reschedule re-arms it to PENDING via a DB trigger).
 //
-// All timezone math is done against the org's IANA `timezone` via Intl — never
-// server/UTC wall-clock — so "tomorrow" and "10am" are correct everywhere.
+// Why the DB does the selection: it keeps this O(reminders-due-soon) via a partial
+// index instead of an org-by-org N+1 loop, so it scales with the reminder volume,
+// not the org/user count. All timezone math lives in the SQL function.
 //
 // Auth: internal only (bearer must equal the service-role key). Twilio creds and
 // the service-role key come from EF env; nothing is ever in the client bundle.
@@ -25,10 +26,10 @@ declare const Deno: { env: { get(name: string): string | undefined } };
 
 const TAG = "[send-appt-reminders]";
 const SOURCE = "ef:send-appt-reminders";
-const SEND_HOUR = 10; // 10am local
-// Fallback for an org that hasn't had its timezone persisted yet (the client
-// heals it to the owner's device zone on first Settings load). Without this a
-// null-timezone org would be silently skipped and never send reminders.
+const MIN_SEND_HOUR = 9; // org-local floor: no texts before 9am (no upper cap).
+// Fallback zone for an org that hasn't had its timezone persisted yet (the client
+// heals it to the owner's device zone on first Settings load). Only used here for
+// message formatting; the SQL function applies the same fallback for selection.
 const DEFAULT_TZ = "America/Chicago";
 
 const corsHeaders = {
@@ -56,58 +57,6 @@ function logError(event: string, err: unknown, fields: Record<string, unknown> =
       error: err instanceof Error ? err.message : (anyErr?.message ?? String(err)),
     }),
   );
-}
-
-// ── Timezone helpers (no external tz lib; Intl is enough) ────────────────────
-
-// Wall-clock parts of an instant in a given IANA zone.
-function zonedParts(instant: Date, timeZone: string) {
-  const fmt = new Intl.DateTimeFormat("en-US", {
-    timeZone,
-    hour12: false,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
-  const map: Record<string, string> = {};
-  for (const p of fmt.formatToParts(instant)) {
-    if (p.type !== "literal") map[p.type] = p.value;
-  }
-  return {
-    year: +map.year,
-    month: +map.month,
-    day: +map.day,
-    hour: +map.hour === 24 ? 0 : +map.hour,
-    minute: +map.minute,
-    second: +map.second,
-  };
-}
-
-// UTC epoch-ms for a wall-clock time interpreted in `timeZone` (date-fns-tz trick).
-function zonedTimeToUtcMs(
-  y: number,
-  m: number,
-  d: number,
-  h: number,
-  mi: number,
-  s: number,
-  timeZone: string,
-): number {
-  const asUtc = Date.UTC(y, m - 1, d, h, mi, s);
-  const back = zonedParts(new Date(asUtc), timeZone);
-  const backUtc = Date.UTC(
-    back.year,
-    back.month - 1,
-    back.day,
-    back.hour,
-    back.minute,
-    back.second,
-  );
-  const offset = backUtc - asUtc; // how far ahead of UTC the zone is
-  return asUtc - offset;
 }
 
 // Format the appointment time ("10:30 AM") and date ("Mon, Jun 30") in org tz.
@@ -171,6 +120,15 @@ async function sendSms(to: string, body: string): Promise<{ ok: boolean; detail?
   }
 }
 
+interface DueRow {
+  inspection_sk: string;
+  phone: string | null;
+  scheduled_at: string;
+  timezone: string | null;
+  inspector_name: string | null;
+  version: number | null;
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return json({ error: "method_not_allowed" }, 405);
@@ -185,10 +143,10 @@ serve(async (req) => {
   });
 
   // Test hooks (internal only — this endpoint already requires the service-role
-  // key). ignoreHour bypasses the 10am-local gate so a manual staging invoke
-  // sends immediately; orgSk limits the sweep to one org. The tomorrow-date +
-  // opt-in + valid-phone gates still apply, so this can't fire anything that a
-  // real 10am run wouldn't.
+  // key). ignoreHour drops the 9am floor so a manual staging invoke sends
+  // immediately; orgSk scopes the sweep to one org. The tomorrow-date + opt-in +
+  // valid-phone gates still apply (they live in due_appt_reminders), so this can't
+  // fire anything a real 9am run wouldn't.
   let body: { ignoreHour?: boolean; orgSk?: string } = {};
   try {
     body = await req.json();
@@ -197,121 +155,66 @@ serve(async (req) => {
   }
   const ignoreHour = body.ignoreHour === true;
 
-  const now = new Date();
-  let orgsInWindow = 0;
+  // One set-based, index-backed query for exactly the rows to text right now.
+  const { data: due, error: dueErr } = await admin.rpc("due_appt_reminders", {
+    p_min_hour: ignoreHour ? -1 : MIN_SEND_HOUR,
+    p_org_sk: body.orgSk ?? null,
+  });
+  if (dueErr) {
+    logError("due_query_failed", dueErr);
+    return json({ error: "db_error" }, 500);
+  }
+
   let sent = 0;
   let failed = 0;
   let skippedNoPhone = 0;
 
-  // Every org whose local hour is the send hour. A null timezone (owner hasn't
-  // set it yet) falls back to Central so its reminders still fire, rather than
-  // being silently excluded from the sweep.
-  const { data: orgs, error: orgErr } = await admin
-    .from("organizations")
-    .select("org_sk, timezone");
-  if (orgErr) {
-    logError("orgs_query_failed", orgErr);
-    return json({ error: "db_error" }, 500);
-  }
-
-  for (const org of orgs ?? []) {
-    if (body.orgSk && org.org_sk !== body.orgSk) continue;
-    const tz = (org.timezone as string) || DEFAULT_TZ;
-    let localHour: number;
-    let tomorrowStartMs: number;
-    let dayAfterStartMs: number;
-    try {
-      const np = zonedParts(now, tz);
-      localHour = np.hour;
-      if (localHour !== SEND_HOUR && !ignoreHour) continue;
-      // Tomorrow's local calendar date.
-      const t = new Date(Date.UTC(np.year, np.month - 1, np.day + 1));
-      const ty = t.getUTCFullYear(), tm = t.getUTCMonth() + 1, td = t.getUTCDate();
-      tomorrowStartMs = zonedTimeToUtcMs(ty, tm, td, 0, 0, 0, tz);
-      // Day after tomorrow (DST-safe upper bound; not start+24h).
-      const a = new Date(Date.UTC(np.year, np.month - 1, np.day + 2));
-      dayAfterStartMs = zonedTimeToUtcMs(
-        a.getUTCFullYear(), a.getUTCMonth() + 1, a.getUTCDate(), 0, 0, 0, tz,
-      );
-    } catch (e) {
-      logError("bad_timezone", e, { orgSk: org.org_sk, timezone: tz });
+  for (const row of (due ?? []) as DueRow[]) {
+    const to = toE164(row.phone);
+    if (!to) {
+      skippedNoPhone++;
+      logInfo("skip_no_phone", { inspectionSk: row.inspection_sk });
       continue;
     }
-    orgsInWindow++;
+    const tz = row.timezone || DEFAULT_TZ;
+    const when = new Date(row.scheduled_at);
+    const time = formatTime(when, tz);
+    const date = formatDate(when, tz);
+    const inspector = row.inspector_name?.trim() || "your inspector";
+    const message =
+      `Your inspection is scheduled for ${time} tomorrow, ${date}. ` +
+      `Your inspector will be ${inspector}. ` +
+      `Reply C to confirm or X to cancel.`;
 
-    // Inspectors in this org → name lookup + the user_id set to filter by.
-    const { data: users } = await admin
-      .from("users")
-      .select("id, fname, lname")
-      .eq("org_sk", org.org_sk);
-    const ids = (users ?? []).map((u) => u.id);
-    if (ids.length === 0) continue;
-    const nameById = new Map<string, string>();
-    for (const u of users ?? []) {
-      nameById.set(u.id, `${u.fname ?? ""} ${u.lname ?? ""}`.trim());
+    const r = await sendSms(to, message);
+    if (!r.ok) {
+      failed++;
+      logError("sms_failed", new Error(r.detail), { inspectionSk: row.inspection_sk });
+      continue; // leave PENDING; the next in-window sweep retries
     }
-
-    // Tomorrow's opted-in, not-yet-sent, non-terminal inspections.
-    const { data: insps, error: inspErr } = await admin
+    // Send-first, then flip (guarded on still-PENDING) so a lost send is never
+    // marked sent, and concurrent runs can't double-flip the same row.
+    const nextVersion = Number(row.version ?? 1) + 1;
+    await admin
       .from("inspections")
-      .select("inspection_sk, user_id, full_name, phone, scheduled_at, _version")
-      .in("user_id", ids)
-      .eq("has_appt_reminder", true)
-      .eq("appt_reminder_status", "PENDING")
-      .eq("_deleted", false)
-      .not("status", "in", "(CANCELLED,CLOSED)")
-      .gte("scheduled_at", new Date(tomorrowStartMs).toISOString())
-      .lt("scheduled_at", new Date(dayAfterStartMs).toISOString());
-    if (inspErr) {
-      logError("insp_query_failed", inspErr, { orgSk: org.org_sk });
-      continue;
-    }
-
-    for (const insp of insps ?? []) {
-      const to = toE164(insp.phone);
-      if (!to) {
-        skippedNoPhone++;
-        logInfo("skip_no_phone", { inspectionSk: insp.inspection_sk });
-        continue;
-      }
-      const when = new Date(insp.scheduled_at);
-      const time = formatTime(when, tz);
-      const date = formatDate(when, tz);
-      const inspector = nameById.get(insp.user_id) || "your inspector";
-      const body =
-        `Your inspection is scheduled for ${time} tomorrow, ${date}. ` +
-        `Your inspector will be ${inspector}. ` +
-        `Reply C to confirm or X to cancel.`;
-
-      const r = await sendSms(to, body);
-      if (!r.ok) {
-        failed++;
-        logError("sms_failed", new Error(r.detail), { inspectionSk: insp.inspection_sk });
-        continue; // leave PENDING; only the one 10am run retries
-      }
-      // Send-first, then flip (guarded) so a lost send is never marked sent.
-      const nextVersion = Number(insp._version ?? 1) + 1;
-      await admin
-        .from("inspections")
-        .update({
-          appt_reminder_status: "SENT",
-          _version: nextVersion,
-          _last_changed_at: Date.now(),
-        })
-        .eq("inspection_sk", insp.inspection_sk)
-        .eq("appt_reminder_status", "PENDING");
-      sent++;
-      logInfo("sent", { inspectionSk: insp.inspection_sk });
-    }
+      .update({
+        appt_reminder_status: "SENT",
+        _version: nextVersion,
+        _last_changed_at: Date.now(),
+      })
+      .eq("inspection_sk", row.inspection_sk)
+      .eq("appt_reminder_status", "PENDING");
+    sent++;
+    logInfo("sent", { inspectionSk: row.inspection_sk });
   }
 
-  const summary = { ok: true, orgsInWindow, sent, failed, skippedNoPhone };
+  const summary = { ok: true, candidates: (due ?? []).length, sent, failed, skippedNoPhone };
   logInfo("sweep_done", summary);
-  // Only record a telemetry row when the sweep actually did something — most
-  // hourly runs are no-ops (no org in its 10am window) and would just be noise.
+  // Only record a telemetry row when the sweep actually did something — most hourly
+  // runs return no due rows and would just be noise.
   if (sent > 0 || failed > 0) {
     void logCloudEvent(admin, SOURCE, failed > 0 ? "reminder.failed" : "reminder.sent", {
-      data: { orgsInWindow, sent, failed, skippedNoPhone },
+      data: { candidates: (due ?? []).length, sent, failed, skippedNoPhone },
     });
   }
   return json(summary);
