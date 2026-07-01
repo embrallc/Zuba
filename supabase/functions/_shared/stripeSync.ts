@@ -3,7 +3,7 @@
 // only mirror its current state into our thin tables, guarded against
 // out-of-order delivery by last_event_ms.
 
-import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
+import type { SupabaseClient } from "npm:@supabase/supabase-js@2";
 
 type CheckoutPatch = {
   sessionId: string;

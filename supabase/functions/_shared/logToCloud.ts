@@ -8,7 +8,7 @@
 // Levels shipped: 'error' | 'warn' | 'event'. Events are dot-namespaced
 // 'domain.outcome' (e.g. autosend.sent / autosend.failed); failures end '.failed'.
 
-import { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { SupabaseClient } from "npm:@supabase/supabase-js@2";
 
 export interface CloudLogEntry {
   level?: "error" | "warn" | "event" | "info";

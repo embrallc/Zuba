@@ -8,7 +8,7 @@
 // event-ordering / PRODUCT_CHANGE / grace-period subtlety because we always
 // write the current state, never a delta.
 
-import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
+import type { SupabaseClient } from "npm:@supabase/supabase-js@2";
 
 declare const Deno: { env: { get(name: string): string | undefined } };
 
