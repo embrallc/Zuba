@@ -98,8 +98,12 @@ async function handleCloudRow(row) {
   );
 
   // Drop it from the active list live, fire INSPECTION_UPDATED (cancels any
-  // pending local reminder via the notification subscriber), and refresh badge.
+  // pending local reminder via the notification subscriber), and refresh + bounce
+  // the unread-cancellation badge (count alone updates silently — the pulse is
+  // what replays the attention bounce on whatever screen is showing the badge).
   useInspectionStore.getState().remove(sk);
   if (updated) emit(DB_EVENTS.INSPECTION_UPDATED, updated);
-  useSettingsStore.getState().refreshCancelledCount?.();
+  const settings = useSettingsStore.getState();
+  settings.refreshCancelledCount?.();
+  settings.bumpCancelBadgePulse?.();
 }
