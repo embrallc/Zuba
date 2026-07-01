@@ -322,10 +322,29 @@ function parseSnapshot(str) {
   }
 }
 
+// True when an error means "the calendar event no longer exists" — so callers can
+// heal (recreate) or suppress instead of surfacing it. expo-calendar wraps the
+// real reason in a nested cause: the top message is generic ("Calling the
+// 'saveEventAsync' function has failed") while the cause carries "Event with id …
+// could not be found". So we flatten the message/code across the cause chain and
+// match the phrasings iOS/Android actually use (note: "could not be found" does
+// NOT contain the substring "not found").
 function isMissingEvent(e) {
-  const m = (e?.message || "").toLowerCase();
+  let text = "";
+  let cur = e;
+  for (let i = 0; i < 5 && cur; i++) {
+    if (cur.message) text += " " + cur.message;
+    if (cur.code) text += " " + cur.code;
+    cur = cur.cause;
+  }
+  text = text.toLowerCase();
   return (
-    m.includes("not found") || m.includes("no event") || m.includes("invalid")
+    text.includes("not found") ||
+    text.includes("could not be found") ||
+    text.includes("no event") ||
+    text.includes("does not exist") ||
+    text.includes("doesn't exist") ||
+    text.includes("invalid")
   );
 }
 
@@ -808,6 +827,13 @@ export async function runPull() {
       if (!l.ScheduledAt) continue;
       const t = new Date(l.ScheduledAt).getTime();
       if (!Number.isFinite(t) || t < startMs || t > endMs) continue;
+      // Don't conclude a calendar-side deletion for a row with local pending
+      // changes (Synced=0): the user just restored/edited it in-app, so a missing
+      // event is a link awaiting (re)creation, not a user calendar deletion. Real
+      // calendar-side deletes land on settled (Synced=1) rows and are caught on a
+      // later pull. This closes the race where a dangling link could soft-delete a
+      // just-restored inspection before its recreate lands.
+      if (l.Synced === 0) continue;
       applyingRemote = true;
       try {
         // eslint-disable-next-line no-await-in-loop
