@@ -6,6 +6,9 @@
 // service-role `admin` client instead of per-request Deno clients, and (2)
 // inspection photos are downscaled with `sharp` before embedding (smaller
 // PDFs + lower peak memory) and EXIF-rotated so portrait photos aren't sideways.
+// (3) Any freehand markup the inspector drew (arrows/boxes/circles/pen), stored
+// on the photo ref as normalized [0,1] strokes, is burned onto the photo via an
+// SVG overlay so it prints on the report.
 //
 // Entry point: renderInspectionReport({ inspectionSk, userId, orgSk, tzOffsetMin })
 //   → { bytes: Uint8Array, pageCount, skippedPhotos, usedDraft, autoBuilt }
@@ -423,31 +426,154 @@ function layoutBand(band, ctx, scope, fonts, embeddedById) {
   return { items: [...shapeItems, ...items], heightPx: grownBandH };
 }
 
-// ── Photo bytes → embed-ready (sharp downscale + EXIF rotate) ────────────────
+// ── Markup overlay (normalized strokes → SVG burned onto the photo) ──────────
+// The inspector's markup is stored on the photo ref as a JSON string
+// { v, strokes:[...] } with coordinates normalized to [0,1] of the (displayed,
+// already EXIF-oriented) image — see app/photoedit.jsx. We rebuild it as an SVG
+// sized to the final image pixels and composite it, mirroring the editor's own
+// renderers so the printed markup matches what the inspector drew.
+
+function parseMarkupStrokes(markup) {
+  if (!markup) return [];
+  try {
+    const parsed = typeof markup === "string" ? JSON.parse(markup) : markup;
+    return Array.isArray(parsed?.strokes) ? parsed.strokes : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+// Round to 2dp to keep the SVG small.
+function n2(n) {
+  return Math.round((Number(n) || 0) * 100) / 100;
+}
+
+// Build an SVG string (image-sized) from normalized strokes, or null if there's
+// nothing drawable. Stroke width is a fraction of image WIDTH (matches the
+// editor, where sw = width × canvasWidth), min 1px.
+function buildMarkupSvg(strokes, W, H) {
+  if (!W || !H || !Array.isArray(strokes) || strokes.length === 0) return null;
+  const parts = [];
+  for (const s of strokes) {
+    if (!s || typeof s !== "object") continue;
+    const color = typeof s.color === "string" ? s.color : "#FF3B30";
+    const sw = Math.max(1, (Number(s.width) || 0.008) * W);
+    const common =
+      `fill="none" stroke="${color}" stroke-width="${n2(sw)}" ` +
+      `stroke-linecap="round" stroke-linejoin="round"`;
+    switch (s.tool) {
+      case "pen": {
+        const pts = Array.isArray(s.points) ? s.points : [];
+        if (pts.length === 1) {
+          parts.push(
+            `<circle cx="${n2(pts[0].x * W)}" cy="${n2(pts[0].y * H)}" r="${n2(sw / 2)}" fill="${color}"/>`,
+          );
+        } else if (pts.length >= 2) {
+          const d = pts
+            .map((p, i) => `${i === 0 ? "M" : "L"} ${n2(p.x * W)} ${n2(p.y * H)}`)
+            .join(" ");
+          parts.push(`<path d="${d}" ${common}/>`);
+        }
+        break;
+      }
+      case "line": {
+        if (!s.start || !s.end) break;
+        parts.push(
+          `<line x1="${n2(s.start.x * W)}" y1="${n2(s.start.y * H)}" x2="${n2(s.end.x * W)}" y2="${n2(s.end.y * H)}" ${common}/>`,
+        );
+        break;
+      }
+      case "arrow": {
+        if (!s.start || !s.end) break;
+        const sx = s.start.x * W;
+        const sy = s.start.y * H;
+        const ex = s.end.x * W;
+        const ey = s.end.y * H;
+        const angle = Math.atan2(ey - sy, ex - sx);
+        const ah = Math.max(sw * 3, 12); // arrowhead length, matches the editor
+        const h1x = ex - ah * Math.cos(angle - Math.PI / 6);
+        const h1y = ey - ah * Math.sin(angle - Math.PI / 6);
+        const h2x = ex - ah * Math.cos(angle + Math.PI / 6);
+        const h2y = ey - ah * Math.sin(angle + Math.PI / 6);
+        const d =
+          `M ${n2(sx)} ${n2(sy)} L ${n2(ex)} ${n2(ey)} ` +
+          `M ${n2(ex)} ${n2(ey)} L ${n2(h1x)} ${n2(h1y)} ` +
+          `M ${n2(ex)} ${n2(ey)} L ${n2(h2x)} ${n2(h2y)}`;
+        parts.push(`<path d="${d}" ${common}/>`);
+        break;
+      }
+      case "rect": {
+        if (!s.start || !s.end) break;
+        const x = Math.min(s.start.x, s.end.x) * W;
+        const y = Math.min(s.start.y, s.end.y) * H;
+        const w = Math.abs(s.end.x - s.start.x) * W;
+        const h = Math.abs(s.end.y - s.start.y) * H;
+        parts.push(
+          `<rect x="${n2(x)}" y="${n2(y)}" width="${n2(w)}" height="${n2(h)}" ${common}/>`,
+        );
+        break;
+      }
+      case "ellipse": {
+        if (!s.start || !s.end) break;
+        const cx = ((s.start.x + s.end.x) / 2) * W;
+        const cy = ((s.start.y + s.end.y) / 2) * H;
+        const rx = (Math.abs(s.end.x - s.start.x) / 2) * W;
+        const ry = (Math.abs(s.end.y - s.start.y) / 2) * H;
+        parts.push(
+          `<ellipse cx="${n2(cx)}" cy="${n2(cy)}" rx="${n2(rx)}" ry="${n2(ry)}" ${common}/>`,
+        );
+        break;
+      }
+      default:
+        break;
+    }
+  }
+  if (parts.length === 0) return null;
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" ` +
+    `viewBox="0 0 ${W} ${H}">${parts.join("")}</svg>`
+  );
+}
+
+// ── Photo bytes → embed-ready (sharp downscale + EXIF rotate + markup) ────────
 // Returns { bytes, isPng }. On any sharp failure, falls back to the originals
 // so a quirky image degrades gracefully instead of failing the whole report.
-async function prepImageForEmbed(rawBytes) {
+async function prepImageForEmbed(rawBytes, markup) {
+  const strokes = parseMarkupStrokes(markup);
+  const hasMarkup = strokes.length > 0;
   try {
     const img = sharp(Buffer.from(rawBytes), { failOn: "none" });
     const meta = await img.metadata();
     const within =
       (meta.width ?? Infinity) <= PHOTO_MAX_EDGE &&
       (meta.height ?? Infinity) <= PHOTO_MAX_EDGE;
-    // Already small and no orientation to bake in — keep originals (preserves
-    // PNG/alpha exactly).
-    if (within && !meta.orientation && rawBytes.length < 1_500_000) {
+    // Already small and no orientation to bake in, and nothing to draw — keep
+    // originals (preserves PNG/alpha exactly).
+    if (!hasMarkup && within && !meta.orientation && rawBytes.length < 1_500_000) {
       return { bytes: rawBytes, isPng: rawBytes[0] === 0x89 && rawBytes[1] === 0x50 };
     }
-    const out = await img
+    const base = img
       .rotate() // bake in EXIF orientation, then strip the tag
       .resize({
         width: PHOTO_MAX_EDGE,
         height: PHOTO_MAX_EDGE,
         fit: "inside",
         withoutEnlargement: true,
-      })
-      .jpeg({ quality: 80 })
-      .toBuffer();
+      });
+
+    if (!hasMarkup) {
+      const out = await base.jpeg({ quality: 80 }).toBuffer();
+      return { bytes: new Uint8Array(out), isPng: false };
+    }
+
+    // Rasterize the oriented+resized image first so we know its final pixel size,
+    // then composite the markup SVG (sized to those pixels; the strokes'
+    // normalized coords map 1:1) and re-encode.
+    const pre = await base.toBuffer({ resolveWithObject: true });
+    const svg = buildMarkupSvg(strokes, pre.info?.width ?? 0, pre.info?.height ?? 0);
+    const pipe = sharp(pre.data);
+    if (svg) pipe.composite([{ input: Buffer.from(svg), top: 0, left: 0 }]);
+    const out = await pipe.jpeg({ quality: 80 }).toBuffer();
     return { bytes: new Uint8Array(out), isPng: false };
   } catch (e) {
     logError("photo_prep_failed", e);
@@ -582,7 +708,7 @@ export async function renderInspectionReport({
         .download(ref.cloudUri);
       if (dlErr || !blob) throw dlErr ?? new Error("empty download");
       const raw = new Uint8Array(await blob.arrayBuffer());
-      const { bytes, isPng } = await prepImageForEmbed(raw);
+      const { bytes, isPng } = await prepImageForEmbed(raw, ref.markup);
       imageBytes += bytes.length;
       const img = isPng ? await pdf.embedPng(bytes) : await pdf.embedJpg(bytes);
       embeddedById.set(ref.id, {
