@@ -10,8 +10,10 @@
 // All failures here go to console.warn only.
 //
 // Auth/RLS: the cloud app_logs insert policy requires auth.uid() = user_id, so we
-// attach the current session's user_id and skip entirely when there's no session
-// (pre-login buffered rows wait until someone signs in, then ship under that id).
+// stamp the SERVER-VALIDATED user id (supabase.auth.getUser — which refreshes a
+// stale token or returns null) and skip entirely when there's no valid session.
+// This never ships as `anon`: a blanket GRANT lets anon attempt the insert, but no
+// anon policy passes, so an unauthenticated ship loops forever on "violates RLS".
 
 import { AppState } from "react-native";
 import { db } from "../db/index";
@@ -57,15 +59,30 @@ export async function flushLogs() {
   if (!isOnline()) return;
   flushing = true;
   try {
-    let session = null;
+    // Cheap early-out: nothing buffered → skip the auth round-trip so an idle app
+    // isn't hitting the network every tick.
+    let hasPending = false;
     try {
-      const res = await supabase.auth.getSession();
-      session = res?.data?.session ?? null;
+      hasPending = !!(await db.getFirstAsync(
+        `SELECT 1 FROM AppLogs WHERE Synced = 0 LIMIT 1`,
+      ));
     } catch {
-      session = null;
+      hasPending = false;
     }
-    const userId = session?.user?.id;
-    if (!userId) return; // no session → can't satisfy the insert RLS; try later
+    if (!hasPending) return;
+
+    // Validate against the server (getUser) instead of trusting the cached session:
+    // a stale/expired token that can't refresh would ship as anon and loop on
+    // "violates RLS". getUser refreshes if it can, returns null otherwise, and
+    // guarantees the id we stamp equals auth.uid() so the insert policy passes.
+    let userId = null;
+    try {
+      const { data, error } = await supabase.auth.getUser();
+      if (!error) userId = data?.user?.id ?? null;
+    } catch {
+      userId = null;
+    }
+    if (!userId) return; // no valid session → can't satisfy the insert RLS; try later
 
     const orgSk = currentOrgSk(userId);
 
