@@ -19,6 +19,7 @@ import InspectionCard from "../../components/InspectionCard";
 import MyDayDashboard from "../../components/MyDayDashboard";
 import NotificationBadge from "../../components/NotificationBadge";
 import { runDevQuery } from "../../db/devQuery";
+import { DB_EVENTS, subscribe } from "../../db/events";
 import {
   getAllInspections,
   isInspectionLocallyRetired,
@@ -126,27 +127,79 @@ export default function MyDayScreen() {
     !!routeData?.nextStop?.inspectionSk &&
     routeData.nextStop.inspectionSk === staleStopSk;
 
-  // Pull-to-refresh. Triggers a full reconciliation:
-  //   1. syncAll() — pull any cloud-side inspection changes the user can't
-  //      see yet (teammate added one, web edit, etc.)
-  //   2. reload local inspections into the store
-  //   3. refresh the dashboard route data (cache-aware — only hits Google
-  //      Routes if fingerprint or TTL invalidates)
+  // Full day reconcile: push local changes + pull cloud-side ones, reload the
+  // local list, then refresh the dashboard route (cache-aware — only hits Google
+  // Routes if the fingerprint or TTL invalidates). Shared by pull-to-refresh and
+  // the automatic on-change refresh below.
+  const reconcileDay = useCallback(async () => {
+    await syncAll();
+    const fresh = await getAllInspections();
+    loadInspections(fresh ?? []);
+    await refreshRoute();
+  }, [loadInspections, refreshRoute]);
+
+  // Pull-to-refresh.
   const [refreshing, setRefreshing] = useState(false);
   async function handlePullRefresh() {
     if (refreshing) return;
     setRefreshing(true);
     try {
-      await syncAll();
-      const fresh = await getAllInspections();
-      loadInspections(fresh ?? []);
-      await refreshRoute();
+      await reconcileDay();
     } catch (e) {
       logError(e, "MyDayScreen.handlePullRefresh");
     } finally {
       setRefreshing(false);
     }
   }
+
+  // Keep "Up Next" honest without a manual pull. Completing / deleting /
+  // rescheduling an inspection mutates the DB and emits on the bus (the same bus
+  // notifications + calendar sync react to). The route is computed cloud-side by
+  // the my-day-route EF, so we reconcile — push the change, then refetch — and
+  // the completed stop drops out while the next one rolls in (or the card clears
+  // to "done"). While focused we refresh live (debounced so a burst of edits
+  // coalesces into one sync); while blurred we only mark the day dirty and
+  // reconcile once on refocus, so edits on OTHER screens don't burn a background
+  // GPS fix / EF call.
+  const focusedRef = useRef(false);
+  const dayDirtyRef = useRef(false);
+  useEffect(() => {
+    let timer = null;
+    const onInspectionChange = () => {
+      if (!focusedRef.current) {
+        dayDirtyRef.current = true;
+        return;
+      }
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        reconcileDay().catch((e) => logError(e, "MyDayScreen.autoReconcile"));
+      }, 800);
+    };
+    const unsubs = [
+      subscribe(DB_EVENTS.INSPECTION_INSERTED, onInspectionChange),
+      subscribe(DB_EVENTS.INSPECTION_UPDATED, onInspectionChange),
+      subscribe(DB_EVENTS.INSPECTION_DELETED, onInspectionChange),
+    ];
+    return () => {
+      if (timer) clearTimeout(timer);
+      unsubs.forEach((u) => u());
+    };
+  }, [reconcileDay]);
+
+  // Track focus for the live refresh above, and flush a pending reconcile when
+  // returning to this tab (e.g. an inspection completed from another screen).
+  useFocusEffect(
+    useCallback(() => {
+      focusedRef.current = true;
+      if (dayDirtyRef.current) {
+        dayDirtyRef.current = false;
+        reconcileDay().catch((e) => logError(e, "MyDayScreen.focusReconcile"));
+      }
+      return () => {
+        focusedRef.current = false;
+      };
+    }, [reconcileDay]),
+  );
 
   const todayInspections = useMemo(() => {
     const today = dayjs().format("YYYY-MM-DD");
