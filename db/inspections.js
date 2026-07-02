@@ -387,6 +387,37 @@ export async function getRetiredCalendarLinks(deviceId) {
   }
 }
 
+// True when THIS device holds a local delete / terminal state for `sk` that the
+// cloud may not have caught up to yet. Used to reconcile the My Day dashboard's
+// "Up Next": the my-day-route EF is cloud-authoritative, so if a just-deleted
+// inspection's soft-delete hasn't pushed to the cloud yet (e.g. deleted then
+// logged out before sync, or a transient network failure), the EF still returns
+// it as the next stop. We detect that here and suppress it until the delete
+// propagates.
+//
+// A MISSING local row returns false ON PURPOSE — that's an inspection not on
+// this device yet (e.g. one the owner just assigned), NOT a local delete, so we
+// must not hide it. Only an existing row that's _deleted / CLOSED / CANCELLED
+// counts as locally retired.
+export async function isInspectionLocallyRetired(sk) {
+  if (!sk) return false;
+  try {
+    const row = await db.getFirstAsync(
+      `SELECT _deleted, Status FROM Inspections WHERE InspectionSk = ?`,
+      [sk],
+    );
+    if (!row) return false;
+    return (
+      row._deleted === 1 ||
+      row.Status === "CLOSED" ||
+      row.Status === "CANCELLED"
+    );
+  } catch (e) {
+    logError(e, "db/inspections.isInspectionLocallyRetired");
+    return false;
+  }
+}
+
 // Un-delete a soft-deleted inspection (_deleted 1 → 0). Bumps _version +
 // clears Synced. Emits INSPECTION_UPDATED with the full row so a future
 // appointment gets its reminder rescheduled (the scheduler's own gates skip
