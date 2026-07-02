@@ -17,6 +17,7 @@ import {
   Skia,
 } from "@shopify/react-native-skia";
 import { theme } from "@theme";
+import { ImageManipulator, SaveFormat } from "expo-image-manipulator";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -80,18 +81,50 @@ export default function PhotoEditScreen() {
   // Canvas size: full screen width, height derived from the photo's natural
   // aspect ratio (defaults to 4:3 until we learn the real dimensions).
   const [imgAspect, setImgAspect] = useState(4 / 3);
+  // The image actually drawn on. We bake the photo UPRIGHT (EXIF orientation
+  // applied) before editing so the canvas AND the stored [0,1] coordinates live
+  // in the same orientation the report worker renders in (sharp `.rotate()`).
+  // Why this matters: Image.getSize returns the UNORIENTED pixel dimensions for a
+  // rotated (portrait) phone photo, while <Image> displays it upright — so the
+  // canvas came out the wrong shape and every markup x-coordinate got compressed
+  // (a wide ellipse printed as a near-circle). Baking removes the ambiguity.
+  const [editUri, setEditUri] = useState(null);
   const canvasW = screen.width;
   const canvasH = Math.min(canvasW / imgAspect, screen.height * 0.62);
 
   useEffect(() => {
     if (!uri) return;
-    Image.getSize(
-      uri,
-      (w, h) => {
-        if (w > 0 && h > 0) setImgAspect(w / h);
-      },
-      (e) => logError(e, "PhotoEditScreen.Image.getSize"),
-    );
+    let cancelled = false;
+    (async () => {
+      try {
+        const rendered = await ImageManipulator.manipulate(uri).renderAsync();
+        const result = await rendered.saveAsync({
+          format: SaveFormat.JPEG,
+          compress: 0.9,
+        });
+        if (cancelled) return;
+        if (result?.width > 0 && result?.height > 0) {
+          setImgAspect(result.width / result.height);
+        }
+        setEditUri(result?.uri || uri);
+      } catch (e) {
+        logError(e, "PhotoEditScreen.orientImage");
+        if (cancelled) return;
+        // Fallback: edit the original directly. Unoriented size still beats the
+        // 4:3 default; this path only degrades markup on rotated photos.
+        setEditUri(uri);
+        Image.getSize(
+          uri,
+          (w, h) => {
+            if (!cancelled && w > 0 && h > 0) setImgAspect(w / h);
+          },
+          (err) => logError(err, "PhotoEditScreen.Image.getSize"),
+        );
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [uri]);
 
   // Strokes. `committed` holds finished shapes; `pending` holds the one
@@ -323,15 +356,16 @@ export default function PhotoEditScreen() {
       </View>
 
       <View style={styles.canvasWrap}>
-        <View style={{ width: canvasW, height: canvasH }}>
-          {!!uri && (
+        {!editUri ? (
+          <ActivityIndicator size="large" color={theme.colors.primary} />
+        ) : (
+          <View style={{ width: canvasW, height: canvasH }}>
             <Image
-              source={{ uri }}
+              source={{ uri: editUri }}
               style={StyleSheet.absoluteFillObject}
               resizeMode="contain"
             />
-          )}
-          <GestureDetector gesture={pan}>
+            <GestureDetector gesture={pan}>
             <Canvas
               style={[StyleSheet.absoluteFillObject, { backgroundColor: "transparent" }]}
             >
@@ -352,8 +386,9 @@ export default function PhotoEditScreen() {
                 )}
               {pending && renderStroke(pending, canvasW, canvasH, "pending")}
             </Canvas>
-          </GestureDetector>
-        </View>
+            </GestureDetector>
+          </View>
+        )}
       </View>
 
       <View style={styles.toolbar}>

@@ -331,6 +331,10 @@ export default function InspectionFormScreen() {
     const uri = await resolvePhotoUri({
       localUri: ref.localUri,
       cloudUri: ref.cloudUri,
+      // Force a LOCAL file (re-caches a cloud-only photo) so the markup editor's
+      // orientation-bake (expo-image-manipulator) always has a local uri to work
+      // with — it can't manipulate a remote URL.
+      detailSk: ref.id,
     });
     setOpenPhoto(null);
     router.push({
