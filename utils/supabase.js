@@ -1,5 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import * as SecureStore from "expo-secure-store";
+import { AppState, LogBox } from "react-native";
 
 // SecureStore has a 2KB per-key limit, so large tokens are chunked.
 const SecureStoreAdapter = {
@@ -137,3 +138,44 @@ export const supabase = createClient(
     },
   }
 );
+
+// ─── Auth refresher lifecycle (React Native) ─────────────────────────────────
+// autoRefreshToken runs on an internal timer. On RN that timer keeps ticking
+// while the app is backgrounded — and fires again right on resume, before the
+// network stack is back — so its /token fetch rejects with
+// `TypeError: Network request failed` from inside GoTrue. Because the rejection
+// happens in GoTrue's own timer callback (not one of our awaited calls), it
+// surfaces as a context-less unhandled rejection (whatwg-fetch frame only) and,
+// in the dev client, a LogBox redbox. It's benign — non-fatal, self-heals on the
+// next tick, and invisible in release builds — but noisy.
+//
+// Supabase's documented RN fix: only run the refresher while the app is in the
+// foreground. The client already auto-starts it on creation (app launches
+// active), so we just pause on background/inactive and resume on active. Wrapped
+// defensively so a listener hiccup can never break boot.
+try {
+  AppState.addEventListener("change", (state) => {
+    try {
+      if (state === "active") {
+        supabase.auth.startAutoRefresh();
+      } else {
+        supabase.auth.stopAutoRefresh();
+      }
+    } catch (_) {
+      // start/stopAutoRefresh is best-effort; never let it throw into AppState.
+    }
+  });
+} catch (_) {
+  // AppState unavailable (shouldn't happen on device) — leave the default timer.
+}
+
+// Dev-only cosmetics: even with the fix above, an occasional resume-time fetch
+// can still lose the network race and show a LogBox redbox in the dev client.
+// LogBox is compiled out of release builds, so this only affects local testing —
+// silence just that transient message so it doesn't interrupt QA. Real errors
+// (any other message) still surface normally.
+if (__DEV__) {
+  try {
+    LogBox.ignoreLogs(["Network request failed"]);
+  } catch (_) {}
+}
