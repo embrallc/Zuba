@@ -2,6 +2,7 @@ import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { theme } from "@theme";
 import dayjs from "dayjs";
 import { useRouter } from "expo-router";
+import * as SMS from "expo-sms";
 import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -75,12 +76,68 @@ async function openCall(phone) {
   await Linking.openURL(`tel:${phone}`);
 }
 
-async function openEmail(email) {
-  if (!email) {
+// Every distinct email tied to an inspection: the primary Email column plus any
+// report/invoice recipients (e.g. several addresses pulled from a calendar event's
+// notes). Deduped, case-insensitive, first-seen order.
+function collectEmails(inspection) {
+  const out = [];
+  const seen = new Set();
+  const add = (e) => {
+    const v = (e || "").trim();
+    if (!v) return;
+    const key = v.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(v);
+  };
+  add(inspection.Email);
+  try {
+    const rr = inspection.ReportRecipients
+      ? JSON.parse(inspection.ReportRecipients)
+      : null;
+    if (Array.isArray(rr)) {
+      // Legacy array-of-emails form.
+      rr.forEach(add);
+    } else if (rr && typeof rr === "object") {
+      // Current per-channel form { report: [...], invoice: [...] }.
+      (rr.report || []).forEach(add);
+      (rr.invoice || []).forEach(add);
+    }
+  } catch (_) {}
+  return out;
+}
+
+async function openEmail(inspection) {
+  const emails = collectEmails(inspection);
+  if (!emails.length) {
     Alert.alert("No email address on this inspection.");
     return;
   }
-  await Linking.openURL(`mailto:${email}`);
+  // mailto takes a comma-separated recipient list (RFC 6068).
+  await Linking.openURL(`mailto:${emails.join(",")}`);
+}
+
+// Open the native SMS composer to the client, optionally prefilled with a body.
+// Uses expo-sms when available, falling back to the sms: URL scheme. An empty
+// body opens a blank message addressed to just the number.
+async function openSmsComposer(phone, body) {
+  if (!phone) {
+    Alert.alert("No phone number on this inspection.");
+    return;
+  }
+  try {
+    if (await SMS.isAvailableAsync()) {
+      await SMS.sendSMSAsync([phone], body || "");
+      return;
+    }
+  } catch (_) {
+    // fall through to the URL-scheme fallback
+  }
+  const sep = Platform.OS === "ios" ? "&" : "?";
+  const url = body
+    ? `sms:${phone}${sep}body=${encodeURIComponent(body)}`
+    : `sms:${phone}`;
+  await Linking.openURL(url);
 }
 
 async function openNavigation(inspection) {
@@ -101,7 +158,7 @@ const TAIL_SIZE = 13;
 const BUBBLE_MAX_WIDTH = 268;
 const TAIL_FROM_LEFT = 22;
 
-function SmsBubble({ anchor, templates, onClose }) {
+function SmsBubble({ anchor, templates, onClose, onSelect }) {
   const { height: windowHeight, width: windowWidth } = useWindowDimensions();
   const progress = useSharedValue(0);
 
@@ -115,6 +172,16 @@ function SmsBubble({ anchor, templates, onClose }) {
   function handleClose() {
     progress.value = withTiming(0, { duration: 130 }, (finished) => {
       if (finished) runOnJS(onClose)();
+    });
+  }
+
+  // Dismiss the bubble, then hand the chosen body up (null/"" = blank message).
+  function pick(body) {
+    progress.value = withTiming(0, { duration: 130 }, (finished) => {
+      if (finished) {
+        runOnJS(onClose)();
+        runOnJS(onSelect)(body);
+      }
     });
   }
 
@@ -166,32 +233,40 @@ function SmsBubble({ anchor, templates, onClose }) {
             bubbleAnim,
           ]}
         >
-          {templates.length === 0 ? (
-            <View style={bubbleStyles.empty}>
+          <View style={bubbleStyles.pillsRow}>
+            {/* Always-present blank option: opens SMS with only the number. */}
+            <TouchableOpacity
+              style={[bubbleStyles.pill, bubbleStyles.blankPill]}
+              activeOpacity={0.7}
+              onPress={() => pick("")}
+            >
               <MaterialCommunityIcons
-                name="message-text-outline"
-                size={20}
+                name="message-plus-outline"
+                size={15}
                 color={theme.colors.textFine}
+                style={bubbleStyles.blankPillIcon}
               />
-              <Text style={bubbleStyles.emptyText}>
-                No templates yet.{"\n"}Add some in Settings → Messaging.
+              <Text
+                style={[bubbleStyles.pillText, bubbleStyles.blankPillText]}
+                numberOfLines={1}
+              >
+                Blank Message
               </Text>
-            </View>
-          ) : (
-            <View style={bubbleStyles.pillsRow}>
-              {templates.map((t) => (
-                <TouchableOpacity
-                  key={t.SmsTemplateSk}
-                  style={bubbleStyles.pill}
-                  activeOpacity={0.7}
-                >
-                  <Text style={bubbleStyles.pillText} numberOfLines={1}>
-                    {t.Name || "Unnamed"}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          )}
+            </TouchableOpacity>
+
+            {templates.map((t) => (
+              <TouchableOpacity
+                key={t.SmsTemplateSk}
+                style={bubbleStyles.pill}
+                activeOpacity={0.7}
+                onPress={() => pick(t.Body || "")}
+              >
+                <Text style={bubbleStyles.pillText} numberOfLines={1}>
+                  {t.Name || "Unnamed"}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
 
           {/* Tail triangle */}
           <View style={[bubbleStyles.tail, { left: tailLeft }]} />
@@ -232,9 +307,24 @@ export default function InspectionCard({ inspection, onPress }) {
     ? dayjs(inspection.ScheduledAt).format("h:mm A")
     : "";
 
+  // Open the SMS composer with the chosen body ("" = blank). Kept here so the
+  // bubble stays a dumb presenter and the expo-sms handling lives in one place.
+  const handleSmsSend = async (body) => {
+    try {
+      await openSmsComposer(inspection.Phone, body);
+    } catch (e) {
+      logError(e, `InspectionCard.handleSmsSend sk=${inspection.InspectionSk}`);
+    }
+  };
+
   const handleSmsPress = useDebouncedPress(() => {
     if (!inspection.Phone) {
       Alert.alert("No phone number on this inspection.");
+      return;
+    }
+    // No templates → skip the picker bubble and open a blank message straight away.
+    if (templates.length === 0) {
+      handleSmsSend("");
       return;
     }
     smsRef.current?.measureInWindow((x, y, w, h) => {
@@ -253,7 +343,7 @@ export default function InspectionCard({ inspection, onPress }) {
 
   const handleEmail = useDebouncedPress(async () => {
     try {
-      await openEmail(inspection.Email);
+      await openEmail(inspection);
     } catch (e) {
       logError(e, `InspectionCard.handleEmail sk=${inspection.InspectionSk}`);
     }
@@ -640,6 +730,7 @@ export default function InspectionCard({ inspection, onPress }) {
             anchor={anchor}
             templates={templates}
             onClose={() => setSmsOpen(false)}
+            onSelect={handleSmsSend}
           />
         )}
 
@@ -709,17 +800,19 @@ const bubbleStyles = StyleSheet.create({
     color: theme.colors.primary,
     fontWeight: "600",
   },
-  empty: {
+  // (empty-state styles removed — the bubble always shows at least Blank Message)
+  blankPill: {
+    flexDirection: "row",
     alignItems: "center",
-    gap: theme.spacing.s,
-    paddingVertical: theme.spacing.s,
-    paddingBottom: theme.spacing.m,
+    backgroundColor: theme.colors.mainBackground,
+    borderColor: "rgba(0,0,0,0.14)",
+    borderStyle: "dashed",
   },
-  emptyText: {
-    ...theme.typography.label,
+  blankPillIcon: {
+    marginRight: 5,
+  },
+  blankPillText: {
     color: theme.colors.textFine,
-    textAlign: "center",
-    lineHeight: 18,
   },
 });
 
