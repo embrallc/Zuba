@@ -13,6 +13,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import PaymentsUpsellSheet from "../components/PaymentsUpsellSheet";
 import RequestPaymentSheet from "../components/RequestPaymentSheet";
 import {
   getCancelledInspections,
@@ -79,14 +80,21 @@ export default function ArchiveScreen() {
   const addToStore = useInspectionStore((s) => s.add);
   const showBanner = useBannerStore((s) => s.show);
   const userProfile = useSettingsStore((s) => s.userProfile);
+  const paymentsLive = useSettingsStore((s) => s.paymentsLive);
   const markCancellationsViewed = useSettingsStore(
     (s) => s.markCancellationsViewed,
   );
+  // Once invoicing is live, every role can invoice (unchanged). Before setup,
+  // only owner/admin see the Invoice pill — and it opens the upsell, not the
+  // amount sheet.
+  const showInvoice =
+    paymentsLive || userProfile === "owner" || userProfile === "admin";
 
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState(null);
   const [payFor, setPayFor] = useState(null); // { sk, name } for the invoice sheet
+  const [upsellOpen, setUpsellOpen] = useState(false);
   const [query, setQuery] = useState("");
 
   // Filter by name/address fields OR the formatted date string the row shows.
@@ -219,12 +227,18 @@ export default function ArchiveScreen() {
         <View style={styles.actionRow}>
           {type === "completed" && (
             <>
-              <ActionPill
-                icon="cash-plus"
-                label="Invoice"
-                disabled={!!busyId}
-                onPress={() => setPayFor({ sk: item.InspectionSk, name })}
-              />
+              {showInvoice && (
+                <ActionPill
+                  icon="cash-plus"
+                  label="Invoice"
+                  disabled={!!busyId}
+                  onPress={() =>
+                    paymentsLive
+                      ? setPayFor({ sk: item.InspectionSk, name })
+                      : setUpsellOpen(true)
+                  }
+                />
+              )}
               <ActionPill
                 icon="file-document-outline"
                 label="Report"
@@ -325,6 +339,12 @@ export default function ArchiveScreen() {
         clientName={payFor?.name}
         userProfile={userProfile}
         onSuccess={() => reload()}
+      />
+
+      <PaymentsUpsellSheet
+        visible={upsellOpen}
+        onClose={() => setUpsellOpen(false)}
+        userProfile={userProfile}
       />
     </SafeAreaView>
   );

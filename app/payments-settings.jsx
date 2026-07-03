@@ -21,6 +21,7 @@ export default function PaymentsSettingsScreen() {
   const router = useRouter();
   const orgSk = useSettingsStore((s) => s.orgSk);
   const userProfile = useSettingsStore((s) => s.userProfile);
+  const setPaymentsLive = useSettingsStore((s) => s.setPaymentsLive);
 
   const [status, setStatus] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -33,9 +34,12 @@ export default function PaymentsSettingsScreen() {
   const reload = useCallback(async () => {
     const s = await getOrgPaymentStatus(orgSk);
     setStatus(s);
+    // Keep the app-wide invoice-button flag in sync (only on a definitive read —
+    // don't downgrade to false on an offline/null fetch).
+    if (s) setPaymentsLive(!!s.stripe_charges_enabled);
     setLoading(false);
     return s;
-  }, [orgSk]);
+  }, [orgSk, setPaymentsLive]);
 
   // Pull the LIVE account status from Stripe: the EF mirrors the capability flags
   // onto the org row (server-truth) and returns the requirement list, which we
@@ -51,9 +55,10 @@ export default function PaymentsSettingsScreen() {
     );
     const fresh = await getOrgPaymentStatus(orgSk);
     setStatus(fresh);
+    if (fresh) setPaymentsLive(!!fresh.stripe_charges_enabled);
     setLoading(false);
     return fresh;
-  }, [orgSk]);
+  }, [orgSk, setPaymentsLive]);
 
   useEffect(() => {
     reload();

@@ -15,6 +15,7 @@ import { DB_EVENTS, subscribe } from "../db/events";
 import { initializeDatabase } from "../db/index";
 import { getAllInspections } from "../db/inspections";
 import { logError } from "../db/logs";
+import { getOrgPaymentStatus } from "../db/organizations";
 import { getSmsTemplates } from "../db/smsTemplates";
 import { getLocalUser, getOrCreateUser, pullSelfUser } from "../db/users";
 import { useCalendarStore } from "../stores/useCalendarStore";
@@ -68,6 +69,7 @@ export default function RootLayout() {
   const setUserSk = useSettingsStore((s) => s.setUserSk);
   const setUserProfile = useSettingsStore((s) => s.setUserProfile);
   const setOrgSk = useSettingsStore((s) => s.setOrgSk);
+  const setPaymentsLive = useSettingsStore((s) => s.setPaymentsLive);
   const setFname = useSettingsStore((s) => s.setFname);
   const setLname = useSettingsStore((s) => s.setLname);
   const loadSmsTemplates = useSmsStore((s) => s.load);
@@ -108,6 +110,15 @@ export default function RootLayout() {
         if (cloud.org_sk) setOrgSk(cloud.org_sk);
       })
       .catch((e) => logError(e, "RootLayout.pullSelfUser"));
+
+    // Cache whether invoicing is live for this org (organizations.stripe_charges_enabled).
+    // Background, never blocks boot; drives the invoice-button visibility + upsell.
+    // Any org member may read it (org SELECT RLS is role-agnostic).
+    if (orgSk) {
+      getOrgPaymentStatus(orgSk)
+        .then((s) => setPaymentsLive(!!s?.stripe_charges_enabled))
+        .catch((e) => logError(e, "RootLayout.loadUserData.paymentStatus"));
+    }
 
     await loadSettings();
     // Device-local calendar-sync config (mints a stable deviceId on first run).

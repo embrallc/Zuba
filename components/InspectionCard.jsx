@@ -39,6 +39,7 @@ import { useSmsStore } from "../stores/useSmsStore";
 import { reconcileInspection } from "../utils/autoComms";
 import { deleteLocalReport, generateInspectionReport } from "../utils/reports";
 import { pushInspection, pushInspectionForm } from "../utils/sync";
+import PaymentsUpsellSheet from "./PaymentsUpsellSheet";
 import RequestPaymentSheet from "./RequestPaymentSheet";
 
 const COMPLETE_FIELDS = [
@@ -291,11 +292,18 @@ export default function InspectionCard({ inspection, onPress }) {
   const [anchor, setAnchor] = useState(null);
   const [generating, setGenerating] = useState(false);
   const [payOpen, setPayOpen] = useState(false);
+  const [upsellOpen, setUpsellOpen] = useState(false);
   const smsRef = useRef(null);
   const swipeRef = useRef(null);
   const removeFromStore = useInspectionStore((s) => s.remove);
   const showBanner = useBannerStore((s) => s.show);
   const userProfile = useSettingsStore((s) => s.userProfile);
+  const paymentsLive = useSettingsStore((s) => s.paymentsLive);
+  // Once payments are live, every role sees the invoice action (unchanged flow).
+  // Before setup, only owner/admin see it — and it opens the upsell, not the
+  // amount sheet. Basic members don't see it at all until invoicing is live.
+  const showInvoice =
+    paymentsLive || userProfile === "owner" || userProfile === "admin";
 
   const complete = isComplete(inspection);
   const address = formatAddress(inspection);
@@ -520,10 +528,13 @@ export default function InspectionCard({ inspection, onPress }) {
     }
   });
 
-  // Request payment: open the reusable amount/link sheet.
+  // Request payment: if invoicing is live, open the amount/link sheet (unchanged).
+  // Otherwise open the role-aware upsell (owner → setup, admin → nudge) instead of
+  // letting them enter an amount only to hit a "not set up" wall.
   const handleRequestPaymentPress = useDebouncedPress(() => {
     swipeRef.current?.close();
-    setPayOpen(true);
+    if (paymentsLive) setPayOpen(true);
+    else setUpsellOpen(true);
   });
 
   function renderRightActions() {
@@ -576,13 +587,15 @@ export default function InspectionCard({ inspection, onPress }) {
             />
           </GestureTouchableOpacity>
         )}
-        <GestureTouchableOpacity
-          onPress={handleRequestPaymentPress}
-          activeOpacity={0.8}
-          style={[styles.actionCircle, styles.payCircle]}
-        >
-          <MaterialCommunityIcons name="currency-usd" size={22} color="#fff" />
-        </GestureTouchableOpacity>
+        {showInvoice && (
+          <GestureTouchableOpacity
+            onPress={handleRequestPaymentPress}
+            activeOpacity={0.8}
+            style={[styles.actionCircle, styles.payCircle]}
+          >
+            <MaterialCommunityIcons name="currency-usd" size={22} color="#fff" />
+          </GestureTouchableOpacity>
+        )}
       </View>
     );
   }
@@ -761,6 +774,12 @@ export default function InspectionCard({ inspection, onPress }) {
               kind: "success",
             })
           }
+        />
+
+        <PaymentsUpsellSheet
+          visible={upsellOpen}
+          onClose={() => setUpsellOpen(false)}
+          userProfile={userProfile}
         />
       </Animated.View>
     </ReanimatedSwipeable>
