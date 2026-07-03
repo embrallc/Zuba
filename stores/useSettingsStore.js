@@ -41,6 +41,14 @@ export const useSettingsStore = create((set, get) => ({
   // client-side UX gating (e.g. showing the Manage Users settings row).
   userProfile: null,
   orgSk: null,
+  // Cached org-level "invoicing is live" flag (organizations.stripe_charges_enabled).
+  // The org row isn't synced to SQLite, so it's fetched at boot (see _layout
+  // loadUserData) and refreshed from the Payments screen. In-memory only — it's
+  // per-org server truth re-fetched each session, NOT persisted (keeps a stale
+  // value from bleeding across users on a shared device). Drives invoice-button
+  // visibility: once live every role sees it; before setup only owner/admin see
+  // the upsell. Any org member can read the flag (org SELECT RLS is role-agnostic).
+  paymentsLive: false,
   fname: null,
   lname: null,
   apptLengthMinutes: 60,
@@ -280,6 +288,10 @@ export const useSettingsStore = create((set, get) => ({
 
   setOrgSk: (val) => {
     set({ orgSk: val });
+  },
+
+  setPaymentsLive: (val) => {
+    set({ paymentsLive: !!val });
   },
 
   setFname: (val) => {
