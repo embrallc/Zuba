@@ -12,6 +12,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
@@ -26,6 +27,18 @@ import { useSettingsStore } from "../stores/useSettingsStore";
 import { isOnline } from "../utils/connectivity";
 import { supabase } from "../utils/supabase";
 import { syncAll } from "../utils/sync";
+
+// Text columns the search scans (mirrors the My Day + archive header search).
+// These are the CLOUD row's snake_case fields; the formatted date string the
+// card shows is matched separately in `filtered`.
+const SEARCH_FIELDS = [
+  "full_name",
+  "address_line1",
+  "address_line2",
+  "city",
+  "state",
+  "zip_code",
+];
 
 function fullName(u) {
   const name = `${u.fname ?? ""} ${u.lname ?? ""}`.trim();
@@ -64,6 +77,7 @@ export default function AllInspectionsScreen() {
   const [assignments, setAssignments] = useState({});
   const [pickingFor, setPickingFor] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [query, setQuery] = useState("");
 
   const canManage = userProfile === "owner" || userProfile === "admin";
 
@@ -111,6 +125,19 @@ export default function AllInspectionsScreen() {
     for (const i of inspections) map[i.inspection_sk] = i;
     return map;
   }, [inspections]);
+
+  // Filter by name/address fields OR the formatted date string the card shows.
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return inspections;
+    return inspections.filter((i) => {
+      if (SEARCH_FIELDS.some((f) => i[f]?.toLowerCase().includes(q))) return true;
+      const when = i.scheduled_at
+        ? dayjs(i.scheduled_at).format("MMM D, YYYY · h:mm A").toLowerCase()
+        : "";
+      return when.includes(q);
+    });
+  }, [inspections, query]);
 
   // Only count assignments that actually differ from the inspection's current
   // user_id — tapping the picker, picking the same person, and tapping Save
@@ -331,12 +358,47 @@ export default function AllInspectionsScreen() {
           <Text style={styles.emptyText}>No inspections yet.</Text>
         </View>
       ) : (
-        <FlatList
-          data={inspections}
-          keyExtractor={(item) => item.inspection_sk}
-          renderItem={renderRow}
-          contentContainerStyle={styles.list}
-        />
+        <>
+          <View style={styles.searchWrap}>
+            <View style={styles.searchContainer}>
+              <MaterialCommunityIcons
+                name="magnify"
+                size={theme.layout.iconSize.m}
+                color={theme.colors.icon}
+                style={styles.searchIcon}
+              />
+              <TextInput
+                style={styles.searchInput}
+                placeholder="Search name, address, city, zip, or date…"
+                placeholderTextColor={theme.colors.textFine}
+                value={query}
+                onChangeText={setQuery}
+                clearButtonMode="while-editing"
+                returnKeyType="search"
+                autoCorrect={false}
+              />
+            </View>
+          </View>
+          <FlatList
+            data={filtered}
+            keyExtractor={(item) => item.inspection_sk}
+            renderItem={renderRow}
+            contentContainerStyle={styles.list}
+            keyboardShouldPersistTaps="handled"
+            ListEmptyComponent={
+              <View style={styles.noMatch}>
+                <MaterialCommunityIcons
+                  name="magnify-close"
+                  size={48}
+                  color={theme.colors.textFine}
+                />
+                <Text style={styles.emptyText}>
+                  No inspections match your search.
+                </Text>
+              </View>
+            }
+          />
+        </>
       )}
 
       <UserPickerModal
@@ -441,6 +503,32 @@ const styles = StyleSheet.create({
     ...theme.typography.body,
     color: theme.colors.textSubtle,
     textAlign: "center",
+  },
+  searchWrap: {
+    paddingHorizontal: theme.spacing.m,
+    paddingTop: theme.spacing.m,
+  },
+  searchContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: theme.colors.input,
+    borderRadius: theme.layout.borderRadius.full,
+    paddingHorizontal: theme.spacing.s,
+    height: 38,
+  },
+  searchIcon: {
+    marginRight: theme.spacing.xs,
+  },
+  searchInput: {
+    flex: 1,
+    ...theme.typography.body,
+    paddingVertical: 0,
+  },
+  noMatch: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingTop: theme.spacing.xxl,
+    gap: theme.spacing.m,
   },
   list: {
     padding: theme.spacing.m,
