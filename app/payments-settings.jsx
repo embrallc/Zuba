@@ -26,11 +26,33 @@ export default function PaymentsSettingsScreen() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  // Live Stripe requirements while "Finishing setup" (not mirrored to the org
+  // row): { disabledReason, currentlyDue: [] } | null.
+  const [requirements, setRequirements] = useState(null);
 
   const reload = useCallback(async () => {
     const s = await getOrgPaymentStatus(orgSk);
     setStatus(s);
     setLoading(false);
+    return s;
+  }, [orgSk]);
+
+  // Pull the LIVE account status from Stripe: the EF mirrors the capability flags
+  // onto the org row (server-truth) and returns the requirement list, which we
+  // keep in local state so the "Finishing setup" card can name exactly what
+  // Stripe still wants (requirements aren't stored on the org row).
+  const pullLiveStatus = useCallback(async () => {
+    const live = await refreshPaymentStatus();
+    const due = Array.isArray(live?.requirementsDue) ? live.requirementsDue : [];
+    setRequirements(
+      due.length > 0 || live?.disabledReason
+        ? { disabledReason: live?.disabledReason ?? null, currentlyDue: due }
+        : null,
+    );
+    const fresh = await getOrgPaymentStatus(orgSk);
+    setStatus(fresh);
+    setLoading(false);
+    return fresh;
   }, [orgSk]);
 
   useEffect(() => {
@@ -41,16 +63,26 @@ export default function PaymentsSettingsScreen() {
   const active = !!status?.stripe_charges_enabled;
   const pending = !!status?.stripe_account_id && !active;
 
+  // While stuck in "Finishing setup", ask Stripe (once per entry into this state)
+  // what's still outstanding, so the card can list the specific blockers. Keyed on
+  // the primitive flags — mirroring the same pending state back won't re-trigger,
+  // and charges flipping true exits (clearing the hint).
+  useEffect(() => {
+    if (!pending || userProfile !== "owner") {
+      if (!pending) setRequirements(null);
+      return;
+    }
+    pullLiveStatus().catch(() => {});
+  }, [status?.stripe_account_id, status?.stripe_charges_enabled, userProfile, pending, pullLiveStatus]);
+
   async function handleSetup() {
     if (busy) return;
     setBusy(true);
     try {
       await startStripeOnboarding();
-      // Regardless of how the browser closed, pull the live capability flags.
-      await refreshPaymentStatus();
-      const fresh = await getOrgPaymentStatus(orgSk);
-      setStatus(fresh);
-      setLoading(false);
+      // Regardless of how the browser closed, pull the live capability flags +
+      // any remaining requirements.
+      const fresh = await pullLiveStatus();
       // Newly live → take them straight to Automatic Document Send so they see
       // the invoice + payment-gate toggles that just unlocked.
       if (fresh?.stripe_charges_enabled) {
@@ -72,8 +104,7 @@ export default function PaymentsSettingsScreen() {
     if (refreshing) return;
     setRefreshing(true);
     try {
-      await refreshPaymentStatus();
-      await reload();
+      await pullLiveStatus();
     } catch (e) {
       logError(e, "PaymentsSettings.handleRefresh");
     } finally {
@@ -149,6 +180,36 @@ export default function PaymentsSettingsScreen() {
                     ? "Stripe is still verifying your details. Tap Continue if it asked for more, or Refresh once it's done."
                     : "Connect a Stripe account to bill clients with a secure payment link. You enter your banking details on Stripe — Kensa never sees them."}
               </Text>
+
+              {pending && requirements && (
+                <View style={styles.reqBox}>
+                  <Text style={styles.reqTitle}>Stripe still needs</Text>
+                  {(() => {
+                    const labels = Array.from(
+                      new Set(
+                        (requirements.currentlyDue || []).map(humanizeRequirement),
+                      ),
+                    );
+                    if (labels.length > 0) {
+                      return labels.slice(0, 8).map((label) => (
+                        <View key={label} style={styles.reqRow}>
+                          <MaterialCommunityIcons
+                            name="alert-circle-outline"
+                            size={14}
+                            color={theme.colors.warning}
+                          />
+                          <Text style={styles.reqItem}>{label}</Text>
+                        </View>
+                      ));
+                    }
+                    return (
+                      <Text style={styles.reqItem}>
+                        {humanizeDisabledReason(requirements.disabledReason)}
+                      </Text>
+                    );
+                  })()}
+                </View>
+              )}
 
               {!active && (
                 <TouchableOpacity
@@ -247,6 +308,66 @@ function InfoRow({ label, ok }) {
   );
 }
 
+// Stripe returns requirement keys like "individual.verification.document" and
+// "external_account". Map the common Standard-account ones to plain English; fall
+// back to a de-snaked tail so an unmapped key is still readable (never a raw dot-path).
+const REQUIREMENT_LABELS = {
+  "business_profile.url": "Business website or a product description",
+  "business_profile.mcc": "Business category",
+  "business_profile.product_description": "A description of your business",
+  business_type: "Business type",
+  external_account: "Bank account for payouts",
+  "tos_acceptance.date": "Accept Stripe's terms of service",
+  "tos_acceptance.ip": "Accept Stripe's terms of service",
+  "individual.verification.document": "Photo ID for identity verification",
+  "individual.verification.additional_document": "An additional verification document",
+  "individual.dob.day": "Date of birth",
+  "individual.dob.month": "Date of birth",
+  "individual.dob.year": "Date of birth",
+  "individual.ssn_last_4": "Last 4 digits of your SSN",
+  "individual.id_number": "Your SSN or tax ID number",
+  "individual.address.line1": "Home address",
+  "individual.address.city": "Home address",
+  "individual.address.state": "Home address",
+  "individual.address.postal_code": "Home address",
+  "individual.phone": "Phone number",
+  "individual.email": "Email address",
+  "individual.first_name": "Your legal first name",
+  "individual.last_name": "Your legal last name",
+  "company.name": "Business legal name",
+  "company.tax_id": "Business tax ID (EIN)",
+  "company.address.line1": "Business address",
+  "company.phone": "Business phone number",
+};
+
+function humanizeRequirement(key) {
+  if (REQUIREMENT_LABELS[key]) return REQUIREMENT_LABELS[key];
+  const tail = String(key).split(".").slice(-2).join(" ").replace(/_/g, " ").trim();
+  return tail ? tail.charAt(0).toUpperCase() + tail.slice(1) : "Additional information";
+}
+
+function humanizeDisabledReason(reason) {
+  switch (reason) {
+    case "requirements.pending_verification":
+      return "Stripe is verifying your details — this can take a few minutes.";
+    case "requirements.past_due":
+    case "requirements.currently_due":
+      return "Stripe needs more information before you can accept payments.";
+    case "under_review":
+    case "listed":
+      return "Stripe is completing a routine review of your account.";
+    case "rejected.fraud":
+    case "rejected.terms_of_service":
+    case "rejected.listed":
+    case "rejected.other":
+      return "Stripe could not approve this account. Contact Stripe support.";
+    case "platform_paused":
+      return "Payment setup is incomplete on our end — please contact support.";
+    default:
+      return "Additional information is required before you can accept payments.";
+  }
+}
+
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: theme.colors.mainBackground },
   navbar: {
@@ -303,6 +424,25 @@ const styles = StyleSheet.create({
     marginTop: theme.spacing.s,
   },
   infoLabel: { ...theme.typography.label, color: theme.colors.text },
+  reqBox: {
+    marginTop: theme.spacing.m,
+    backgroundColor: theme.colors.input,
+    borderRadius: theme.layout.borderRadius.m,
+    padding: theme.spacing.m,
+    gap: theme.spacing.xs,
+  },
+  reqTitle: {
+    ...theme.typography.label,
+    fontWeight: "700",
+    color: theme.colors.text,
+    marginBottom: 2,
+  },
+  reqRow: { flexDirection: "row", alignItems: "center", gap: theme.spacing.xs },
+  reqItem: {
+    ...theme.typography.label,
+    color: theme.colors.textSubtle,
+    flexShrink: 1,
+  },
   acctId: {
     ...theme.typography.caption,
     color: theme.colors.textSubtle,

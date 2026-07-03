@@ -6,7 +6,10 @@
 // returns from onboarding (REST-as-truth — don't wait for the account.updated
 // webhook), and any time the Payments screen wants a fresh status.
 //
-// Returns: { chargesEnabled, payoutsEnabled, detailsSubmitted, hasAccount }.
+// Returns: { chargesEnabled, payoutsEnabled, detailsSubmitted, hasAccount,
+//            disabledReason, requirementsDue }. The last two let the Payments
+//            screen tell the owner exactly what Stripe still needs when the
+//            account is created but charges aren't enabled yet ("Restricted").
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import {
@@ -108,6 +111,22 @@ serve(async (req) => {
     const chargesEnabled = !!acct.charges_enabled;
     const payoutsEnabled = !!acct.payouts_enabled;
     const detailsSubmitted = !!acct.details_submitted;
+    // Why charges are blocked + which fields Stripe is waiting on. `currently_due`
+    // is what's needed to unblock progress right now; fall back to `past_due` /
+    // `eventually_due` so the owner still sees something actionable. These are
+    // live-only (not mirrored to the org row) — the client renders them as a hint.
+    const req = (acct.requirements ?? {}) as {
+      disabled_reason?: string | null;
+      currently_due?: string[] | null;
+      past_due?: string[] | null;
+      eventually_due?: string[] | null;
+    };
+    const disabledReason = req.disabled_reason ?? null;
+    const requirementsDue =
+      (req.currently_due && req.currently_due.length ? req.currently_due : null) ??
+      (req.past_due && req.past_due.length ? req.past_due : null) ??
+      req.eventually_due ??
+      [];
 
     const { error: upErr } = await admin
       .from("organizations")
@@ -127,12 +146,16 @@ serve(async (req) => {
       chargesEnabled,
       payoutsEnabled,
       detailsSubmitted,
+      disabledReason,
+      dueCount: requirementsDue.length,
     });
     return json({
       hasAccount: true,
       chargesEnabled,
       payoutsEnabled,
       detailsSubmitted,
+      disabledReason,
+      requirementsDue,
     });
   } catch (e) {
     logError("stripe_error", e, { orgSk, accountId });
