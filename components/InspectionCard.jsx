@@ -50,7 +50,6 @@ const COMPLETE_FIELDS = [
   "State",
   "ZipCode",
   "ScheduledAt",
-  "Summary",
 ];
 
 function isComplete(inspection) {
@@ -476,7 +475,9 @@ export default function InspectionCard({ inspection, onPress }) {
       showBanner({
         message:
           `Report ready for ${clientLabel}` +
-          (result.pageCount ? ` — ${result.pageCount} page${result.pageCount === 1 ? "" : "s"}.` : ".") +
+          (result.pageCount
+            ? ` — ${result.pageCount} page${result.pageCount === 1 ? "" : "s"}.`
+            : ".") +
           (result.usedDraft ? " (Using unpublished draft template.)" : ""),
         kind: "success",
         duration: 6000,
@@ -490,7 +491,10 @@ export default function InspectionCard({ inspection, onPress }) {
         },
       });
     } catch (e) {
-      logError(e, `InspectionCard.handleGenerateReport sk=${inspection.InspectionSk}`);
+      logError(
+        e,
+        `InspectionCard.handleGenerateReport sk=${inspection.InspectionSk}`,
+      );
       showBanner({
         message: e?.presentable ? e.message : "Couldn't generate the report.",
         kind: "error",
@@ -509,7 +513,10 @@ export default function InspectionCard({ inspection, onPress }) {
         params: { inspectionSk: inspection.InspectionSk },
       });
     } catch (e) {
-      logError(e, `InspectionCard.handleOpenReport sk=${inspection.InspectionSk}`);
+      logError(
+        e,
+        `InspectionCard.handleOpenReport sk=${inspection.InspectionSk}`,
+      );
     }
   });
 
@@ -549,7 +556,11 @@ export default function InspectionCard({ inspection, onPress }) {
           {generating ? (
             <ActivityIndicator size="small" color="#fff" />
           ) : (
-            <MaterialCommunityIcons name="printer-outline" size={22} color="#fff" />
+            <MaterialCommunityIcons
+              name="printer-outline"
+              size={22}
+              color="#fff"
+            />
           )}
         </GestureTouchableOpacity>
         {!!inspection.LastReportPath && (
@@ -558,7 +569,11 @@ export default function InspectionCard({ inspection, onPress }) {
             activeOpacity={0.8}
             style={[styles.actionCircle, styles.shareCircle]}
           >
-            <MaterialCommunityIcons name="share-variant" size={20} color="#fff" />
+            <MaterialCommunityIcons
+              name="share-variant"
+              size={20}
+              color="#fff"
+            />
           </GestureTouchableOpacity>
         )}
         <GestureTouchableOpacity
