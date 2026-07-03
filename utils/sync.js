@@ -3,7 +3,7 @@ import { db } from "../db/index";
 import { logError, logEvent } from "../db/logs";
 import { cacheTemplate } from "../db/walkthroughForms";
 import { useInspectionStore } from "../stores/useInspectionStore";
-import { uploadInspectionPhoto } from "./inspectionPhotos";
+import { deleteCloudPhoto, uploadInspectionPhoto } from "./inspectionPhotos";
 import { supabase } from "./supabase";
 
 // The caller's org_sk — needed for the photo storage path and the walkthrough
@@ -683,23 +683,55 @@ async function uploadAnswerPhotos(answers, { orgSk, userId }) {
         if (!looksLikePhotoArray(value)) continue;
         for (const ref of value) {
           if (!ref || typeof ref !== "object") continue;
-          if (ref.cloudUri || !ref.localUri) continue;
-          if (!orgSk) {
-            pending = true;
-            continue;
+
+          // Clean photo: upload once, when it has a local file and isn't up yet.
+          if (ref.localUri && !ref.cloudUri) {
+            if (!orgSk) {
+              pending = true;
+            } else {
+              const uploaded = await uploadInspectionPhoto({
+                localUri: ref.localUri,
+                orgSk,
+                userId,
+                detailSk: ref.id,
+              });
+              if (uploaded) {
+                ref.cloudUri = uploaded;
+                changed = true;
+                uploadedCount++;
+              } else {
+                pending = true; // upload failed — retry next sync
+              }
+            }
           }
-          const uploaded = await uploadInspectionPhoto({
-            localUri: ref.localUri,
-            orgSk,
-            userId,
-            detailSk: ref.id,
-          });
-          if (uploaded) {
-            ref.cloudUri = uploaded;
+
+          // Print-ready burned copy: upload a fresh burn, or delete a stale one
+          // when markup was cleared. A deterministic `markup.jpg` key (upsert)
+          // means there's only ever ONE burned copy, overwritten on re-burn.
+          if (ref.burnedLocalUri && !ref.burnedCloudUri) {
+            if (!orgSk) {
+              pending = true;
+            } else {
+              const uploaded = await uploadInspectionPhoto({
+                localUri: ref.burnedLocalUri,
+                orgSk,
+                userId,
+                detailSk: ref.id,
+                objectName: "markup.jpg",
+              });
+              if (uploaded) {
+                ref.burnedCloudUri = uploaded;
+                changed = true;
+                uploadedCount++;
+              } else {
+                pending = true;
+              }
+            }
+          } else if (!ref.burnedLocalUri && ref.burnedCloudUri) {
+            // Markup was cleared → drop the stale burned copy from the cloud.
+            await deleteCloudPhoto(ref.burnedCloudUri);
+            ref.burnedCloudUri = null;
             changed = true;
-            uploadedCount++;
-          } else {
-            pending = true; // upload failed — retry next sync
           }
         }
       }

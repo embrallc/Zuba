@@ -1,6 +1,7 @@
 import * as FileSystem from "expo-file-system/legacy";
 import * as ImageManipulator from "expo-image-manipulator";
 import * as MediaLibrary from "expo-media-library";
+import piexif from "piexifjs";
 import { Image } from "react-native";
 import { logError } from "../db/logs";
 import { supabase } from "./supabase";
@@ -66,6 +67,86 @@ function getImageSize(uri) {
       () => resolve(null),
     );
   });
+}
+
+// Read the JPEG's EXIF Orientation tag (1..8). Our photos carry EXIF orientation
+// (that's why the report worker rotates them), so Image.getSize alone reports
+// UNORIENTED dimensions. Returns 1 (normal) when there's no EXIF or on any parse
+// failure. Pure-JS (piexifjs) — no native module.
+async function readExifOrientation(uri) {
+  try {
+    const fileUri = await resolveLocalFileUri(uri);
+    if (!fileUri) return 1;
+    const base64 = await FileSystem.readAsStringAsync(fileUri, {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+    const exif = piexif.load(`data:image/jpeg;base64,${base64}`);
+    const o = exif?.["0th"]?.[piexif.ImageIFD.Orientation];
+    return typeof o === "number" && o >= 1 && o <= 8 ? o : 1;
+  } catch (_) {
+    return 1;
+  }
+}
+
+// The image's TRUE displayed aspect ratio (width / height), accounting for EXIF
+// orientation — i.e. what <Image> actually shows, and what the markup canvas
+// must match so strokes aren't x-compressed on rotated (portrait) photos.
+// Returns null if the size can't be read.
+export async function getOrientedAspect(uri) {
+  const size = await getImageSize(uri);
+  if (!size || !size.width || !size.height) return null;
+  let { width, height } = size;
+  const orientation = await readExifOrientation(uri);
+  // Orientations 5-8 are the 90° rotations → the displayed image swaps w/h.
+  if (orientation >= 5 && orientation <= 8) {
+    const t = width;
+    width = height;
+    height = t;
+  }
+  return width / height;
+}
+
+// One deterministic burned (markup-flattened) copy per photo, alongside the
+// clean cache file. `-markup` suffix; overwritten on re-burn so only one exists.
+export function burnedCachePath(detailSk) {
+  return `${PHOTOS_CACHE_DIR}${detailSk}-markup.jpg`;
+}
+
+// Persist a base64 JPEG (the Skia burn) to the burned cache path; returns it.
+export async function saveBurnedPhoto(detailSk, base64) {
+  try {
+    if (!detailSk || !base64) return null;
+    await ensurePhotosCacheDir();
+    const dest = burnedCachePath(detailSk);
+    await FileSystem.writeAsStringAsync(dest, base64, {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+    return dest;
+  } catch (e) {
+    logError(e, `inspectionPhotos.saveBurnedPhoto sk=${detailSk}`);
+    return null;
+  }
+}
+
+// Delete a photo's burned cache copy (markup cleared, or photo deleted).
+export async function deleteBurnedPhotoLocal(detailSk) {
+  try {
+    if (!detailSk) return;
+    await FileSystem.deleteAsync(burnedCachePath(detailSk), { idempotent: true });
+  } catch (e) {
+    logError(e, `inspectionPhotos.deleteBurnedPhotoLocal sk=${detailSk}`);
+  }
+}
+
+// Remove a cloud object by its storage key — used to drop a burned copy when
+// markup is cleared or a photo is deleted. Best-effort.
+export async function deleteCloudPhoto(path) {
+  try {
+    if (!path) return;
+    await supabase.storage.from(BUCKET).remove([path]);
+  } catch (e) {
+    logError(e, `inspectionPhotos.deleteCloudPhoto path=${path}`);
+  }
 }
 
 // Downscale (longest side ≤ MAX_DIMENSION, never upscaled) + JPEG-compress a
@@ -165,6 +246,10 @@ export async function uploadInspectionPhoto({
   orgSk,
   userId,
   detailSk,
+  // Optional fixed object name (no timestamp) so a re-upload OVERWRITES the same
+  // storage key — used for the single burned/markup copy. Clean photos keep the
+  // timestamped name (append-only, never re-uploaded once cloudUri is set).
+  objectName,
 }) {
   try {
     if (!localUri || !orgSk || !userId || !detailSk) {
@@ -203,7 +288,7 @@ export async function uploadInspectionPhoto({
       return null;
     }
 
-    const path = `${orgSk}/${userId}/${detailSk}/${Date.now()}.jpg`;
+    const path = `${orgSk}/${userId}/${detailSk}/${objectName || `${Date.now()}.jpg`}`;
     const { error } = await supabase.storage.from(BUCKET).upload(path, bytes, {
       contentType: "image/jpeg",
       upsert: true,
