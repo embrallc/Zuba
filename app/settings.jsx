@@ -39,12 +39,6 @@ import {
 } from "../utils/purchases";
 
 const APPT_LENGTH_OPTIONS = [15, 30, 45, 60, 75, 90, 105, 120];
-const START_HOUR_OPTIONS = [5, 6, 7, 8, 9, 10, 11];
-
-function formatHour(h) {
-  if (h === 12) return "12 PM";
-  return h < 12 ? `${h} AM` : `${h - 12} PM`;
-}
 
 function formatApptLength(minutes) {
   if (minutes < 60) return `${minutes} min`;
@@ -58,10 +52,8 @@ export default function SettingsScreen() {
   const router = useRouter();
   const showWeekends = useSettingsStore((s) => s.showWeekends);
   const apptLengthMinutes = useSettingsStore((s) => s.apptLengthMinutes);
-  const calendarStartHour = useSettingsStore((s) => s.calendarStartHour);
   const setShowWeekends = useSettingsStore((s) => s.setShowWeekends);
   const setApptLengthMinutes = useSettingsStore((s) => s.setApptLengthMinutes);
-  const setCalendarStartHour = useSettingsStore((s) => s.setCalendarStartHour);
   const userProfile = useSettingsStore((s) => s.userProfile);
   const userSk = useSettingsStore((s) => s.userSk);
   const orgSk = useSettingsStore((s) => s.orgSk);
@@ -452,6 +444,37 @@ export default function SettingsScreen() {
           />
         </View>
 
+        <Text style={styles.sectionLabel}>ARCHIVE</Text>
+
+        <NavRow
+          label="Completed Inspections"
+          description="View inspections you've marked complete and reopen them if needed"
+          onPress={() =>
+            router.push({ pathname: "/archive", params: { type: "completed" } })
+          }
+        />
+        <NavRow
+          label="Cancelled Inspections"
+          description="View inspections clients cancelled by text and restore them if needed"
+          badge={cancelCount}
+          badgePulse={cancelPulse}
+          onPress={() =>
+            router.push({ pathname: "/archive", params: { type: "cancelled" } })
+          }
+        />
+        <NavRow
+          label="Deleted Inspections"
+          description="View deleted inspections and restore them if needed"
+          onPress={() =>
+            router.push({ pathname: "/archive", params: { type: "deleted" } })
+          }
+        />
+
+        <Guard guard={userProfile === "owner"}>
+          <Text style={styles.sectionLabel}>REPORT DESIGNER</Text>
+          <FormBuilderCard />
+        </Guard>
+
         <Text style={styles.sectionLabel}>CALENDAR</Text>
 
         <SettingRow
@@ -490,42 +513,6 @@ export default function SettingsScreen() {
                     ]}
                   >
                     {formatApptLength(min)}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </ScrollView>
-        </View>
-
-        {/* Calendar start hour picker */}
-        <View style={styles.optionCard}>
-          <Text style={styles.optionCardLabel}>Week View Start Time</Text>
-          <Text style={styles.optionCardDescription}>
-            The hour the calendar scrolls to when you open the Week View
-          </Text>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.optionRow}
-          >
-            {START_HOUR_OPTIONS.map((h) => {
-              const selected = calendarStartHour === h;
-              return (
-                <TouchableOpacity
-                  key={h}
-                  onPress={() => setCalendarStartHour(h)}
-                  style={[
-                    styles.optionBtn,
-                    selected && styles.optionBtnSelected,
-                  ]}
-                >
-                  <Text
-                    style={[
-                      styles.optionText,
-                      selected && styles.optionTextSelected,
-                    ]}
-                  >
-                    {formatHour(h)}
                   </Text>
                 </TouchableOpacity>
               );
@@ -616,11 +603,6 @@ export default function SettingsScreen() {
           onPress={() => router.push("/payments")}
         />
 
-        <Guard guard={userProfile === "owner"}>
-          <Text style={styles.sectionLabel}>REPORT DESIGNER</Text>
-          <FormBuilderCard />
-        </Guard>
-
         <Guard guard={userProfile === "owner" || userProfile === "admin"}>
           <Text style={styles.sectionLabel}>TEAM</Text>
           <Guard guard={userProfile === "owner"}>
@@ -641,32 +623,6 @@ export default function SettingsScreen() {
             onPress={() => router.push("/allinspections")}
           />
         </Guard>
-
-        <Text style={styles.sectionLabel}>ARCHIVE</Text>
-
-        <NavRow
-          label="Completed Inspections"
-          description="View inspections you've marked complete and reopen them if needed"
-          onPress={() =>
-            router.push({ pathname: "/archive", params: { type: "completed" } })
-          }
-        />
-        <NavRow
-          label="Cancelled Inspections"
-          description="View inspections clients cancelled by text and restore them if needed"
-          badge={cancelCount}
-          badgePulse={cancelPulse}
-          onPress={() =>
-            router.push({ pathname: "/archive", params: { type: "cancelled" } })
-          }
-        />
-        <NavRow
-          label="Deleted Inspections"
-          description="View deleted inspections and restore them if needed"
-          onPress={() =>
-            router.push({ pathname: "/archive", params: { type: "deleted" } })
-          }
-        />
 
         <Text style={styles.sectionLabel}>STORAGE</Text>
 
