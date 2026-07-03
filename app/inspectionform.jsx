@@ -33,7 +33,9 @@ import { useInspectionStore } from "../stores/useInspectionStore";
 import { usePhotoCaptureStore, usePhotoMarkupStore } from "../stores/usePhotoWorkflow";
 import { useSettingsStore } from "../stores/useSettingsStore";
 import {
+  deleteBurnedPhotoLocal,
   deleteCachedPhoto,
+  deleteCloudPhoto,
   deleteInspectionPhoto,
   processAndCachePhoto,
   resolvePhotoUri,
@@ -238,11 +240,13 @@ export default function InspectionFormScreen() {
       }
     });
     if (ref?.cloudUri) deleteInspectionPhoto(ref.cloudUri);
+    if (ref?.burnedCloudUri) deleteCloudPhoto(ref.burnedCloudUri);
     deleteCachedPhoto(photoId);
+    deleteBurnedPhotoLocal(photoId);
     setOpenPhoto(null);
   }
 
-  function applyMarkup(photoId, markup) {
+  function applyMarkup(photoId, markup, burnedLocalUri, removed) {
     mutateAnswers((a) => {
       for (const sec of Object.values(a.sections ?? {})) {
         for (const inst of sec.instances ?? []) {
@@ -253,6 +257,17 @@ export default function InspectionFormScreen() {
               );
               if (p) {
                 p.markup = markup;
+                // Print-ready burned-copy bookkeeping (see utils/sync
+                // uploadAnswerPhotos): on a new/changed burn, point at the fresh
+                // local file and clear burnedCloudUri so sync re-uploads it; on
+                // removal, drop the local ref but KEEP burnedCloudUri so sync
+                // deletes the now-stale cloud object.
+                if (removed) {
+                  p.burnedLocalUri = null;
+                } else {
+                  p.burnedLocalUri = burnedLocalUri ?? null;
+                  p.burnedCloudUri = null;
+                }
                 return;
               }
             }
@@ -533,9 +548,10 @@ export default function InspectionFormScreen() {
 
       const mk = usePhotoMarkupStore.getState();
       if (mk.result) {
-        const { photoId, markup } = mk.result;
+        const { photoId, markup, burnedLocalUri, removed } = mk.result;
         usePhotoMarkupStore.getState().clear();
-        applyMarkup(photoId, markup);
+        applyMarkup(photoId, markup, burnedLocalUri, removed);
+        if (removed) deleteBurnedPhotoLocal(photoId);
       }
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [inspectionSk]),

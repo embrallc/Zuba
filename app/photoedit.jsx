@@ -12,12 +12,13 @@ import { MaterialCommunityIcons } from "@expo/vector-icons";
 import {
   Canvas,
   Circle,
+  ImageFormat,
+  makeImageFromView,
   Path,
   Rect,
   Skia,
 } from "@shopify/react-native-skia";
 import { theme } from "@theme";
-import { ImageManipulator, SaveFormat } from "expo-image-manipulator";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -34,6 +35,7 @@ import { runOnJS } from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { logError } from "../db/logs";
 import { usePhotoMarkupStore } from "../stores/usePhotoWorkflow";
+import { getOrientedAspect, saveBurnedPhoto } from "../utils/inspectionPhotos";
 
 const COLORS = [
   "#FF3B30", // red
@@ -78,49 +80,34 @@ export default function PhotoEditScreen() {
   const { uri, initialMarkup, target } = useLocalSearchParams();
   const screen = useWindowDimensions();
 
-  // Canvas size: full screen width, height derived from the photo's natural
-  // aspect ratio (defaults to 4:3 until we learn the real dimensions).
-  const [imgAspect, setImgAspect] = useState(4 / 3);
-  // The image actually drawn on. We bake the photo UPRIGHT (EXIF orientation
-  // applied) before editing so the canvas AND the stored [0,1] coordinates live
-  // in the same orientation the report worker renders in (sharp `.rotate()`).
-  // Why this matters: Image.getSize returns the UNORIENTED pixel dimensions for a
-  // rotated (portrait) phone photo, while <Image> displays it upright — so the
-  // canvas came out the wrong shape and every markup x-coordinate got compressed
-  // (a wide ellipse printed as a near-circle). Baking removes the ambiguity.
-  const [editUri, setEditUri] = useState(null);
-  const canvasW = screen.width;
-  const canvasH = Math.min(canvasW / imgAspect, screen.height * 0.62);
+  // Canvas fits the photo's TRUE (EXIF-oriented) aspect within the available
+  // area. Getting the oriented aspect right is what makes the markup line up:
+  // Image.getSize returns UNORIENTED dimensions for a rotated (portrait) photo
+  // while <Image> shows it upright, so a naive canvas comes out the wrong shape
+  // and every x-coordinate gets compressed (a wide ellipse prints near-circular).
+  // getOrientedAspect reads the EXIF orientation and returns what's actually
+  // displayed. `null` until known → we gate the canvas on it.
+  const [imgAspect, setImgAspect] = useState(null);
+  // Fit within (maxW × maxH) preserving aspect so the canvas EXACTLY matches the
+  // displayed image (no letterbox bars) — the WYSIWYG burn snapshot depends on it.
+  const maxW = screen.width;
+  const maxH = screen.height * 0.62;
+  let canvasW = maxW;
+  let canvasH = imgAspect ? maxW / imgAspect : maxW * 0.75;
+  if (canvasH > maxH) {
+    canvasH = maxH;
+    canvasW = imgAspect ? maxH * imgAspect : maxH * (4 / 3);
+  }
+
+  // Ref on the composite (photo + Skia strokes) for the WYSIWYG burn snapshot.
+  const canvasRef = useRef(null);
 
   useEffect(() => {
     if (!uri) return;
     let cancelled = false;
     (async () => {
-      try {
-        const rendered = await ImageManipulator.manipulate(uri).renderAsync();
-        const result = await rendered.saveAsync({
-          format: SaveFormat.JPEG,
-          compress: 0.9,
-        });
-        if (cancelled) return;
-        if (result?.width > 0 && result?.height > 0) {
-          setImgAspect(result.width / result.height);
-        }
-        setEditUri(result?.uri || uri);
-      } catch (e) {
-        logError(e, "PhotoEditScreen.orientImage");
-        if (cancelled) return;
-        // Fallback: edit the original directly. Unoriented size still beats the
-        // 4:3 default; this path only degrades markup on rotated photos.
-        setEditUri(uri);
-        Image.getSize(
-          uri,
-          (w, h) => {
-            if (!cancelled && w > 0 && h > 0) setImgAspect(w / h);
-          },
-          (err) => logError(err, "PhotoEditScreen.Image.getSize"),
-        );
-      }
+      const aspect = await getOrientedAspect(uri);
+      if (!cancelled) setImgAspect(aspect && aspect > 0 ? aspect : 4 / 3);
     })();
     return () => {
       cancelled = true;
@@ -316,9 +303,50 @@ export default function PhotoEditScreen() {
         committed.length > 0
           ? JSON.stringify({ v: 1, strokes: committed })
           : null;
-      // Hand the markup back to the walkthrough form; the photo lives on a ref
-      // inside the inspection's answers JSON, keyed by `target` (the photo id).
-      usePhotoMarkupStore.getState().setResult({ photoId: target, markup: json });
+
+      // Only (re)burn when the markup actually changed vs. what we opened with —
+      // an unchanged Done leaves the existing burned copy untouched (no re-upload).
+      const initialJson =
+        initialStrokes.length > 0
+          ? JSON.stringify({ v: 1, strokes: initialStrokes })
+          : null;
+      const changed = json !== initialJson;
+
+      if (!changed) {
+        router.back();
+        return;
+      }
+
+      let burnedLocalUri = null;
+      if (committed.length > 0) {
+        // Flatten photo + markup into ONE print-ready image with Skia's built-in
+        // view snapshot — it captures exactly what's on screen (already upright),
+        // so it's pixel-accurate regardless of EXIF orientation. Drop the
+        // selection UI first so the halo/handles aren't burned in, and let it
+        // render one frame before snapshotting.
+        setSelectedIdx(null);
+        await new Promise((resolve) =>
+          requestAnimationFrame(() => resolve()),
+        );
+        try {
+          const snapshot = await makeImageFromView(canvasRef);
+          const base64 = snapshot?.encodeToBase64(ImageFormat.JPEG, 90);
+          if (base64) burnedLocalUri = await saveBurnedPhoto(target, base64);
+        } catch (e) {
+          logError(e, `PhotoEditScreen.burn target=${target}`);
+          // Burn failed — still save the markup JSON; the report just won't show
+          // the flattened markup until a later successful re-burn.
+        }
+      }
+
+      // Hand back to the walkthrough form: markup JSON (stored as before) plus the
+      // freshly-burned copy (or `removed` when markup was cleared).
+      usePhotoMarkupStore.getState().setResult({
+        photoId: target,
+        markup: json,
+        burnedLocalUri, // path when burned; null when cleared or burn failed
+        removed: committed.length === 0,
+      });
       router.back();
     } catch (e) {
       logError(e, `PhotoEditScreen.handleSave target=${target}`);
@@ -356,12 +384,16 @@ export default function PhotoEditScreen() {
       </View>
 
       <View style={styles.canvasWrap}>
-        {!editUri ? (
+        {!imgAspect ? (
           <ActivityIndicator size="large" color={theme.colors.primary} />
         ) : (
-          <View style={{ width: canvasW, height: canvasH }}>
+          <View
+            ref={canvasRef}
+            collapsable={false}
+            style={{ width: canvasW, height: canvasH }}
+          >
             <Image
-              source={{ uri: editUri }}
+              source={{ uri }}
               style={StyleSheet.absoluteFillObject}
               resizeMode="contain"
             />
