@@ -21,7 +21,14 @@ import { requestPayment, shareCheckoutLink } from "../utils/payments";
 // Checkout link → success state with the link (selectable, long-press to copy)
 // and a Share button. Used from the active InspectionCard and the Archive.
 //
-// Props: visible, onClose(), inspectionSk, clientName?, userProfile?, onSuccess?
+// Props: visible, onClose(outcome), inspectionSk, clientName?, userProfile?,
+//        onSuccess?, gatedComplete?
+//
+// gatedComplete: when true the sheet is gating an inspection's completion (opened
+// by "auto-send invoice on complete" because no invoice exists yet). It adds a
+// "Complete without invoice" escape, and onClose is called with an outcome —
+// 'invoiced' | 'cancelled' | 'skipped' — so the caller knows whether to finish
+// the completion. Non-gated callers pass onClose={() => ...} and ignore the arg.
 export default function RequestPaymentSheet({
   visible,
   onClose,
@@ -29,6 +36,7 @@ export default function RequestPaymentSheet({
   clientName,
   userProfile,
   onSuccess,
+  gatedComplete = false,
 }) {
   const [amountText, setAmountText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -44,10 +52,20 @@ export default function RequestPaymentSheet({
     setAutoSent(false);
   }
 
-  function close() {
+  // Infer the outcome from the phase when the caller doesn't force one: reaching
+  // the success phase means an invoice was created ('invoiced'); otherwise the
+  // user backed out ('cancelled'). The gated "Complete without invoice" button
+  // passes 'skipped' explicitly.
+  function close(outcome) {
     if (busy) return;
+    const o =
+      typeof outcome === "string"
+        ? outcome
+        : phase === "success"
+          ? "invoiced"
+          : "cancelled";
     reset();
-    onClose?.();
+    onClose?.(o);
   }
 
   async function submit() {
@@ -92,13 +110,13 @@ export default function RequestPaymentSheet({
       transparent
       animationType="fade"
       statusBarTranslucent
-      onRequestClose={close}
+      onRequestClose={() => close()}
     >
       <KeyboardAvoidingView
         behavior={Platform.OS === "ios" ? "padding" : undefined}
         style={styles.backdrop}
       >
-        <TouchableWithoutFeedback onPress={close}>
+        <TouchableWithoutFeedback onPress={() => close()}>
           <View style={StyleSheet.absoluteFill} />
         </TouchableWithoutFeedback>
 
@@ -132,7 +150,7 @@ export default function RequestPaymentSheet({
               <View style={styles.buttons}>
                 <TouchableOpacity
                   style={[styles.btn, styles.cancel]}
-                  onPress={close}
+                  onPress={() => close()}
                   activeOpacity={0.8}
                 >
                   <Text style={styles.cancelTxt}>Cancel</Text>
@@ -150,6 +168,16 @@ export default function RequestPaymentSheet({
                   )}
                 </TouchableOpacity>
               </View>
+              {gatedComplete && (
+                <TouchableOpacity
+                  style={styles.skipBtn}
+                  onPress={() => close("skipped")}
+                  disabled={busy}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.skipTxt}>Complete without invoice</Text>
+                </TouchableOpacity>
+              )}
             </>
           ) : (
             <>
@@ -176,7 +204,7 @@ export default function RequestPaymentSheet({
               <View style={styles.buttons}>
                 <TouchableOpacity
                   style={[styles.btn, styles.cancel]}
-                  onPress={close}
+                  onPress={() => close()}
                   activeOpacity={0.8}
                 >
                   <Text style={styles.cancelTxt}>Done</Text>
@@ -277,6 +305,16 @@ const styles = StyleSheet.create({
   },
   cancel: { backgroundColor: theme.colors.input },
   cancelTxt: { ...theme.typography.bodyBold, color: theme.colors.text },
+  skipBtn: {
+    alignItems: "center",
+    paddingVertical: theme.spacing.s,
+    marginTop: theme.spacing.s,
+  },
+  skipTxt: {
+    ...theme.typography.label,
+    color: theme.colors.textSubtle,
+    fontWeight: "600",
+  },
   confirm: { backgroundColor: theme.colors.primary, ...theme.shadows.light },
   confirmTxt: { ...theme.typography.bodyBold, color: "#fff" },
   btnDisabled: { opacity: theme.layout.opacity.disabled },
