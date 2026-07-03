@@ -49,6 +49,11 @@ export const useSettingsStore = create((set, get) => ({
   // visibility: once live every role sees it; before setup only owner/admin see
   // the upsell. Any org member can read the flag (org SELECT RLS is role-agnostic).
   paymentsLive: false,
+  // Cached org policy organizations.auto_send_invoice. Drives "auto-send invoice on
+  // complete": when on (and payments live), completing an inspection that has no
+  // invoice yet prompts for the amount first. Same caching model as paymentsLive —
+  // fetched at boot + refreshed when the owner toggles it in Automatic Document Send.
+  autoSendInvoice: false,
   fname: null,
   lname: null,
   apptLengthMinutes: 60,
@@ -292,6 +297,10 @@ export const useSettingsStore = create((set, get) => ({
 
   setPaymentsLive: (val) => {
     set({ paymentsLive: !!val });
+  },
+
+  setAutoSendInvoice: (val) => {
+    set({ autoSendInvoice: !!val });
   },
 
   setFname: (val) => {

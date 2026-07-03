@@ -293,12 +293,16 @@ export default function InspectionCard({ inspection, onPress }) {
   const [generating, setGenerating] = useState(false);
   const [payOpen, setPayOpen] = useState(false);
   const [upsellOpen, setUpsellOpen] = useState(false);
+  // True while the invoice sheet is gating a completion (auto-send-invoice on +
+  // no invoice yet): completion runs only once the sheet resolves.
+  const [completeGated, setCompleteGated] = useState(false);
   const smsRef = useRef(null);
   const swipeRef = useRef(null);
   const removeFromStore = useInspectionStore((s) => s.remove);
   const showBanner = useBannerStore((s) => s.show);
   const userProfile = useSettingsStore((s) => s.userProfile);
   const paymentsLive = useSettingsStore((s) => s.paymentsLive);
+  const autoSendInvoice = useSettingsStore((s) => s.autoSendInvoice);
   // Once payments are live, every role sees the invoice action (unchanged flow).
   // Before setup, only owner/admin see it — and it opens the upsell, not the
   // amount sheet. Basic members don't see it at all until invoicing is live.
@@ -392,11 +396,12 @@ export default function InspectionCard({ inspection, onPress }) {
 
   const clientLabel = inspection.FullName || "Inspection";
 
-  // Mark complete: flip Status → CLOSED. setInspectionStatus emits an event
-  // that cancels the reminder; removing from the store drops it out of every
-  // list/calendar view immediately. Restorable from Settings → Completed.
-  const handleComplete = useDebouncedPress(async () => {
-    swipeRef.current?.close();
+  // The actual completion: flip Status → CLOSED (setInspectionStatus emits an
+  // event that cancels the reminder), drop it from every view, purge the cached
+  // PDF, then push + nudge the reconciler — which snapshots the org policy and
+  // auto-sends OR holds the report (require-payment-first) per settings.
+  // Restorable from Settings → Completed.
+  async function runCompletion() {
     try {
       await setInspectionStatus(inspection.InspectionSk, "CLOSED");
       removeFromStore(inspection.InspectionSk);
@@ -427,14 +432,29 @@ export default function InspectionCard({ inspection, onPress }) {
           ),
         );
     } catch (e) {
-      logError(
-        e,
-        `InspectionCard.handleComplete sk=${inspection.InspectionSk}`,
-      );
+      logError(e, `InspectionCard.handleComplete sk=${inspection.InspectionSk}`);
       showBanner({
         message: "Couldn't complete that inspection.",
         kind: "error",
       });
+    }
+  }
+
+  // Mark complete. When "auto-send invoice on complete" is on and this inspection
+  // has no invoice yet, prompt for the amount FIRST: the invoice sheet opens
+  // (gated), and completion runs only once they create the invoice or explicitly
+  // choose "Complete without invoice" (see the sheet's onClose outcome).
+  // Cancelling the prompt leaves the inspection open. Otherwise (toggle off, or an
+  // invoice already exists) completion runs immediately — unchanged.
+  const handleComplete = useDebouncedPress(() => {
+    swipeRef.current?.close();
+    const noInvoiceYet =
+      !inspection.PaymentState || inspection.PaymentState === "none";
+    if (autoSendInvoice && paymentsLive && noInvoiceYet) {
+      setCompleteGated(true);
+      setPayOpen(true);
+    } else {
+      runCompletion();
     }
   });
 
@@ -764,7 +784,15 @@ export default function InspectionCard({ inspection, onPress }) {
 
         <RequestPaymentSheet
           visible={payOpen}
-          onClose={() => setPayOpen(false)}
+          gatedComplete={completeGated}
+          onClose={(outcome) => {
+            setPayOpen(false);
+            if (!completeGated) return;
+            setCompleteGated(false);
+            // Invoice created, or they chose to skip it → finish completing.
+            // 'cancelled' (backed out) → leave the inspection open.
+            if (outcome === "invoiced" || outcome === "skipped") runCompletion();
+          }}
           inspectionSk={inspection.InspectionSk}
           clientName={inspection.FullName}
           userProfile={userProfile}

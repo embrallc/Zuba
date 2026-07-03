@@ -70,6 +70,7 @@ export default function RootLayout() {
   const setUserProfile = useSettingsStore((s) => s.setUserProfile);
   const setOrgSk = useSettingsStore((s) => s.setOrgSk);
   const setPaymentsLive = useSettingsStore((s) => s.setPaymentsLive);
+  const setAutoSendInvoice = useSettingsStore((s) => s.setAutoSendInvoice);
   const setFname = useSettingsStore((s) => s.setFname);
   const setLname = useSettingsStore((s) => s.setLname);
   const loadSmsTemplates = useSmsStore((s) => s.load);
@@ -116,7 +117,10 @@ export default function RootLayout() {
     // Any org member may read it (org SELECT RLS is role-agnostic).
     if (orgSk) {
       getOrgPaymentStatus(orgSk)
-        .then((s) => setPaymentsLive(!!s?.stripe_charges_enabled))
+        .then((s) => {
+          setPaymentsLive(!!s?.stripe_charges_enabled);
+          setAutoSendInvoice(!!s?.auto_send_invoice);
+        })
         .catch((e) => logError(e, "RootLayout.loadUserData.paymentStatus"));
     }
 

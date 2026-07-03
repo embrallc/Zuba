@@ -30,6 +30,7 @@ export default function AutoDocSendScreen() {
   const router = useRouter();
   const orgSk = useSettingsStore((s) => s.orgSk);
   const userProfile = useSettingsStore((s) => s.userProfile);
+  const setAutoSendInvoice = useSettingsStore((s) => s.setAutoSendInvoice);
 
   const [status, setStatus] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -37,8 +38,11 @@ export default function AutoDocSendScreen() {
   const reload = useCallback(async () => {
     const s = await getOrgPaymentStatus(orgSk);
     setStatus(s);
+    // Mirror the invoice policy into the store so the completion flow (which
+    // prompts for an amount when this is on) sees changes without a reboot.
+    if (s) setAutoSendInvoice(!!s.auto_send_invoice);
     setLoading(false);
-  }, [orgSk]);
+  }, [orgSk, setAutoSendInvoice]);
 
   useEffect(() => {
     reload();
@@ -49,11 +53,13 @@ export default function AutoDocSendScreen() {
   async function toggle(key, val) {
     const prev = status;
     setStatus((s) => ({ ...s, [key]: val }));
+    if (key === "auto_send_invoice") setAutoSendInvoice(val);
     try {
       await setOrgPaymentPolicy(orgSk, { [key]: val });
     } catch (e) {
       logError(e, `AutoDocSend.toggle ${key}`);
       setStatus(prev);
+      if (key === "auto_send_invoice") setAutoSendInvoice(!!prev?.auto_send_invoice);
       Alert.alert("Couldn't save", "That setting didn't save. Please try again.");
     }
   }
