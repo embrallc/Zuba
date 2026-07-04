@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Email confirmed · Zanbi</title>
+<meta name="description" content="Your Zanbi account email has been confirmed." />
+<link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+<style>
+  :root{--ink:#1c1c2e;--muted:#5b5b6b;--line:#e4e4ee;--brand:#5b5bd6;--soft:#f6f6fb;--ok:#22a06b;}
+  *{box-sizing:border-box;}
+  html,body{height:100%;}
+  body{
+    margin:0;font-family:-apple-system,system-ui,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    color:var(--ink);background:linear-gradient(180deg,#fff 0%,var(--soft) 100%);
+    display:flex;align-items:center;justify-content:center;min-height:100vh;padding:24px;
+  }
+  .card{max-width:460px;text-align:center;}
+  .check{
+    width:76px;height:76px;border-radius:50%;margin:0 auto 22px;
+    background:rgba(34,160,107,.10);display:flex;align-items:center;justify-content:center;
+  }
+  .check svg{width:38px;height:38px;stroke:var(--ok);stroke-width:3;fill:none;
+    stroke-linecap:round;stroke-linejoin:round;}
+  h1{font-size:1.7rem;font-weight:800;letter-spacing:-.02em;margin:0 0 10px;}
+  .tag{font-size:1.05rem;color:var(--muted);margin:0 0 6px;line-height:1.55;}
+  .strong{color:var(--ink);font-weight:600;}
+  .brand{margin-top:34px;display:flex;align-items:center;justify-content:center;gap:10px;
+    font-size:1.4rem;font-weight:800;letter-spacing:-.02em;color:var(--brand);}
+  .foot{margin-top:8px;color:var(--muted);font-size:.82rem;}
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="check" aria-hidden="true">
+      <svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12" /></svg>
+    </div>
+    <h1>Email confirmed</h1>
+    <p class="tag">
+      Your account is verified. <span class="strong">Open the Zanbi app and sign in</span>
+      to get started.
+    </p>
+    <p class="tag">You can close this tab.</p>
+    <div class="brand">
+      <svg viewBox="0 0 120 120" width="30" height="30" aria-hidden="true">
+        <path d="M60 8 C82 8 100 26 100 48 C100 75 71 92 60 113 C49 92 20 75 20 48 C20 26 38 8 60 8 Z" fill="#5b5bd6"/>
+        <polyline points="43,35 77,35 43,63 77,63" fill="none" stroke="#fff" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <span>Zanbi</span>
+    </div>
+    <p class="foot">A product of Embra LLC</p>
+  </div>
+</body>
+</html>

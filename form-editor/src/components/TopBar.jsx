@@ -64,7 +64,7 @@ export default function TopBar() {
 
   return (
     <div className="topbar">
-      <span className="logo">Kensa</span>
+      <span className="logo">Zanbi</span>
       <ModeSwitch />
       <input
         className="name"

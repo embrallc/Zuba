@@ -3,40 +3,611 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Zuba</title>
-<meta name="description" content="Zuba — the all-in-one app for professional home inspectors. Schedule, inspect, report, and get paid." />
+<title>Zanbi — Run your whole home-inspection business from your phone</title>
+<meta name="description" content="Zanbi is the all-in-one home-inspection app built for independent and small-shop inspectors. Schedule, map your day, inspect, write AI-assisted reports, and get paid — for $19.99/mo, not $100+. 30-day free trial." />
+<link rel="canonical" href="https://getzanbi.com/" />
+<link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+<meta name="theme-color" content="#5b5bd6" />
+
+<!-- Open Graph / Twitter -->
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="Zanbi" />
+<meta property="og:title" content="Run your whole home-inspection business from your phone" />
+<meta property="og:description" content="Schedule, map your day, inspect, report, and get paid — one app built for independent inspectors. $19.99/mo, 30-day free trial." />
+<meta property="og:url" content="https://getzanbi.com/" />
+<meta property="og:image" content="https://getzanbi.com/media/IMG_1246.jpeg" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="Zanbi — your inspection business, in your pocket" />
+<meta name="twitter:description" content="Schedule, map, inspect, AI-assisted reports, and payments. $19.99/mo, 30-day free trial." />
+<meta name="twitter:image" content="https://getzanbi.com/media/IMG_1246.jpeg" />
+
+<!-- Structured data: no aggregateRating until real reviews exist -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "Zanbi",
+  "operatingSystem": "iOS, Android",
+  "applicationCategory": "BusinessApplication",
+  "description": "All-in-one home-inspection app for independent and small-shop inspectors: scheduling, a map view of your day with live drive times, custom walkthrough forms, AI-assisted reports, and integrated payments.",
+  "url": "https://getzanbi.com/",
+  "image": "https://getzanbi.com/media/IMG_1246.jpeg",
+  "offers": { "@type": "Offer", "price": "19.99", "priceCurrency": "USD" },
+  "publisher": { "@type": "Organization", "name": "Embra LLC", "url": "https://getzanbi.com/" },
+  "featureList": [
+    "Scheduling and calendar",
+    "Map view of your schedule with live drive times, traffic, and ETAs",
+    "Custom drag-and-drop walkthrough forms",
+    "AI-assisted report writing",
+    "PDF reports delivered to clients",
+    "Integrated payments"
+  ]
+}
+</script>
+
 <style>
-  :root{--ink:#1c1c2e;--muted:#5b5b6b;--line:#e4e4ee;--brand:#5b5bd6;--soft:#f6f6fb;}
+  :root{
+    --ink:#191926; --ink-soft:#454559; --muted:#6b6b80; --line:#e7e7f2;
+    --brand:#5b5bd6; --brand-deep:#4a45b8; --brand-tint:#8f8fe6;
+    --lav:#f4f5fd; --lav-2:#e9ebfa; --card:#ffffff;
+    --amber:#f59e0b; --green:#1f9d63;
+    --maxw:1120px;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --shadow-s:0 1px 2px rgba(25,25,38,.06),0 4px 14px rgba(25,25,38,.06);
+    --shadow-m:0 10px 30px rgba(25,25,38,.10),0 2px 8px rgba(25,25,38,.06);
+    --shadow-l:0 30px 70px rgba(74,69,184,.22);
+  }
   *{box-sizing:border-box;}
-  html,body{height:100%;}
+  html{scroll-behavior:smooth;}
   body{
-    margin:0;font-family:-apple-system,system-ui,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
-    color:var(--ink);background:linear-gradient(180deg,#fff 0%,var(--soft) 100%);
-    display:flex;align-items:center;justify-content:center;min-height:100vh;padding:24px;
+    margin:0;background:var(--lav);color:var(--ink);
+    font-family:var(--sans);line-height:1.6;-webkit-font-smoothing:antialiased;
+    overflow-x:hidden;
   }
-  .card{max-width:520px;text-align:center;}
-  .logo{font-size:2.6rem;font-weight:800;letter-spacing:-.02em;color:var(--brand);margin:0 0 6px;}
-  .tag{font-size:1.05rem;color:var(--muted);margin:0 0 28px;line-height:1.5;}
-  .links{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;}
-  .links a{
-    text-decoration:none;color:var(--brand);font-weight:600;font-size:.95rem;
-    border:1px solid var(--line);border-radius:999px;padding:9px 18px;background:#fff;
-    transition:border-color .15s;
+  a{color:var(--brand);text-decoration:none;}
+  img{max-width:100%;display:block;}
+  .wrap{max-width:var(--maxw);margin:0 auto;padding:0 22px;}
+  .eyebrow{font-size:.74rem;font-weight:800;letter-spacing:.18em;text-transform:uppercase;color:var(--brand);margin:0 0 12px;}
+  h1,h2,h3{margin:0;letter-spacing:-.02em;text-wrap:balance;}
+  h2{font-size:clamp(1.7rem,3.6vw,2.5rem);font-weight:800;line-height:1.08;}
+  .lead{font-size:1.12rem;color:var(--ink-soft);}
+  section{padding:76px 0;}
+  .band-lav{background:var(--lav-2);}
+  .band-white{background:#fff;}
+
+  /* ---------- buttons ---------- */
+  .btn{display:inline-flex;align-items:center;gap:9px;font-weight:700;font-size:1rem;
+    padding:14px 24px;border-radius:12px;border:1px solid transparent;cursor:pointer;transition:transform .12s ease,box-shadow .12s ease,background .12s ease;}
+  .btn-primary{background:var(--brand);color:#fff;box-shadow:0 6px 18px rgba(91,91,214,.32);}
+  .btn-primary:hover{background:var(--brand-deep);transform:translateY(-1px);}
+  .btn-ghost{background:#fff;color:var(--brand);border-color:var(--line);}
+  .btn-ghost:hover{border-color:var(--brand-tint);}
+  .btn-lg{padding:16px 30px;font-size:1.05rem;}
+  .nav-actions{display:flex;gap:10px;align-items:center;}
+  .live-badge{display:inline-flex;align-items:center;gap:8px;background:#fff;border:1px solid var(--line);color:var(--brand-deep);font-weight:800;font-size:.7rem;letter-spacing:.1em;text-transform:uppercase;padding:7px 13px;border-radius:999px;box-shadow:var(--shadow-s);margin-bottom:16px;}
+  .live-badge .pulse{width:8px;height:8px;border-radius:50%;background:#1f9d63;animation:pulse 2s infinite;}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(31,157,99,.5);}70%{box-shadow:0 0 0 7px rgba(31,157,99,0);}100%{box-shadow:0 0 0 0 rgba(31,157,99,0);}}
+  .try-micro{color:var(--muted);font-size:.86rem;margin-top:12px;max-width:44ch;}
+
+  /* ---------- header ---------- */
+  header.site{position:sticky;top:0;z-index:50;background:rgba(244,245,253,.82);
+    backdrop-filter:saturate(180%) blur(12px);border-bottom:1px solid rgba(231,231,242,.9);}
+  .nav{display:flex;align-items:center;justify-content:space-between;height:64px;}
+  .brand{display:inline-flex;align-items:center;gap:10px;font-weight:800;font-size:1.28rem;color:var(--ink);letter-spacing:-.01em;}
+  .brand svg{display:block;}
+  .nav .btn{padding:10px 18px;font-size:.95rem;}
+
+  /* ---------- hero ---------- */
+  .hero{position:relative;padding:70px 0 40px;}
+  .hero::before{content:"";position:absolute;top:-140px;right:-160px;width:620px;height:620px;
+    background:radial-gradient(circle at center,rgba(139,139,230,.45),rgba(139,139,230,0) 62%);
+    filter:blur(8px);z-index:0;pointer-events:none;}
+  .hero-grid{position:relative;z-index:1;display:grid;grid-template-columns:1.05fr .95fr;gap:48px;align-items:center;}
+  .hero h1{font-size:clamp(2.2rem,5.2vw,3.5rem);font-weight:800;line-height:1.03;}
+  .hero h1 .accent{color:var(--brand);}
+  .hero .lead{margin:20px 0 12px;max-width:34ch;font-size:1.18rem;}
+  .price-strip{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin:6px 0 26px;color:var(--muted);font-size:.98rem;}
+  .price-strip b{color:var(--ink);font-size:1.05rem;}
+  .price-strip .vs{text-decoration:line-through;opacity:.7;}
+  .cta-row{display:flex;gap:12px;flex-wrap:wrap;align-items:center;}
+  .microtrust{margin:16px 0 0;color:var(--muted);font-size:.9rem;display:flex;gap:16px;flex-wrap:wrap;}
+  .microtrust span{display:inline-flex;align-items:center;gap:6px;}
+  .dot-ok{width:8px;height:8px;border-radius:50%;background:var(--green);display:inline-block;}
+
+  /* phone frame */
+  .phone{position:relative;width:min(300px,78vw);margin:0 auto;
+    border-radius:44px;background:#15151f;padding:12px;box-shadow:var(--shadow-l);}
+  .phone::after{content:"";position:absolute;top:20px;left:50%;transform:translateX(-50%);
+    width:120px;height:26px;background:#15151f;border-radius:0 0 16px 16px;z-index:3;}
+  .phone .screen{position:relative;border-radius:33px;overflow:hidden;background:#eef0fb;aspect-ratio:827/1697;}
+  .phone .screen img{width:100%;height:100%;object-fit:contain;object-position:center;}
+  .hero-phone{transform:none;}
+  .float-chip{position:absolute;z-index:4;background:#fff;border-radius:14px;padding:10px 14px;
+    box-shadow:var(--shadow-m);font-weight:700;font-size:.92rem;display:flex;align-items:center;gap:8px;}
+  .float-chip small{display:block;font-weight:600;color:var(--muted);font-size:.72rem;letter-spacing:.02em;}
+  .chip-eta{top:16%;left:-26px;color:var(--green);}
+  .chip-paid{bottom:14%;right:-22px;color:var(--brand);}
+
+  /* ---------- value strip ---------- */
+  .valuestrip{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;}
+  .vcard{background:#fff;border:1px solid var(--line);border-radius:18px;padding:22px 22px;box-shadow:var(--shadow-s);}
+  .vcard .k{font-size:1.7rem;font-weight:800;letter-spacing:-.02em;color:var(--brand);}
+  .vcard .l{color:var(--ink-soft);margin-top:2px;font-size:.98rem;}
+
+  /* ---------- generic section head ---------- */
+  .head{max-width:640px;margin:0 auto 44px;text-align:center;}
+  .head .lead{margin-top:14px;}
+
+  /* ---------- core loop ---------- */
+  .loop{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;}
+  .step{background:#fff;border:1px solid var(--line);border-radius:18px;padding:24px;box-shadow:var(--shadow-s);}
+  .step .ic{width:44px;height:44px;border-radius:12px;background:var(--lav-2);display:flex;align-items:center;justify-content:center;margin-bottom:14px;}
+  .step h3{font-size:1.12rem;font-weight:800;}
+  .step p{margin:6px 0 0;color:var(--ink-soft);font-size:.98rem;}
+  .step .n{float:right;font-weight:800;color:var(--brand-tint);font-size:.85rem;letter-spacing:.1em;}
+
+  /* ---------- carousel ---------- */
+  .carousel{display:flex;flex-direction:column;align-items:center;gap:20px;}
+  .carousel .cap{min-height:2.6em;text-align:center;max-width:34ch;color:var(--ink-soft);font-size:1.02rem;transition:opacity .3s;}
+  .car-stage{position:relative;display:flex;align-items:center;gap:18px;}
+  .car-arrow{width:46px;height:46px;border-radius:50%;border:1px solid var(--line);background:#fff;
+    display:flex;align-items:center;justify-content:center;cursor:pointer;box-shadow:var(--shadow-s);flex:0 0 auto;transition:border-color .12s;}
+  .car-arrow:hover{border-color:var(--brand-tint);}
+  .car-track{display:grid;width:min(300px,78vw);}
+  .car-track .phone{grid-area:1/1;width:100%;opacity:0;transition:opacity .4s ease;pointer-events:none;}
+  .car-track .phone.active{opacity:1;pointer-events:auto;}
+  .dots{display:flex;gap:8px;}
+  .dots button{width:9px;height:9px;border-radius:50%;border:none;background:var(--lav-2);cursor:pointer;padding:0;transition:background .2s,transform .2s;}
+  .dots button.on{background:var(--brand);transform:scale(1.25);}
+
+  /* ---------- AI rewrite (dark band) ---------- */
+  .ai{background:#15151f;color:#ececf5;}
+  .ai h2{color:#fff;}
+  .ai .lead{color:#b8b8cc;}
+  .ai-grid{display:grid;grid-template-columns:1fr 1fr;gap:26px;align-items:center;margin-top:36px;}
+  .note-card{background:#20202e;border:1px solid #30303f;border-radius:18px;padding:22px;}
+  .note-card .tag{font-size:.72rem;font-weight:800;letter-spacing:.16em;text-transform:uppercase;color:#8f8fe6;margin-bottom:10px;display:flex;align-items:center;gap:8px;}
+  .note-card.you .body{color:#c7c7d6;font-style:italic;}
+  .note-card .body{font-size:1.06rem;line-height:1.55;min-height:3em;}
+  .cursor{display:inline-block;width:2px;height:1.05em;background:var(--brand-tint);vertical-align:-2px;margin-left:1px;animation:blink 1s steps(2) infinite;}
+  @keyframes blink{50%{opacity:0;}}
+  .ai-arrow{display:flex;justify-content:center;margin:2px 0;}
+
+  /* ---------- feature split ---------- */
+  .split{display:grid;grid-template-columns:1fr 1fr;gap:48px;align-items:center;}
+  .split.rev .txt{order:2;}
+  .featlist{list-style:none;padding:0;margin:20px 0 26px;}
+  .featlist li{display:flex;gap:11px;align-items:flex-start;margin:11px 0;color:var(--ink-soft);}
+  .featlist .ck{flex:0 0 auto;width:22px;height:22px;border-radius:50%;background:var(--lav-2);display:flex;align-items:center;justify-content:center;margin-top:2px;}
+  .builder-note{display:inline-flex;align-items:center;gap:8px;background:var(--lav-2);color:var(--brand-deep);font-weight:700;font-size:.9rem;padding:8px 14px;border-radius:999px;}
+
+  /* ---------- pricing ---------- */
+  .price-card{max-width:460px;margin:0 auto;background:#fff;border:1px solid var(--line);border-radius:24px;
+    box-shadow:var(--shadow-m);padding:36px;text-align:center;position:relative;overflow:hidden;}
+  .price-card::before{content:"";position:absolute;inset:0 0 auto 0;height:6px;background:linear-gradient(90deg,var(--brand),var(--brand-tint));}
+  .price-card .plan{font-weight:800;letter-spacing:.02em;color:var(--brand);text-transform:uppercase;font-size:.82rem;}
+  .price-card .amt{font-size:3.4rem;font-weight:800;letter-spacing:-.03em;line-height:1;margin:10px 0 2px;}
+  .price-card .amt span{font-size:1.1rem;font-weight:600;color:var(--muted);letter-spacing:0;}
+  .price-card .trial{color:var(--ink-soft);margin-bottom:22px;}
+  .price-feats{list-style:none;padding:0;margin:0 0 26px;text-align:left;display:inline-block;}
+  .price-feats li{display:flex;gap:10px;align-items:flex-start;margin:9px 0;color:var(--ink-soft);}
+  .price-feats .ck{color:var(--green);flex:0 0 auto;margin-top:3px;}
+  .getstarted{font-weight:700;color:var(--ink-soft);font-size:.95rem;margin-top:4px;}
+  .badges{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin-top:12px;}
+  .storebtn{display:inline-flex;align-items:center;gap:10px;background:#15151f;color:#fff;border-radius:12px;padding:10px 16px;}
+  .storebtn small{display:block;font-size:.66rem;letter-spacing:.04em;color:#c7c7d6;line-height:1.1;}
+  .storebtn b{display:block;font-size:1rem;line-height:1.15;}
+
+  /* ---------- FAQ ---------- */
+  .faq{max-width:760px;margin:0 auto;}
+  .faq details{background:#fff;border:1px solid var(--line);border-radius:14px;padding:4px 20px;margin-bottom:12px;box-shadow:var(--shadow-s);}
+  .faq summary{cursor:pointer;font-weight:700;padding:16px 0;list-style:none;display:flex;justify-content:space-between;align-items:center;gap:12px;}
+  .faq summary::-webkit-details-marker{display:none;}
+  .faq summary::after{content:"+";color:var(--brand);font-weight:800;font-size:1.3rem;transition:transform .2s;}
+  .faq details[open] summary::after{transform:rotate(45deg);}
+  .faq p{margin:0 0 18px;color:var(--ink-soft);}
+
+  /* ---------- final CTA ---------- */
+  .finalcta{background:linear-gradient(135deg,var(--brand),var(--brand-deep));color:#fff;text-align:center;}
+  .finalcta h2{color:#fff;}
+  .finalcta .lead{color:rgba(255,255,255,.9);max-width:44ch;margin:16px auto 28px;}
+  .finalcta .btn-primary{background:#fff;color:var(--brand-deep);}
+  .finalcta .btn-primary:hover{background:#f2f2ff;}
+
+  /* ---------- footer ---------- */
+  footer.site{background:#15151f;color:#b8b8cc;padding:52px 0 34px;}
+  .foot-grid{display:flex;justify-content:space-between;gap:30px;flex-wrap:wrap;}
+  .foot-brand{display:inline-flex;align-items:center;gap:10px;color:#fff;font-weight:800;font-size:1.2rem;margin-bottom:10px;}
+  .foot-links{display:flex;gap:26px;flex-wrap:wrap;}
+  .foot-links a{color:#b8b8cc;}
+  .foot-links a:hover{color:#fff;}
+  .foot-legal{margin-top:26px;padding-top:20px;border-top:1px solid #2a2a38;font-size:.85rem;color:#8888a0;}
+
+  /* ---------- reveal ---------- */
+  .reveal{opacity:0;transform:translateY(16px);transition:opacity .6s ease,transform .6s ease;}
+  .reveal.in{opacity:1;transform:none;}
+
+  /* ---------- responsive ---------- */
+  @media (max-width:860px){
+    .hero-grid,.split,.ai-grid{grid-template-columns:1fr;}
+    .split.rev .txt{order:0;}
+    .hero{text-align:center;padding-top:44px;}
+    .hero .lead,.hero h1{max-width:none;}
+    .cta-row,.microtrust,.price-strip{justify-content:center;}
+    .hero-phone{margin-top:30px;}
+    .valuestrip{grid-template-columns:1fr;}
+    .loop{grid-template-columns:1fr;}
+    .ai-grid{gap:14px;}
+    section{padding:56px 0;}
+    .hide-sm{display:none;}
   }
-  .links a:hover{border-color:var(--brand);}
-  .foot{margin-top:32px;color:var(--muted);font-size:.82rem;}
+  @media (prefers-reduced-motion:reduce){
+    html{scroll-behavior:auto;}
+    .reveal{opacity:1;transform:none;transition:none;}
+    .cursor{animation:none;}
+    .pulse{animation:none;}
+  }
 </style>
 </head>
 <body>
-  <div class="card">
-    <h1 class="logo">Zuba</h1>
-    <p class="tag">The all-in-one app for professional home inspectors —<br />schedule, inspect, report, and get paid.</p>
-    <div class="links">
-      <a href="/privacy">Privacy Policy</a>
-      <a href="/terms">Terms of Service</a>
-      <a href="/sms-optin-consent">SMS Reminders</a>
+
+<!-- ============================ HEADER ============================ -->
+<header class="site">
+  <div class="wrap nav">
+    <a class="brand" href="/">
+      <svg viewBox="0 0 120 120" width="30" height="30" aria-hidden="true">
+        <path d="M60 8 C82 8 100 26 100 48 C100 75 71 92 60 113 C49 92 20 75 20 48 C20 26 38 8 60 8 Z" fill="#5b5bd6"/>
+        <polyline points="43,35 77,35 43,63 77,63" fill="none" stroke="#fff" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      Zanbi
+    </a>
+    <div class="nav-actions">
+      <a class="btn btn-ghost hide-sm" href="builder/">Try the builder</a>
+      <a class="btn btn-primary" href="#pricing">Start free trial</a>
     </div>
-    <p class="foot">A product of Embra LLC · [support@embrallc.com]</p>
   </div>
+</header>
+
+<!-- ============================ HERO ============================ -->
+<section class="hero">
+  <div class="wrap hero-grid">
+    <div class="hero-copy">
+      <p class="eyebrow">For independent &amp; small-shop inspectors</p>
+      <h1>Run your whole home-inspection business <span class="accent">from your phone.</span></h1>
+      <p class="lead">Schedule, map your day, inspect, write the report, and get paid — all in one app that actually fits how you work on-site.</p>
+      <div class="price-strip">
+        <b>$19.99/mo</b> <span>— not</span> <span class="vs">$100+</span> <span>like the big platforms.</span>
+      </div>
+      <div class="cta-row">
+        <a class="btn btn-primary btn-lg" href="#pricing">Start your 30-day free trial</a>
+        <a class="btn btn-ghost btn-lg" href="builder/">🛠️ Try the builder — no signup</a>
+      </div>
+      <div class="microtrust">
+        <span><i class="dot-ok"></i> No credit card to start</span>
+        <span><i class="dot-ok"></i> 30 days free</span>
+        <span><i class="dot-ok"></i> Cancel anytime</span>
+      </div>
+    </div>
+
+    <div class="hero-visual">
+      <div class="phone hero-phone">
+        <div class="screen"><img src="media/IMG_1246.jpeg" alt="Zanbi My Day screen showing the next inspection, drive time, live traffic, and an AI briefing" /></div>
+        <div class="float-chip chip-eta"><span>On&nbsp;time<small>ETA 5:32 PM</small></span></div>
+        <div class="float-chip chip-paid"><span>Paid<small>Invoice sent</small></span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ VALUE STRIP ============================ -->
+<section class="band-white" style="padding:44px 0;">
+  <div class="wrap valuestrip">
+    <div class="vcard reveal"><div class="k">$19.99<span style="font-size:1rem;color:var(--muted);font-weight:600;">/mo</span></div><div class="l">One flat price. No per-report fees, no contracts, no upsells.</div></div>
+    <div class="vcard reveal"><div class="k">30 days free</div><div class="l">Run real inspections on the house before you pay a cent.</div></div>
+    <div class="vcard reveal"><div class="k">Phone-first</div><div class="l">Built to be used on-site, one-handed — not chained to a desk.</div></div>
+  </div>
+</section>
+
+<!-- ============================ PROBLEM ============================ -->
+<section>
+  <div class="wrap head">
+    <p class="eyebrow">The daily grind</p>
+    <h2>You inspect all day. Then you do admin all night.</h2>
+    <p class="lead">Juggling a calendar, mapping your own route, scribbling notes to retype later, chasing invoices, and looking sharp for the agents who refer you — across four apps and a clipboard. There's a better way to run the whole thing.</p>
+  </div>
+</section>
+
+<!-- ============================ CORE LOOP ============================ -->
+<section id="how" class="band-lav">
+  <div class="wrap">
+    <div class="head">
+      <p class="eyebrow">How it works</p>
+      <h2>One loop, start to paid.</h2>
+      <p class="lead">Everything a job needs, in the order you actually do it.</p>
+    </div>
+    <div class="loop">
+      <div class="step reveal"><span class="n">01</span><div class="ic">📅</div><h3>Schedule</h3><p>Book inspections and see your day, week, month, or the whole map.</p></div>
+      <div class="step reveal"><span class="n">02</span><div class="ic">🧭</div><h3>Map your day</h3><p>See your stops in time order or on the map, with live drive times, traffic, and ETAs to your next stop.</p></div>
+      <div class="step reveal"><span class="n">03</span><div class="ic">📝</div><h3>Inspect</h3><p>Work through your own custom forms — areas, severity, photos, notes.</p></div>
+      <div class="step reveal"><span class="n">04</span><div class="ic">✨</div><h3>AI-assisted report</h3><p>Turn rough field notes into clean, client-ready prose in a tap.</p></div>
+      <div class="step reveal"><span class="n">05</span><div class="ic">📤</div><h3>Deliver</h3><p>Send a polished PDF report to your client and their agent.</p></div>
+      <div class="step reveal"><span class="n">06</span><div class="ic">💳</div><h3>Get paid</h3><p>Request payment and collect right from the app when the job's done.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ CAROUSEL ============================ -->
+<section class="band-white">
+  <div class="wrap">
+    <div class="head">
+      <p class="eyebrow">See it in action</p>
+      <h2>Your schedule, your way.</h2>
+      <p class="lead">List, week, month, or map — plus custom forms and AI reports. Swipe through.</p>
+    </div>
+    <div class="carousel">
+      <div class="car-stage">
+        <button class="car-arrow" id="carPrev" aria-label="Previous screen">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#5b5bd6" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <div class="car-track" id="carTrack"><!-- phones injected from /media/slides.js --></div>
+        <button class="car-arrow" id="carNext" aria-label="Next screen">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#5b5bd6" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
+      </div>
+      <p class="cap" id="carCap"></p>
+      <div class="dots" id="carDots"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ AI REWRITE (dark) ============================ -->
+<section class="ai">
+  <div class="wrap">
+    <div class="head">
+      <p class="eyebrow" style="color:var(--brand-tint);">The magic tap</p>
+      <h2>Jot it rough. Send it polished.</h2>
+      <p class="lead">Type notes the way you'd say them out loud. Zanbi rewrites them into professional report language you can edit or accept — you're always in control.</p>
+    </div>
+    <div class="ai-grid">
+      <div class="note-card you reveal">
+        <div class="tag">Your note</div>
+        <div class="body">"Wall cracks big, water leak, standing water, rust on walls"</div>
+      </div>
+      <div class="note-card reveal">
+        <div class="tag">✨ Zanbi suggests</div>
+        <div class="body" id="aiOut" data-text="Large cracks were observed in the basement walls. Water intrusion and standing water were present in the basement. Rust stains were noted on the basement walls."></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ BUILDER (flagship) ============================ -->
+<section class="band-lav">
+  <div class="wrap split">
+    <div class="txt">
+      <span class="live-badge"><span class="pulse"></span> Live sandbox · no signup</span>
+      <p class="eyebrow">Your reports, your rules</p>
+      <h2>Build the exact form and report you want.</h2>
+      <p class="lead">Every inspector works differently. Drag and drop sections, fields, severity scales, and photo slots to design walkthrough forms and reports that match your process — no templates you have to fight.</p>
+      <ul class="featlist">
+        <li><span class="ck">✓</span> Drag-and-drop sections &amp; fields</li>
+        <li><span class="ck">✓</span> Severity ratings, checkboxes, photos, and notes</li>
+        <li><span class="ck">✓</span> "Build from my form" turns your form into a matching report — instantly</li>
+      </ul>
+      <a class="btn btn-primary btn-lg" href="builder/" style="text-decoration:none;">🛠️ Try the live builder →</a>
+      <p class="try-micro">Opens the real Zanbi builder right in your browser — the same one owners use. No account, nothing to install.</p>
+    </div>
+    <div class="visual">
+      <div class="phone">
+        <div class="screen"><img src="media/IMG_1256.jpeg" alt="A custom Zanbi walkthrough form with areas, a description, severity ratings, and photo slots" /></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ ROUTE (differentiator) ============================ -->
+<section class="band-white">
+  <div class="wrap split rev">
+    <div class="visual">
+      <div class="phone">
+        <div class="screen"><img src="media/IMG_1251.jpeg" alt="Zanbi map view showing the day's inspections plotted geographically" /></div>
+      </div>
+    </div>
+    <div class="txt">
+      <p class="eyebrow">Know before you go</p>
+      <h2>Your whole day — and every drive — at a glance.</h2>
+      <p class="lead">See your inspections in time order or plotted on a map, with live traffic, drive times, ETAs, and a plain-English briefing for your next stop — so you can plan your route your way.</p>
+      <ul class="featlist">
+        <li><span class="ck">✓</span> Your day in order, or on the map</li>
+        <li><span class="ck">✓</span> Live traffic, drive times, and ETAs</li>
+        <li><span class="ck">✓</span> A plain-English briefing for your next stop</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ PRICING ============================ -->
+<section id="pricing" class="band-lav">
+  <div class="wrap">
+    <div class="head">
+      <p class="eyebrow">Simple pricing</p>
+      <h2>One plan. Everything included.</h2>
+      <p class="lead">No per-report fees, no tiers to decode, no annual contract. Just the whole app.</p>
+    </div>
+    <div class="price-card reveal">
+      <div class="plan">Zanbi Pro</div>
+      <div class="amt">$19.99<span> / month</span></div>
+      <div class="trial">Start with a <b>30-day free trial</b> — no card required.</div>
+      <ul class="price-feats">
+        <li><span class="ck">✓</span> Scheduling, week / month / map views</li>
+        <li><span class="ck">✓</span> Map view with live drive times &amp; ETAs</li>
+        <li><span class="ck">✓</span> Custom drag-and-drop forms &amp; reports</li>
+        <li><span class="ck">✓</span> AI-assisted report writing</li>
+        <li><span class="ck">✓</span> PDF reports delivered to clients</li>
+        <li><span class="ck">✓</span> Integrated payments</li>
+      </ul>
+      <div class="getstarted">Get started — download free:</div>
+      <!-- TODO at launch: replace the store links below with the real App Store / Google Play URLs -->
+      <div class="badges">
+        <a class="storebtn" href="https://www.apple.com/app-store/" aria-label="Download on the App Store">
+          <svg width="20" height="24" viewBox="0 0 384 512" fill="#fff" aria-hidden="true"><path d="M318.7 268.7c-.2-36.7 16.4-64.4 50-84.8-18.8-26.9-47.2-41.7-84.7-44.6-35.5-2.8-74.3 20.7-88.5 20.7-15 0-49.4-19.7-76.4-19.7C63.3 141.2 4 184.8 4 273.5q0 39.3 14.4 81.2c12.8 36.7 59 126.7 107.2 125.2 25.2-.6 43-17.9 75.8-17.9 31.8 0 48.3 17.9 76.4 17.9 48.6-.7 90.4-82.5 102.6-119.3-65.2-30.7-61.7-90-61.7-91.9zM262 91.9c27.3-32.4 24.8-61.9 24-72.5-24.1 1.4-52 16.4-67.9 34.9-17.5 19.8-27.8 44.3-25.6 71.9 26.1 2 49.9-11.4 69.5-34.3z"/></svg>
+          <span><small>Download on the</small><b>App Store</b></span>
+        </a>
+        <a class="storebtn" href="https://play.google.com/store" aria-label="Get it on Google Play">
+          <svg width="20" height="22" viewBox="0 0 512 512" aria-hidden="true"><path fill="#fff" d="M48 24v464c0 9 5 17 13 21l257-253L61 3c-8 4-13 12-13 21z" opacity=".85"/><path fill="#fff" d="M355 195l-64-63L74 5c-5-3-10-3-13-2l257 253z" opacity=".65"/><path fill="#fff" d="M355 317L98 570c3 1 8 1 13-2l217-125z" opacity=".65"/><path fill="#fff" d="M451 235l-96-40-70 61 70 61 96-40c16-9 16-33 0-42z"/></svg>
+          <span><small>Get it on</small><b>Google Play</b></span>
+        </a>
+      </div>
+    </div>
+    <p style="text-align:center;color:var(--muted);font-size:.9rem;margin-top:18px;">Optionally invoice customers and collect payments in Zanbi for just a 1% Zanbi platform fee.</p>
+  </div>
+</section>
+
+<!-- ============================ FAQ ============================ -->
+<section class="band-white">
+  <div class="wrap">
+    <div class="head">
+      <p class="eyebrow">Good to know</p>
+      <h2>Questions, answered.</h2>
+    </div>
+    <div class="faq">
+      <details><summary>Is Zanbi really the whole business in one app?</summary><p>Yes — scheduling, a map view of your day, custom walkthrough forms, AI-assisted reports, PDF delivery, and payments all live in Zanbi. No stitching together a calendar, a maps app, a report tool, and an invoicing service.</p></details>
+      <details><summary>How is it only $19.99 when other tools are $100+?</summary><p>Zanbi is built lean and phone-first for independent and small-shop inspectors, not enterprise teams. You get the tools that matter without the enterprise price tag, per-report charges, or long contracts.</p></details>
+      <details><summary>How does the free trial work?</summary><p>You get 30 days free with no credit card required. Run real inspections, send real reports, and decide. If it's for you, it's $19.99/month after — cancel anytime.</p></details>
+      <details><summary>Do I have to use my own report format?</summary><p>You build it. Drag and drop sections, fields, severity scales, and photo slots to match exactly how you inspect, then reuse it on every job.</p></details>
+      <details><summary>Does the AI write my report for me?</summary><p>It gives you a professional first draft from your rough notes, which you review, edit, or accept. You always have the final say on every word that reaches your client.</p></details>
+      <details><summary>How do payments work?</summary><p>Optionally, you can invoice customers and collect payment right in the app for a 1% Zanbi platform fee. Prefer to bill your own way? Skip it — there's no extra charge.</p></details>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ FINAL CTA ============================ -->
+<section class="finalcta">
+  <div class="wrap">
+    <h2>Your next inspection could run through Zanbi.</h2>
+    <p class="lead">Try the whole app free for 30 days. No card, no contract, no reason not to.</p>
+    <a class="btn btn-primary btn-lg" href="#pricing">Start your free trial</a>
+  </div>
+</section>
+
+<!-- ============================ FOOTER ============================ -->
+<footer class="site">
+  <div class="wrap">
+    <div class="foot-grid">
+      <div>
+        <div class="foot-brand">
+          <svg viewBox="0 0 120 120" width="26" height="26" aria-hidden="true">
+            <path d="M60 8 C82 8 100 26 100 48 C100 75 71 92 60 113 C49 92 20 75 20 48 C20 26 38 8 60 8 Z" fill="#5b5bd6"/>
+            <polyline points="43,35 77,35 43,63 77,63" fill="none" stroke="#15151f" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          Zanbi
+        </div>
+        <div style="max-width:32ch;font-size:.92rem;">The home-inspection business, in your pocket. Built for independent inspectors.</div>
+      </div>
+      <div class="foot-links">
+        <a href="/privacy">Privacy</a>
+        <a href="/terms">Terms</a>
+        <a href="/sms-terms">SMS Terms</a>
+        <a href="/delete-account">Delete Account</a>
+        <a href="mailto:support@embrallc.com">Support</a>
+      </div>
+    </div>
+    <div class="foot-legal">Zanbi is a product of Embra LLC. &nbsp;·&nbsp; © <span id="yr"></span> Embra LLC. All rights reserved. &nbsp;·&nbsp; support@embrallc.com</div>
+  </div>
+</footer>
+
+<script src="media/slides.js"></script>
+<script>
+  document.getElementById("yr").textContent = new Date().getFullYear();
+  var reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  /* ---------- scroll reveal ---------- */
+  (function(){
+    var els = document.querySelectorAll(".reveal");
+    if (reduceMotion || !("IntersectionObserver" in window)) { els.forEach(function(e){e.classList.add("in");}); return; }
+    var io = new IntersectionObserver(function(entries){
+      entries.forEach(function(en){ if(en.isIntersecting){ en.target.classList.add("in"); io.unobserve(en.target);} });
+    }, { threshold:.15 });
+    els.forEach(function(e){ io.observe(e); });
+  })();
+
+  /* ---------- carousel (built from /media/slides.js) ---------- */
+  (function(){
+    var slides = window.ZANBI_SLIDES || [];
+    var track = document.getElementById("carTrack");
+    var capEl = document.getElementById("carCap");
+    var dotsEl = document.getElementById("carDots");
+    if (!track) return;
+    if (!slides.length){
+      track.innerHTML = '<div class="phone"><div class="screen" style="display:flex;align-items:center;justify-content:center;color:#8f8fe6;font-weight:700;text-align:center;padding:20px;">Add screenshots to<br>/media/slides.js</div></div>';
+      return;
+    }
+    var idx = 0, timer = null;
+    slides.forEach(function(s, i){
+      var ph = document.createElement("div");
+      ph.className = "phone" + (i===0 ? " active":"");
+      ph.innerHTML = '<div class="screen"><img src="media/'+s.src+'" alt="'+(s.caption||"Zanbi app screen").replace(/"/g,"&quot;")+'" loading="lazy"></div>';
+      track.appendChild(ph);
+      var d = document.createElement("button");
+      d.setAttribute("aria-label","Go to screen "+(i+1));
+      if(i===0) d.className="on";
+      d.addEventListener("click", function(){ go(i); rest(); });
+      dotsEl.appendChild(d);
+    });
+    var phones = track.querySelectorAll(".phone");
+    var dots = dotsEl.querySelectorAll("button");
+    capEl.textContent = slides[0].caption || "";
+
+    function go(n){
+      idx = (n + slides.length) % slides.length;
+      phones.forEach(function(p,i){ p.classList.toggle("active", i===idx); });
+      dots.forEach(function(d,i){ d.classList.toggle("on", i===idx); });
+      capEl.style.opacity = 0;
+      setTimeout(function(){ capEl.textContent = slides[idx].caption || ""; capEl.style.opacity = 1; }, 160);
+    }
+    function next(){ go(idx+1); }
+    function prev(){ go(idx-1); }
+    function start(){ if(reduceMotion || slides.length<2) return; timer = setInterval(next, 4200); }
+    function rest(){ if(timer){ clearInterval(timer); } start(); }
+
+    document.getElementById("carNext").addEventListener("click", function(){ next(); rest(); });
+    document.getElementById("carPrev").addEventListener("click", function(){ prev(); rest(); });
+
+    // swipe
+    var x0=null;
+    track.addEventListener("pointerdown", function(e){ x0=e.clientX; });
+    track.addEventListener("pointerup", function(e){
+      if(x0===null) return; var dx=e.clientX-x0;
+      if(Math.abs(dx)>40){ dx<0 ? next() : prev(); rest(); } x0=null;
+    });
+    start();
+  })();
+
+  /* ---------- AI rewrite type-out ---------- */
+  (function(){
+    var out = document.getElementById("aiOut");
+    if(!out) return;
+    var full = out.getAttribute("data-text");
+    if (reduceMotion || !("IntersectionObserver" in window)){ out.textContent = full; return; }
+    var typed = false;
+    var io = new IntersectionObserver(function(entries){
+      entries.forEach(function(en){
+        if(en.isIntersecting && !typed){
+          typed = true;
+          var i=0; out.innerHTML='<span class="cursor"></span>';
+          (function tick(){
+            if(i<=full.length){
+              out.innerHTML = full.slice(0,i) + '<span class="cursor"></span>';
+              i += 2;
+              setTimeout(tick, 18);
+            } else { out.textContent = full; }
+          })();
+        }
+      });
+    }, { threshold:.5 });
+    io.observe(out);
+  })();
+</script>
+
 </body>
 </html>
