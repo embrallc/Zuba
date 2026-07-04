@@ -1,4 +1,4 @@
-# Zuba Report Worker (Cloud Run)
+# Zanbi Report Worker (Cloud Run)
 
 Node/Express service that generates inspection report PDFs off the Supabase Edge
 Function (which is capped at 256 MB memory). The app creates a `report_jobs`

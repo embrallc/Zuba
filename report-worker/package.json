@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Zuba PDF report generation worker (Cloud Run). Receives a job, generates the report PDF, uploads to Supabase Storage, and updates report_jobs.",
+  "description": "Zanbi PDF report generation worker (Cloud Run). Receives a job, generates the report PDF, uploads to Supabase Storage, and updates report_jobs.",
   "engines": {
     "node": ">=22"
   },

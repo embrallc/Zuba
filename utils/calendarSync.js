@@ -1,15 +1,15 @@
 // Two-way calendar sync engine (local, on-device only — no Google/Apple cloud
 // APIs, no Edge Functions). Mirrors the notifications integration: db writes
-// emit on the bus (db/events.js) and we react; for the calendar→Zuba direction
+// emit on the bus (db/events.js) and we react; for the calendar→Zanbi direction
 // (which has no change-notification API) we poll on app foreground.
 //
-// PUSH (Zuba → calendar): on INSERT/UPDATE/DELETE from local user actions we
+// PUSH (Zanbi → calendar): on INSERT/UPDATE/DELETE from local user actions we
 //   create / update / delete a system-calendar event in the chosen calendar,
-//   stamping the notes with the `#zuba` marker, and record the link on the
+//   stamping the notes with the `#zanbi` marker, and record the link on the
 //   inspection (CalendarEventId / CalendarOwnerDeviceId / CalendarSnapshot).
 //
-// PULL (calendar → Zuba): runPull() scans the chosen calendar over a rolling
-//   window. Only events that carry `#zuba` (title or notes, case-insensitive)
+// PULL (calendar → Zanbi): runPull() scans the chosen calendar over a rolling
+//   window. Only events that carry `#zanbi` (title or notes, case-insensitive)
 //   — or that we already own by id — are treated as inspections; everything
 //   else is ignored, so an inspector can keep other appointments in the same
 //   calendar. New events become inspections; changed events update theirs;
@@ -37,15 +37,15 @@ import { useCalendarStore } from "../stores/useCalendarStore";
 import { useInspectionStore } from "../stores/useInspectionStore";
 import { useSettingsStore } from "../stores/useSettingsStore";
 
-const ZUBA_TOKEN = "#zuba";
-const TOKEN_RE = /#zuba/i;
+const ZANBI_TOKEN = "#zanbi";
+const TOKEN_RE = /#zanbi/i;
 
 // Rolling pull window: a little past so just-cancelled events resolve, ~6
 // months ahead for upcoming work.
 const WINDOW_PAST_MS = 7 * 24 * 60 * 60 * 1000;
 const WINDOW_FUTURE_MS = 183 * 24 * 60 * 60 * 1000;
 
-// Set true while we APPLY remote (calendar→Zuba) changes so the db events those
+// Set true while we APPLY remote (calendar→Zanbi) changes so the db events those
 // writes emit don't re-enter the push handlers and bounce straight back to the
 // calendar. JS is single-threaded and emit() is synchronous, so a tight flag
 // around each apply is enough.
@@ -69,7 +69,7 @@ function hasToken(s) {
 function stripToken(s) {
   if (typeof s !== "string") return "";
   return s
-    .replace(/#zuba/gi, "")
+    .replace(/#zanbi/gi, "")
     .replace(/[ \t]{2,}/g, " ")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
@@ -273,7 +273,7 @@ function inspectionToEventInput(insp) {
     "Inspection";
   const location = addressOneLine(insp);
   const base = (insp.Summary || "").trim();
-  const notes = base ? `${base}\n\n${ZUBA_TOKEN}` : ZUBA_TOKEN;
+  const notes = base ? `${base}\n\n${ZANBI_TOKEN}` : ZANBI_TOKEN;
   return { title, startDate: start, endDate: end, location, notes };
 }
 
@@ -423,7 +423,7 @@ export async function isChosenCalendarPresent() {
   return calendarExists(cfg.calendarId);
 }
 
-// ─── PUSH (Zuba → calendar) ──────────────────────────────────────────────────
+// ─── PUSH (Zanbi → calendar) ─────────────────────────────────────────────────
 
 async function createEventForInspection(sk, insp, cfg) {
   const input = inspectionToEventInput(insp);
@@ -518,7 +518,7 @@ async function handleUpsert(insp) {
     }
 
     if (!insp.ScheduledAt) return; // needs a time to place on a calendar
-    if (!ownedByMe) return; // another Zuba device manages this event
+    if (!ownedByMe) return; // another Zanbi device manages this event
 
     if (!(await requestCalendarAccess())) return;
     if (!(await calendarExists(cfg.calendarId))) return;
@@ -569,7 +569,7 @@ async function pushSweep(cfg) {
   }
 }
 
-// ─── PULL (calendar → Zuba) ──────────────────────────────────────────────────
+// ─── PULL (calendar → Zanbi) ─────────────────────────────────────────────────
 
 // newest-wins: true → calendar should overwrite the inspection.
 function calendarWins(ev, link) {
@@ -798,7 +798,7 @@ export async function runPull() {
         continue;
       }
 
-      // Unknown to us → only import if it's tagged for Zuba.
+      // Unknown to us → only import if it's tagged for Zanbi.
       if (hasToken(ev.title) || hasToken(ev.notes)) {
         nTagged++;
         seen.add(ev.id);

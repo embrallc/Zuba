@@ -57,7 +57,7 @@ export default function PaymentsUpsellSheet({ visible, onClose, userProfile }) {
 
           <Text style={styles.body}>
             {isOwner
-              ? "Text clients a secure invoice link right from an inspection. Money goes straight to your account — Zuba just adds a small 1% fee."
+              ? "Text clients a secure invoice link right from an inspection. Money goes straight to your account — Zanbi just adds a small 1% fee."
               : "Your organization can text clients a secure invoice link right from an inspection, with money going straight to the owner's account. Ask your owner to turn on invoicing to unlock it."}
           </Text>
 

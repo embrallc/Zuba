@@ -14,7 +14,7 @@ declare const Deno: { env: { get(name: string): string | undefined } };
 
 export const ENTITLEMENT_ID = "Embra LLC Pro";
 
-// Product IDs encode the seat count: kensa_pro_seats_1, kensa_pro_seats_3...
+// Product IDs encode the seat count: zanbi_pro_seats_1, zanbi_pro_seats_3...
 // An active entitlement whose product doesn't match falls back to 1 seat.
 export function seatsFromProductId(productId: string | null | undefined) {
   if (!productId) return 1;

@@ -15,8 +15,8 @@ export const hasToken = !!token;
 // .env.staging). It is only used when a token is present; local `vite dev` runs
 // in mock mode (no token) and never reaches the network.
 const base = import.meta.env.VITE_API_BASE ?? "";
-const LOCAL_KEY = "kensa-form-template";
-const LOCAL_WALK_KEY = "kensa-walkthrough-template";
+const LOCAL_KEY = "zanbi-form-template";
+const LOCAL_WALK_KEY = "zanbi-walkthrough-template";
 
 // Server's draft_updated_at echo — optimistic-concurrency baseline so two
 // open tabs can't silently clobber each other. Tracked per designer.

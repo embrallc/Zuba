@@ -10,7 +10,7 @@ export function defaultFrom(): string {
   // Must be on the DNS-verified Resend domain (notifyinspection.embrallc.com).
   return (
     Deno.env.get("REPORT_FROM_EMAIL") ||
-    "Zuba <reports@notifyinspection.embrallc.com>"
+    "Zanbi <reports@notifyinspection.embrallc.com>"
   );
 }
 

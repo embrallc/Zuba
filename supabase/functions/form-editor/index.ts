@@ -88,7 +88,7 @@ function logError(
 
 const DENIED_TEXT =
   "This Form Builder link isn't valid anymore.\n\n" +
-  "It may have expired or been regenerated. Open Kensa on your phone and go to " +
+  "It may have expired or been regenerated. Open Zanbi on your phone and go to " +
   "Settings -> Form Builder to get a fresh link.";
 
 async function sha256Hex(input: string): Promise<string> {

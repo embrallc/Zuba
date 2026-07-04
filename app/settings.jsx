@@ -201,7 +201,7 @@ export default function SettingsScreen() {
     setPersistPhotosToDevice(true);
   }
 
-  // Sub-toggle: file saves into a dedicated "Zuba" album. Albums need full
+  // Sub-toggle: file saves into a dedicated "Zanbi" album. Albums need full
   // (read-write) library access, so this escalates the permission; if the user
   // won't grant full access we keep it off and explain why.
   async function handleToggleAlbum(val) {
@@ -213,7 +213,7 @@ export default function SettingsScreen() {
     if (!granted) {
       Alert.alert(
         "Full Photo Access Needed",
-        "Organizing photos into a Zuba album needs full photo-library access. You can grant it in Settings, or leave this off to save to your camera roll instead.",
+        "Organizing photos into a Zanbi album needs full photo-library access. You can grant it in Settings, or leave this off to save to your camera roll instead.",
         [
           { text: "Not Now", style: "cancel" },
           { text: "Open Settings", onPress: () => Linking.openSettings() },
@@ -540,8 +540,8 @@ export default function SettingsScreen() {
 
         {persistPhotosToDevice && (
           <SettingRow
-            label="Organize in a Zuba album"
-            description="Group saved photos into a dedicated “Zuba” album instead of your main camera roll. Needs full photo-library access."
+            label="Organize in a Zanbi album"
+            description="Group saved photos into a dedicated “Zanbi” album instead of your main camera roll. Needs full photo-library access."
             value={photoAlbumEnabled}
             onValueChange={handleToggleAlbum}
           />
@@ -712,7 +712,7 @@ function SubscriptionSection({ status, onSubscribe, onAddSeats }) {
     badgeBg = theme?.colors?.primary;
     badgeFg = "#fff";
   } else if (state === "active") {
-    label = "Kensa Pro";
+    label = "Zanbi Pro";
     description = comp
       ? "Complimentary access"
       : isOwner
@@ -807,7 +807,7 @@ function FormBuilderCard() {
   async function handleShare() {
     try {
       await Share.share({
-        message: `Open the Kensa Form Builder in your browser:\n\n${url}`,
+        message: `Open the Zanbi Form Builder in your browser:\n\n${url}`,
       });
     } catch (e) {
       logError(e, "SettingsScreen.FormBuilderCard.share");

@@ -416,7 +416,7 @@ export async function maybePromptForUpcomingApptNotif({ userSk } = {}) {
     return await new Promise((resolve) => {
       Alert.alert(
         "Enable Reminders",
-        "Allow Kensa to send local reminders for your scheduled property and roof assessments. You can change notification settings in Settings > Notifications at any time.",
+        "Allow Zanbi to send local reminders for your scheduled property and roof assessments. You can change notification settings in Settings > Notifications at any time.",
         [
           {
             text: "Not Now",
