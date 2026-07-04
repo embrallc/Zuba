@@ -1111,3 +1111,142 @@ select.zoom {
   color: var(--error);
   border-color: rgba(220, 38, 38, 0.4);
 }
+
+/* ── First-run guided tour ─────────────────────────────────────────────── */
+.tour-root {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+}
+.tour-block {
+  position: fixed;
+  inset: 0;
+  pointer-events: auto;
+}
+.tour-block.dim {
+  background: rgba(15, 16, 40, 0.62);
+}
+.tour-hole {
+  position: fixed;
+  border-radius: 12px;
+  box-shadow:
+    0 0 0 3px var(--primary),
+    0 0 0 9999px rgba(15, 16, 40, 0.62);
+  pointer-events: none;
+  transition:
+    top 0.22s ease,
+    left 0.22s ease,
+    width 0.22s ease,
+    height 0.22s ease;
+}
+.tour-card {
+  position: fixed;
+  width: 304px;
+  max-width: calc(100vw - 24px);
+  background: var(--panel);
+  border-radius: 14px;
+  box-shadow: 0 14px 44px rgba(15, 16, 40, 0.3);
+  padding: 16px 16px 13px;
+  pointer-events: auto;
+}
+.tour-card .tour-eyebrow {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.9px;
+  text-transform: uppercase;
+  color: var(--primary);
+  margin: 0 0 6px;
+}
+.tour-card h4 {
+  font-size: 15.5px;
+  line-height: 1.25;
+  margin: 0 0 7px;
+  color: var(--text);
+  font-weight: 800;
+}
+.tour-card p {
+  font-size: 12.7px;
+  line-height: 1.5;
+  color: var(--text-subtle);
+  margin: 0;
+}
+.tour-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 15px;
+}
+.tour-actions .spacer {
+  flex: 1;
+}
+.tour-dots {
+  display: flex;
+  gap: 5px;
+}
+.tour-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--border);
+}
+.tour-dot.on {
+  background: var(--primary);
+}
+.tour-btn {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 7px 12px;
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.tour-btn:hover {
+  border-color: var(--primary);
+}
+.tour-btn.primary {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+.tour-btn.primary:hover {
+  filter: brightness(1.06);
+}
+.tour-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.tour-skip {
+  background: none;
+  border: none;
+  color: var(--text-fine);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 4px 6px;
+}
+.tour-skip:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+.tour-replay {
+  position: fixed;
+  left: 14px;
+  bottom: 14px;
+  z-index: 40;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 7px 13px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--primary);
+  cursor: pointer;
+  box-shadow: 0 3px 14px rgba(15, 16, 40, 0.12);
+}
+.tour-replay:hover {
+  border-color: var(--primary);
+}
