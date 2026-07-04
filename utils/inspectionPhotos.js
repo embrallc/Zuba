@@ -24,9 +24,9 @@ function isFilePath(uri) {
 export const BUCKET = "inspection-images";
 
 // Name of the device photo-library album used when the user opts into
-// organizing saved inspection photos (Settings → Photos → "Organize in a Zuba
+// organizing saved inspection photos (Settings → Photos → "Organize in a Zanbi
 // album"). Plain camera-roll saves don't touch this.
-const DEVICE_ALBUM = "Zuba";
+const DEVICE_ALBUM = "Zanbi";
 
 const PHOTOS_CACHE_DIR = `${FileSystem.cacheDirectory}photos/`;
 const MAX_DIMENSION = 1920;
@@ -400,7 +400,7 @@ export async function ensureMediaWritePermission({ full = false } = {}) {
 // Best-effort save of one already-cached photo to the device's photo library.
 // Never throws — a failed device-save must not block the cache/cloud pipeline.
 //   - album=false → save to the camera roll (saveToLibraryAsync; write-only ok).
-//   - album=true  → file the photo into the "Zuba" album (needs full access).
+//   - album=true  → file the photo into the "Zanbi" album (needs full access).
 // Caller is responsible for having obtained the matching permission first.
 export async function savePhotoToDevice(fileUri, { album = false } = {}) {
   try {
@@ -409,7 +409,7 @@ export async function savePhotoToDevice(fileUri, { album = false } = {}) {
       await MediaLibrary.saveToLibraryAsync(fileUri);
       return;
     }
-    // Album path: create the asset, then drop it into the Zuba album. copyAsset
+    // Album path: create the asset, then drop it into the Zanbi album. copyAsset
     // = false moves the reference into the album instead of leaving a duplicate
     // loose in the camera roll.
     const asset = await MediaLibrary.createAssetAsync(fileUri);

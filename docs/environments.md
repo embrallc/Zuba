@@ -1,4 +1,4 @@
-# Environments & Deploy Runbook — Zuba
+# Environments & Deploy Runbook — Zanbi
 
 How the backend is split across **local → staging → production**, what secrets
 live where, and the exact steps to set up and operate each environment.

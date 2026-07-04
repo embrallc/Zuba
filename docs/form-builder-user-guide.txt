@@ -1,5 +1,5 @@
 =====================================================================
-KENSA FORM BUILDER — USER GUIDE
+ZANBI FORM BUILDER — USER GUIDE
 Design your own inspection report, your way.
 =====================================================================
 
@@ -17,7 +17,7 @@ screen and a mouse. Your phone is only used to get you in the door.
 1. OPENING THE FORM BUILDER
 ---------------------------------------------------------------------
 
-1. In the Kensa app, go to Settings and find REPORT DESIGNER.
+1. In the Zanbi app, go to Settings and find REPORT DESIGNER.
    (Only the owner of your organization sees this section.)
 2. Tap "Get editor link".
 3. Tap "Share" to email the link to yourself, then open it on your
@@ -232,7 +232,7 @@ see that message.
 
 "This link isn't valid anymore"
   Your link expired (they last 90 days) or someone regenerated it.
-  Open Kensa on your phone → Settings → Form Builder → Get editor
+  Open Zanbi on your phone → Settings → Form Builder → Get editor
   link, and use the fresh one.
 
 "Save failed — retrying"

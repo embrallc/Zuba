@@ -298,7 +298,7 @@ export function initializeDatabase(userId) {
   } catch (_) {}
   // Calendar two-way sync (synced, device-editable like ReportRecipients).
   // CalendarEventId = the owner device's local event id; CalendarOwnerDeviceId =
-  // which Zuba device manages the event (single-writer guard); CalendarSnapshot =
+  // which Zanbi device manages the event (single-writer guard); CalendarSnapshot =
   // last-synced {title,start,end,location,notes,lastModified} JSON for diff +
   // conflict resolution + loop prevention.
   try {

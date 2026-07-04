@@ -27,7 +27,7 @@ const DEFAULT_NOTIFICATIONS = {
 };
 
 // Map of integration name → boolean. Each represents an external service the
-// user can hook into Kensa from Settings → Integrations. All default OFF.
+// user can hook into Zanbi from Settings → Integrations. All default OFF.
 const DEFAULT_INTEGRATIONS = {
   appleCalendar: false,
   googleCalendar: false,
@@ -80,7 +80,7 @@ export const useSettingsStore = create((set, get) => ({
   // library (on top of the app cache + cloud bucket). Device-local — a storage
   // preference for THIS phone, so it never rides the cloud users row. Default OFF.
   persistPhotosToDevice: false,
-  // When persistPhotosToDevice is on, route saves into a dedicated "Zuba" album
+  // When persistPhotosToDevice is on, route saves into a dedicated "Zanbi" album
   // instead of the plain camera roll. Needs full (read-write) library access, so
   // it's a second opt-in revealed only after the main toggle is granted. Default OFF.
   photoAlbumEnabled: false,

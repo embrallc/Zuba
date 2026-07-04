@@ -164,7 +164,7 @@ export default function LockedScreen() {
       : {
           icon: "lock-clock",
           title: "Subscription needed",
-          body: "Your organization's free trial has ended. Ask your organization owner to subscribe from their Kensa app, then check again. All of your work is saved.",
+          body: "Your organization's free trial has ended. Ask your organization owner to subscribe from their Zanbi app, then check again. All of your work is saved.",
         };
 
   return (

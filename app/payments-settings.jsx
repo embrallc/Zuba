@@ -180,10 +180,10 @@ export default function PaymentsSettingsScreen() {
               </View>
               <Text style={styles.cardBody}>
                 {active
-                  ? "You can bill clients from any inspection. Money goes straight to your connected account — Kensa keeps a 1% fee."
+                  ? "You can bill clients from any inspection. Money goes straight to your connected account — Zanbi keeps a 1% fee."
                   : pending
                     ? "Stripe is still verifying your details. Tap Continue if it asked for more, or Refresh once it's done."
-                    : "Connect a Stripe account to bill clients with a secure payment link. You enter your banking details on Stripe — Kensa never sees them."}
+                    : "Connect a Stripe account to bill clients with a secure payment link. You enter your banking details on Stripe — Zanbi never sees them."}
               </Text>
 
               {pending && requirements && (

@@ -114,7 +114,7 @@ export default function WalkthroughEditor() {
         <b>Couldn't open the Form Builder</b>
         <span>{fatal}</span>
         <span>
-          This link may have expired — generate a fresh one from Kensa →
+          This link may have expired — generate a fresh one from Zanbi →
           Settings → Form Builder.
         </span>
       </div>

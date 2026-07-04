@@ -5,7 +5,7 @@
 --                             this inspection maps to. Device-local in nature
 --                             (event ids differ per device); other devices store
 --                             it but ignore it, gating on the owner id below.
--- calendar_owner_device_id  — which Zuba device manages this inspection's
+-- calendar_owner_device_id  — which Zanbi device manages this inspection's
 --                             calendar event (single-writer guard so a second
 --                             device never creates a duplicate event).
 -- calendar_snapshot         — last-synced {title,start,end,location,notes,

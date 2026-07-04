@@ -18,7 +18,7 @@ const KEY = "calendar_config_v1";
 const DEFAULTS = {
   enabled: false, // master Calendar Sync toggle
   push: true, // push inspections → calendar
-  pull: true, // pull #zuba events → inspections
+  pull: true, // pull #zanbi events → inspections
   calendarId: null, // chosen system-calendar id
   calendarTitle: null, // for display in Settings
   sourceName: null, // account/source name for display

@@ -2,10 +2,10 @@
 // colliding with text drops, and native DnD is what lets binding chips drop
 // straight into Tiptap editors at the caret position.
 export const MIME = {
-  element: "application/x-kensa-element",
-  shape: "application/x-kensa-shape",
-  band: "application/x-kensa-band",
-  binding: "application/x-kensa-binding",
+  element: "application/x-zanbi-element",
+  shape: "application/x-zanbi-shape",
+  band: "application/x-zanbi-band",
+  binding: "application/x-zanbi-binding",
 };
 
 export function setPayload(e, mime, payload) {

@@ -137,11 +137,11 @@ export default function CalendarSettingsScreen() {
   async function handleShareInstruction() {
     const where = calendarTitle ? `your “${calendarTitle}” calendar` : "the synced calendar";
     const msg =
-      `To add an inspection to Zuba: create the event in ${where} and put ` +
-      `#zuba anywhere in the title or notes. Add the client's phone number ` +
-      `and/or email in the notes too — Zuba pulls them into the inspection so ` +
-      `the inspector can follow up. Events without #zuba stay private and ` +
-      `won't appear in Zuba.`;
+      `To add an inspection to Zanbi: create the event in ${where} and put ` +
+      `#zanbi anywhere in the title or notes. Add the client's phone number ` +
+      `and/or email in the notes too — Zanbi pulls them into the inspection so ` +
+      `the inspector can follow up. Events without #zanbi stay private and ` +
+      `won't appear in Zanbi.`;
     try {
       await Share.share({ message: msg });
     } catch (e) {
@@ -212,7 +212,7 @@ export default function CalendarSettingsScreen() {
           <View style={rowStyles.text}>
             <Text style={rowStyles.label}>Calendar Sync</Text>
             <Text style={rowStyles.description}>
-              Two-way sync between Zuba and your Apple or Google calendar. Pick
+              Two-way sync between Zanbi and your Apple or Google calendar. Pick
               one calendar to share with your team.
             </Text>
           </View>
@@ -320,9 +320,9 @@ export default function CalendarSettingsScreen() {
             </View>
             <View style={rowStyles.container}>
               <View style={rowStyles.text}>
-                <Text style={rowStyles.label}>Pull #zuba events</Text>
+                <Text style={rowStyles.label}>Pull #zanbi events</Text>
                 <Text style={rowStyles.description}>
-                  Turn calendar events tagged #zuba into inspections (e.g. ones
+                  Turn calendar events tagged #zanbi into inspections (e.g. ones
                   your assistant adds)
                 </Text>
               </View>
@@ -339,14 +339,14 @@ export default function CalendarSettingsScreen() {
             </View>
 
             {/* Tagging help */}
-            <Text style={styles.sectionLabel}>THE #zuba TAG</Text>
+            <Text style={styles.sectionLabel}>THE #zanbi TAG</Text>
             <View style={styles.helpCard}>
               <Text style={styles.helpText} selectable>
-                Only events with <Text style={styles.tag}>#zuba</Text> in the
+                Only events with <Text style={styles.tag}>#zanbi</Text> in the
                 title or notes become inspections — anything else in the
-                calendar stays private. Zuba adds the tag automatically to events
+                calendar stays private. Zanbi adds the tag automatically to events
                 it creates. Put a phone number and/or email in the notes and
-                Zuba fills in the inspection's contact info. Share this with an
+                Zanbi fills in the inspection's contact info. Share this with an
                 assistant so events they add show up for you:
               </Text>
               <TouchableOpacity
@@ -385,7 +385,7 @@ export default function CalendarSettingsScreen() {
             </TouchableOpacity>
 
             <Text style={styles.footNote}>
-              Using more than one device? Turn on Pull #zuba events on just one
+              Using more than one device? Turn on Pull #zanbi events on just one
               of them to avoid duplicates.
             </Text>
           </>

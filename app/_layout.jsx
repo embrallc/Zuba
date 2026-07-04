@@ -318,10 +318,10 @@ export default function RootLayout() {
     };
   }, []);
 
-  // Wire db-layer events to the calendar sync engine (Zuba → calendar). Like
+  // Wire db-layer events to the calendar sync engine (Zanbi → calendar). Like
   // the notification subscriber, mount once and let the engine self-gate on the
   // calendar config (enabled / push / chosen calendar). The matching
-  // calendar → Zuba direction is the foreground poll (runPull) above.
+  // calendar → Zanbi direction is the foreground poll (runPull) above.
   useEffect(() => {
     const stop = startCalendarSync();
     return stop;

@@ -1,7 +1,7 @@
 -- Org-level billing state for the RevenueCat subscription system.
 --
 -- Model: the org OWNER holds one auto-renewable App Store subscription whose
--- product encodes a seat count (e.g. kensa_pro_seats_3). RevenueCat webhooks
+-- product encodes a seat count (e.g. zanbi_pro_seats_3). RevenueCat webhooks
 -- (and an on-demand REST sync) write the entitlement state here; the
 -- subscription-status edge function reads it to decide trial/active/expired
 -- per caller. Clients NEVER read or write these tables directly — RLS is
