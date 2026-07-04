@@ -28,6 +28,9 @@ export default function LoginScreen() {
   const [orgId, setOrgId] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [sentTo, setSentTo] = useState(null); // email we sent a verify link to
+  const [resending, setResending] = useState(false);
+  const [resendNote, setResendNote] = useState(null);
 
   async function handleSubmit() {
     if (!email.trim() || !password) {
@@ -54,28 +57,63 @@ export default function LoginScreen() {
           password,
         });
         if (error) throw error;
-
+        logEvent("auth.signin");
+        router.replace("/(tabs)");
       } else {
         const metadata = orgMode === "create"
           ? { company_name: orgName.trim() }
           : { org_sk: orgId.trim() };
 
-        const { error: signUpError } = await supabase.auth.signUp({
+        const { data, error: signUpError } = await supabase.auth.signUp({
           email: email.trim(),
           password,
           options: { data: metadata },
         });
         if (signUpError) throw signUpError;
-      }
+        logEvent("auth.signup");
 
-      logEvent(mode === "signin" ? "auth.signin" : "auth.signup");
-      router.replace("/(tabs)");
+        // With email confirmation on, signUp returns no session — the account
+        // isn't usable until the user taps the link in their inbox. Show a
+        // "check your email" screen instead of bouncing to the tabs, which the
+        // root layout would immediately kick back to login (looking broken).
+        if (data?.session) {
+          router.replace("/(tabs)");
+        } else {
+          setSentTo(email.trim());
+        }
+      }
     } catch (e) {
       logError(e, `login.handleSubmit:${mode}`);
       setError(e.message ?? "Something went wrong. Please try again.");
     } finally {
       setLoading(false);
     }
+  }
+
+  async function handleResend() {
+    if (resending || !sentTo) return;
+    setResending(true);
+    setResendNote(null);
+    try {
+      const { error: resendError } = await supabase.auth.resend({
+        type: "signup",
+        email: sentTo,
+      });
+      if (resendError) throw resendError;
+      setResendNote("Sent — check your inbox again.");
+    } catch (e) {
+      logError(e, "login.handleResend");
+      setResendNote(e.message ?? "Couldn't resend just now. Try again shortly.");
+    } finally {
+      setResending(false);
+    }
+  }
+
+  function backToSignIn() {
+    setSentTo(null);
+    setResendNote(null);
+    setError(null);
+    setMode("signin");
   }
 
   function toggleMode() {
@@ -111,7 +149,54 @@ export default function LoginScreen() {
             <Text style={styles.tagline}>Home Inspection Management</Text>
           </View>
 
-          {/* Card */}
+          {/* Post-signup: verification-pending screen */}
+          {sentTo ? (
+            <View style={styles.card}>
+              <View style={styles.confirmIcon}>
+                <MaterialCommunityIcons
+                  name="email-check-outline"
+                  size={36}
+                  color={theme.colors.primary}
+                />
+              </View>
+              <Text style={styles.confirmTitle}>Check your email</Text>
+              <Text style={styles.confirmBody}>
+                We sent a verification link to{" "}
+                <Text style={styles.confirmEmail}>{sentTo}</Text>. Tap it to
+                confirm your account, then come back here to sign in.
+              </Text>
+              <Text style={styles.confirmHint}>
+                Don't see it? Check your spam folder — it can take a minute to
+                arrive.
+              </Text>
+
+              {resendNote ? (
+                <Text style={styles.resendNote}>{resendNote}</Text>
+              ) : null}
+
+              <TouchableOpacity
+                style={styles.primaryBtn}
+                onPress={backToSignIn}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.primaryBtnText}>Back to Sign In</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.toggleBtn}
+                onPress={handleResend}
+                disabled={resending}
+              >
+                <Text style={styles.toggleText}>
+                  Didn't get it?{" "}
+                  <Text style={styles.toggleLink}>
+                    {resending ? "Sending…" : "Resend email"}
+                  </Text>
+                </Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+          /* Card */
           <View style={styles.card}>
             <Text style={styles.cardTitle}>
               {isSignIn ? "Welcome back" : "Create your account"}
@@ -239,6 +324,7 @@ export default function LoginScreen() {
               </Text>
             </TouchableOpacity>
           </View>
+          )}
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -294,6 +380,46 @@ const styles = StyleSheet.create({
     ...theme.typography.h3,
     color: theme.colors.text,
     marginBottom: theme.spacing.m,
+  },
+
+  // Verification-pending card
+  confirmIcon: {
+    alignSelf: "center",
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: theme.colors.input,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: theme.spacing.m,
+  },
+  confirmTitle: {
+    ...theme.typography.h3,
+    color: theme.colors.text,
+    textAlign: "center",
+    marginBottom: theme.spacing.s,
+  },
+  confirmBody: {
+    ...theme.typography.body,
+    color: theme.colors.textSubtle,
+    textAlign: "center",
+    lineHeight: 21,
+  },
+  confirmEmail: {
+    color: theme.colors.text,
+    fontWeight: "700",
+  },
+  confirmHint: {
+    ...theme.typography.caption,
+    color: theme.colors.textFine,
+    textAlign: "center",
+    marginTop: theme.spacing.m,
+  },
+  resendNote: {
+    ...theme.typography.label,
+    color: theme.colors.primary,
+    textAlign: "center",
+    marginTop: theme.spacing.m,
   },
 
   // Error
