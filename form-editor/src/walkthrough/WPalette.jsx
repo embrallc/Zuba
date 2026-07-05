@@ -26,7 +26,7 @@ export default function WPalette() {
   return (
     <div className="palette">
       <h3>Sections</h3>
-      <div className="wt-add-col">
+      <div className="wt-add-col" data-tour="wt-sections">
         <button
           className="palette-item wide band-static"
           onClick={() => addSection("static")}
@@ -47,7 +47,7 @@ export default function WPalette() {
       <p className="hint">
         Click to add to the selected section, or drag onto the page.
       </p>
-      <div className="palette-grid">
+      <div className="palette-grid" data-tour="wt-fields">
         {PALETTE_FIELDS.map((f) => (
           <div
             key={f.type}

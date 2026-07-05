@@ -3,6 +3,7 @@ import { walkthroughToReport } from "../../../shared/walkthroughToReport";
 import { hasToken, loadTemplate, loadWalkthrough, saveTemplate } from "../api";
 import { starterTemplate } from "../schema";
 import { useEditorStore } from "../store";
+import { useWalkthroughStore } from "../walkthrough/store";
 import Canvas from "./Canvas";
 import Inspector from "./Inspector";
 import Palette from "./Palette";
@@ -22,22 +23,32 @@ export default function ReportEditor() {
   const saveTimer = useRef(null);
 
   useEffect(() => {
-    // Already loaded earlier this session (e.g. returned from walkthrough
-    // mode) — keep the in-memory schema, don't reload over it.
-    if (useEditorStore.getState().schema) return;
     (async () => {
       try {
-        // Load the saved report AND the walkthrough together. The walkthrough
-        // drives the binding palette + field labels, and seeds the starting
-        // canvas: a brand-new org with no report yet gets a report
-        // auto-built from their form, not a blank/legacy placeholder.
-        const [data, wt] = await Promise.all([
-          loadTemplate(),
-          loadWalkthrough().catch(() => null),
-        ]);
-        const wtSchema = wt?.schema ?? null;
+        // Refresh the binding source from the LIVE walkthrough form every time
+        // Report mode mounts. The walkthrough store persists across the mode
+        // switch, so its current fields are already in memory — reading them
+        // here (not the debounced/persisted copy) means a field you just added
+        // in Form mode shows up in the report's data-field palette and enables
+        // "Build from my form" immediately, without a reload. This runs even
+        // when the report schema is already loaded and the first-boot block
+        // below is skipped. Falls back to the persisted walkthrough on a cold
+        // first boot (e.g. a fresh page load straight into Report mode).
+        const liveWt = useWalkthroughStore.getState().template;
+        let wtSchema = liveWt ?? null;
+        if (!wtSchema) {
+          const wt = await loadWalkthrough().catch(() => null);
+          wtSchema = wt?.schema ?? null;
+        }
         if (wtSchema) useEditorStore.getState().setWalkthroughSchema(wtSchema);
 
+        // Already loaded earlier this session (e.g. returned from walkthrough
+        // mode) — keep the in-memory report schema, don't reload over it.
+        if (useEditorStore.getState().schema) return;
+
+        // First boot: load the saved report; a brand-new org with no report yet
+        // gets one auto-built from their form, not a blank/legacy placeholder.
+        const data = await loadTemplate();
         const schema =
           data?.schema ??
           (wtSchema ? walkthroughToReport(wtSchema) : starterTemplate());

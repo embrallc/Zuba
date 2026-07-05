@@ -93,6 +93,7 @@ export default function TopBar() {
       <span className={`savestate ${saveState}`}>{SAVE_LABELS[saveState] ?? ""}</span>
       <button
         className="btn"
+        data-tour="build-from-form"
         onClick={handleBuildFromForm}
         disabled={!canBuild}
         title={

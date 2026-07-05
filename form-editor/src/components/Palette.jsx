@@ -42,7 +42,7 @@ export default function Palette() {
       </div>
 
       <h3>Elements</h3>
-      <div className="palette-grid">
+      <div className="palette-grid" data-tour="report-elements">
         <DragItem mime={MIME.element} payload={{ type: "text" }}>
           <span className="glyph">T</span> Text
         </DragItem>
@@ -74,6 +74,7 @@ export default function Palette() {
       </div>
       <div className="hint">Shapes always sit behind text and fields.</div>
 
+      <div data-tour="report-datafields">
       <h3>Data Fields</h3>
       <div className="hint">
         Drag onto the page for a standalone value, or drop inside a text block
@@ -117,6 +118,7 @@ export default function Palette() {
           </div>
         </div>
       ))}
+      </div>
     </div>
   );
 }
