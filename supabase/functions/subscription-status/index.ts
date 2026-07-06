@@ -181,6 +181,10 @@ serve(async (req) => {
     return json({ error: billErr.message }, 500);
   }
 
+  // Whether THIS call created the org's billing row. The one-trial-per-device
+  // check runs only when true — i.e. exactly once, at org creation. A member
+  // who joins with an org key (or is later promoted to owner) never trips it.
+  let justInitialized = false;
   if (!billing || !billing.trial_ends_at) {
     const { data: org, error: orgErr } = await admin
       .from("organizations")
@@ -208,11 +212,21 @@ serve(async (req) => {
       return json({ error: "Could not initialize billing" }, 500);
     }
     billing = upserted;
+    justInitialized = true;
     logInfo("billing_initialized", { org_sk: orgSk, trial_ends_at: trialEnds });
   }
 
-  // ── One-trial-per-device anchor (owners only) ──────────────────────────────
-  if (role === "owner" && typeof body.deviceAnchor === "string" && body.deviceAnchor) {
+  // ── One-trial-per-device anchor (org creation only) ────────────────────────
+  // Runs only for the owner of a just-created org. Joining an org with a key
+  // (role member) never records or checks the anchor, so a teammate on a paying
+  // owner's plan is never gated by a prior trial on their device — and a later
+  // promotion to owner won't re-trigger it either (billing already exists).
+  if (
+    role === "owner" &&
+    justInitialized &&
+    typeof body.deviceAnchor === "string" &&
+    body.deviceAnchor
+  ) {
     try {
       const anchorHash = await sha256Hex(body.deviceAnchor);
       const { data: anchor } = await admin
