@@ -238,9 +238,14 @@ export default function SettingsScreen() {
     }
   }
 
-  async function handleAddSeats() {
-    // Owner already holds the entitlement — present unconditionally so the
-    // store sheet can switch them to a bigger seat tier (prorated by Apple).
+  function handleReviewApprovals() {
+    router.push("/approvals");
+  }
+
+  async function handleReducePlan() {
+    // Owner already holds the entitlement — present unconditionally so the store
+    // sheet can switch them to a smaller seat tier. A downgrade takes effect at
+    // the next renewal; Apple/Play never issue a partial-month refund.
     await presentPaywallForUpgrade();
     await refreshSubscription({ sync: true });
   }
@@ -611,6 +616,12 @@ export default function SettingsScreen() {
               description="Set owner, admin, or member access for your organization"
               onPress={() => router.push("/manageusers")}
             />
+            <NavRow
+              label="Approvals"
+              description="Approve or deny teammates who joined with your org key"
+              onPress={() => router.push("/approvals")}
+              badge={subscriptionStatus?.pendingApprovals?.length ?? 0}
+            />
           </Guard>
           <NavRow
             label="Unassigned Records"
@@ -635,7 +646,8 @@ export default function SettingsScreen() {
         <SubscriptionSection
           status={subscriptionStatus}
           onSubscribe={handleSubscribe}
-          onAddSeats={handleAddSeats}
+          onReviewApprovals={handleReviewApprovals}
+          onReducePlan={handleReducePlan}
         />
 
         <Text style={styles.sectionLabel}>ACCOUNT</Text>
@@ -680,7 +692,7 @@ export default function SettingsScreen() {
 // Org-aware subscription card. The server's subscription-status verdict
 // (held in useSubscriptionStore) drives everything here — this component
 // never computes plan state itself, it just renders what it's told.
-function SubscriptionSection({ status, onSubscribe, onAddSeats }) {
+function SubscriptionSection({ status, onSubscribe, onReviewApprovals, onReducePlan }) {
   const [busy, setBusy] = useState(false);
   const isOwner = status?.role === "owner";
   const state = status?.state ?? null;
@@ -751,11 +763,19 @@ function SubscriptionSection({ status, onSubscribe, onAddSeats }) {
           onPress={() => run(onSubscribe)}
         />
       )}
-      {isOwner && state === "active" && !comp && status?.seatsExceeded && (
+      {isOwner && state === "active" && !comp && (status?.seatsNeeded ?? 0) > 0 && (
         <NavRow
-          label="Add Seats"
-          description={`Your team has ${status?.members ?? 0} members but only ${status?.seats ?? 0} ${(status?.seats ?? 0) === 1 ? "seat" : "seats"} — upgrade your plan`}
-          onPress={() => run(onAddSeats)}
+          label="Review Approvals"
+          description={`${status.seatsNeeded} teammate${status.seatsNeeded === 1 ? "" : "s"} waiting — approve to keep or deny to remove`}
+          onPress={() => onReviewApprovals()}
+          badge={status.seatsNeeded}
+        />
+      )}
+      {isOwner && state === "active" && !comp && (status?.unusedSeats ?? 0) > 0 && (
+        <NavRow
+          label="Reduce Plan"
+          description={`You're paying for ${status.unusedSeats} unused seat${status.unusedSeats === 1 ? "" : "s"} — lower it (applies next renewal, no partial refund)`}
+          onPress={() => run(onReducePlan)}
         />
       )}
       {isOwner && state === "active" && !comp && (

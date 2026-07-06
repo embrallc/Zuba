@@ -27,6 +27,7 @@ import {
 import { logError } from "../../db/logs";
 import { useDebouncedPress } from "../../hooks/useDebouncedPress";
 import { useMyDayRoute } from "../../hooks/useMyDayRoute";
+import { useSettingsBadgeTotal } from "../../hooks/useSettingsBadges";
 import { useInspectionStore } from "../../stores/useInspectionStore";
 import { useMapStore } from "../../stores/useMapStore";
 import { useSettingsStore } from "../../stores/useSettingsStore";
@@ -77,8 +78,9 @@ export default function MyDayScreen() {
   const inspections = useInspectionStore((s) => s.inspections);
   const loadInspections = useInspectionStore((s) => s.load);
   const openGlobal = useMapStore((s) => s.openGlobal);
-  // Unread-cancellation badge over the Settings (menu) button.
-  const cancelCount = useSettingsStore((s) => s.unviewedCancelledCount);
+  // Aggregate red badge over the Settings (menu) button: every unviewed
+  // Settings notification (cancellations + pending seat approvals).
+  const badgeTotal = useSettingsBadgeTotal();
   const cancelPulse = useSettingsStore((s) => s.cancelBadgePulseKey);
 
   // My Day dashboard data. Fetches on mount; the hook handles location
@@ -304,7 +306,7 @@ export default function MyDayScreen() {
               color={theme.colors.icon}
             />
             <NotificationBadge
-              count={cancelCount}
+              count={badgeTotal}
               pulse={cancelPulse}
               style={styles.menuBadge}
             />

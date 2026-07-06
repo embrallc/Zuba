@@ -37,6 +37,9 @@ declare const Deno: { env: { get(name: string): string | undefined } };
 
 const TAG = "[subscription-status]";
 const TRIAL_DAYS = 30;
+// Over-seat members stay active this long before their seat locks — a new
+// teammate is never paywalled on day one; the owner has this window to approve.
+const GRACE_DAYS = 15;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 const corsHeaders = {
@@ -256,7 +259,7 @@ serve(async (req) => {
   // instants — Postgres serializes "+00:00", JS writes "Z".
   const { data: orgUsers, error: usersErr } = await admin
     .from("users")
-    .select("id, user_profile, created_at")
+    .select("id, user_profile, created_at, fname, lname")
     .eq("org_sk", orgSk);
   if (usersErr || !orgUsers) {
     logError("org_users_failed", usersErr ?? new Error("no rows"), {
@@ -276,20 +279,65 @@ serve(async (req) => {
   const members = ranked.length;
   const seatsExceeded = entitled && members > seats;
 
+  const trialEndMs = Date.parse(billing.trial_ends_at);
+  // Grace clock for an over-seat member: 15 days from when billing
+  // responsibility began for them — their join, or trial end if they joined
+  // during the trial (so the owner gets a soft landing after the trial ends).
+  const graceEndFor = (createdAt: string) =>
+    Math.max(Date.parse(createdAt) || 0, trialEndMs || 0) + GRACE_DAYS * DAY_MS;
+
   let state: string;
+  let graceEndsAt: string | null = null;
   if (entitled) {
-    state = myRank >= 0 && myRank < seats ? "active" : "seat_locked";
+    if (myRank >= 0 && myRank < seats) {
+      state = "active";
+    } else {
+      const gEnd = graceEndFor(me.created_at);
+      state = nowMs < gEnd ? "active" : "seat_locked";
+      graceEndsAt = new Date(gEnd).toISOString();
+    }
   } else {
-    const trialEndMs = Date.parse(billing.trial_ends_at);
     state =
       Number.isFinite(trialEndMs) && trialEndMs > nowMs ? "trial" : "expired";
   }
 
-  const trialEndMs = Date.parse(billing.trial_ends_at);
   const daysLeft =
     state === "trial"
       ? Math.max(0, Math.ceil((trialEndMs - nowMs) / DAY_MS))
       : null;
+
+  const seatsNeeded = entitled ? Math.max(0, members - seats) : 0;
+  const unusedSeats = entitled ? Math.max(0, seats - members) : 0;
+
+  // Owner-only approvals inbox: the overflow members (rank >= seats), oldest
+  // first, each with its own grace clock. Empty for members and when covered.
+  let pendingApprovals: Array<{
+    id: string;
+    name: string;
+    joinedAt: string;
+    graceEndsAt: string;
+    locked: boolean;
+  }> = [];
+  let seatsGraceEndsAt: string | null = null;
+  if (role === "owner" && seatsNeeded > 0) {
+    pendingApprovals = ranked.slice(seats).map((u) => {
+      const gEnd = graceEndFor(u.created_at);
+      const nm = `${u.fname ?? ""} ${u.lname ?? ""}`.trim();
+      return {
+        id: u.id,
+        name: nm || "Unnamed teammate",
+        joinedAt: u.created_at,
+        graceEndsAt: new Date(gEnd).toISOString(),
+        locked: nowMs >= gEnd,
+      };
+    });
+    const earliest = Math.min(
+      ...pendingApprovals.map((p) => Date.parse(p.graceEndsAt)),
+    );
+    seatsGraceEndsAt = Number.isFinite(earliest)
+      ? new Date(earliest).toISOString()
+      : null;
+  }
 
   logInfo("status", {
     user_id: user.id,
@@ -298,7 +346,8 @@ serve(async (req) => {
     role,
     members,
     seats,
-    seatsExceeded,
+    seatsNeeded,
+    unusedSeats,
   });
 
   return json({
@@ -308,6 +357,11 @@ serve(async (req) => {
     seats,
     members,
     seatsExceeded,
+    seatsNeeded,
+    unusedSeats,
+    graceEndsAt,
+    seatsGraceEndsAt,
+    pendingApprovals,
     trialEndsAt: billing.trial_ends_at,
     periodEndsAt: billing.period_ends_at,
     productId: billing.product_id,
