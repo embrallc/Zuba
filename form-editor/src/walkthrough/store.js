@@ -1,4 +1,4 @@
-import { produce } from "immer";
+import { current, produce } from "immer";
 import { create } from "zustand";
 import {
   cloneFieldWithNewIds,
@@ -129,7 +129,8 @@ export const useWalkthroughStore = create((set, get) => {
       mutate((d) => {
         const i = d.sections.findIndex((s) => s.id === id);
         if (i < 0) return;
-        const copy = cloneSectionWithNewIds(d.sections[i]);
+        // current(): plain snapshot — structuredClone can't clone a draft.
+        const copy = cloneSectionWithNewIds(current(d.sections[i]));
         newId = copy.id;
         d.sections.splice(i + 1, 0, copy);
       });
@@ -189,7 +190,7 @@ export const useWalkthroughStore = create((set, get) => {
         if (!s) return;
         const i = s.fields.findIndex((f) => f.id === fieldId);
         if (i < 0) return;
-        const copy = cloneFieldWithNewIds(s.fields[i]);
+        const copy = cloneFieldWithNewIds(current(s.fields[i]));
         newId = copy.id;
         s.fields.splice(i + 1, 0, copy);
       });
