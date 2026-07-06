@@ -7,6 +7,8 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "sb:start": "npx supabase start",
     "sb:stop": "npx supabase stop",
     "sb:status": "npx supabase status",
@@ -78,7 +80,8 @@
   "devDependencies": {
     "@types/react": "~19.1.0",
     "react-test-renderer": "19.1.0",
-    "typescript": "~5.9.2"
+    "typescript": "~5.9.2",
+    "vitest": "^4.1.9"
   },
   "private": true
 }

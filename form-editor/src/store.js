@@ -1,4 +1,4 @@
-import { produce } from "immer";
+import { current, produce } from "immer";
 import { create } from "zustand";
 import { bandHeight, clampFrame, cloneWithNewIds, makeBand } from "./schema";
 
@@ -136,7 +136,9 @@ export const useEditorStore = create((set, get) => {
       mutate((d) => {
         const i = d.bands.findIndex((b) => b.id === bandId);
         if (i < 0) return;
-        d.bands.splice(i + 1, 0, cloneWithNewIds(d.bands[i]));
+        // current(): snapshot the draft to a plain object — structuredClone
+        // (inside cloneWithNewIds) can't clone an immer draft/Proxy.
+        d.bands.splice(i + 1, 0, cloneWithNewIds(current(d.bands[i])));
       }),
 
     removeBand: (bandId) =>
@@ -192,7 +194,7 @@ export const useEditorStore = create((set, get) => {
         const list = sel.kind === "shape" ? band.shapes : band.elements;
         const node = list.find((n) => n.id === sel.id);
         if (!node) return;
-        const copy = cloneWithNewIds(node);
+        const copy = cloneWithNewIds(current(node));
         copy.frame = clampFrame({ ...copy.frame, x: copy.frame.x + 16, y: copy.frame.y + 16 });
         list.push(copy);
       }),
