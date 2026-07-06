@@ -464,6 +464,10 @@ export default function RootLayout() {
           options={{ headerShown: false, animation: "slide_from_right" }}
         />
         <Stack.Screen
+          name="approvals"
+          options={{ headerShown: false, animation: "slide_from_right" }}
+        />
+        <Stack.Screen
           name="unassigned"
           options={{ headerShown: false, animation: "slide_from_right" }}
         />

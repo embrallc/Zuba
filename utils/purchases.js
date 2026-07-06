@@ -102,4 +102,50 @@ export async function presentCustomerCenter() {
   }
 }
 
+// Seat products encode the seat count: zanbi_pro_seats_1, _2, ... (mirrors the
+// server-side seatsFromProductId in supabase/functions/_shared/rcSync.ts).
+function seatsFromProductId(id) {
+  if (!id) return 0;
+  const m = /seats?[_-]?(\d+)/i.exec(id);
+  const n = m ? parseInt(m[1], 10) : 0;
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+// The current offering's seat packages, keyed by seat count.
+async function seatPackages() {
+  const offerings = await Purchases.getOfferings();
+  const pkgs = offerings?.current?.availablePackages ?? [];
+  const map = new Map();
+  for (const p of pkgs) {
+    const n = seatsFromProductId(p?.product?.identifier);
+    if (n > 0) map.set(n, p);
+  }
+  return map;
+}
+
+// Buy (or product-change to) the exact seat tier. RevenueCat handles the
+// StoreKit/Play upgrade + proration. Throws (with .userCancelled when the user
+// backs out) so callers can distinguish a cancel from a real failure.
+export async function purchaseSeatCount(target) {
+  const map = await seatPackages();
+  const pkg = map.get(target);
+  if (!pkg) {
+    throw new Error(`No plan for ${target} seat${target === 1 ? "" : "s"} is available right now.`);
+  }
+  return await Purchases.purchasePackage(pkg);
+}
+
+// Per-seat localized price ($19.99) read off the seats_1 package, for showing
+// accurate totals in the approvals inbox. Returns null if unavailable.
+export async function seatUnitPrice() {
+  try {
+    const one = (await seatPackages()).get(1);
+    if (!one?.product) return null;
+    return { price: one.product.price, priceString: one.product.priceString };
+  } catch (e) {
+    logError(e, "seatUnitPrice");
+    return null;
+  }
+}
+
 export { PAYWALL_RESULT };

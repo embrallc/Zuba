@@ -15,6 +15,7 @@ import {
 import Animated, { FadeInDown } from "react-native-reanimated";
 import InspectionCard from "../../components/InspectionCard";
 import NotificationBadge from "../../components/NotificationBadge";
+import { useSettingsBadgeTotal } from "../../hooks/useSettingsBadges";
 import { runDevQuery } from "../../db/devQuery";
 import { getAllLogs, logError } from "../../db/logs";
 import { useDebouncedPress } from "../../hooks/useDebouncedPress";
@@ -37,9 +38,10 @@ export default function InspectionsScreen() {
   const [query, setQuery] = useState("");
   const [pulseKey, setPulseKey] = useState(0);
 
-  // Unread-cancellation badge over the menu (settings) button — same store
-  // fields the My Day + Settings badges use, so all three stay in lockstep.
-  const cancelCount = useSettingsStore((s) => s.unviewedCancelledCount);
+  // Aggregate red badge over the menu (settings) button — every unviewed
+  // Settings notification (cancellations + pending seat approvals), so all three
+  // placements of the icon stay in lockstep.
+  const badgeTotal = useSettingsBadgeTotal();
   const cancelPulse = useSettingsStore((s) => s.cancelBadgePulseKey);
   const refreshCancelledCount = useSettingsStore((s) => s.refreshCancelledCount);
   const bumpCancelBadgePulse = useSettingsStore((s) => s.bumpCancelBadgePulse);
@@ -153,7 +155,7 @@ export default function InspectionsScreen() {
               color={theme.colors.icon}
             />
             <NotificationBadge
-              count={cancelCount}
+              count={badgeTotal}
               pulse={cancelPulse}
               style={styles.menuBadge}
             />
