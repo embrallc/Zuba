@@ -1,0 +1,45 @@
+# Run the Vitest unit suite on every PR to main (and pushes to main).
+#
+# Dev-only: this never touches the app runtime or any environment — it just runs
+# `npm test` (the Tier-1 pure-logic suite in tests/). It exists to catch
+# regressions like the builder duplicate-crash before they merge.
+#
+# No secrets required.
+name: Tests
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            form-editor/package-lock.json
+
+      # Root deps provide Vitest + dayjs; form-editor deps (immer/zustand) power
+      # the store-reducer tests. esbuild's postinstall must run (Vitest uses it
+      # to transform the ESM/JSX sources), so do NOT pass --ignore-scripts.
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Install form-editor dependencies
+        run: npm ci --prefix form-editor
+
+      - name: Run unit tests
+        run: npm test
