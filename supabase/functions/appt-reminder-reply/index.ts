@@ -177,35 +177,67 @@ serve(async (req) => {
 
   // 4. Known customer → act on C / X.
   if (first === "x") {
-    if (targetSk) {
-      const { data: cur } = await admin
-        .from("inspections")
-        .select("_version")
-        .eq("inspection_sk", targetSk)
-        .maybeSingle();
-      const nextVersion = Number(cur?._version ?? 1) + 1;
-      const { error: updErr } = await admin
-        .from("inspections")
-        .update({
-          status: "CANCELLED",
-          _version: nextVersion,
-          _last_changed_at: Date.now(),
-        })
-        .eq("inspection_sk", targetSk)
-        .not("status", "in", "(CANCELLED,CLOSED)");
-      if (updErr) {
-        logError("cancel_failed", updErr, { targetSk });
-        return twiml();
-      }
-      logInfo("cancelled", { targetSk, norm });
-      void logCloudEvent(admin, SOURCE, "reminder.replied", {
-        data: { action: "cancel", targetSk },
-      });
-      return twiml(autoReply ? REPLY_CANCELLED : undefined);
+    if (!targetSk) {
+      // Known customer but nothing upcoming to cancel.
+      logInfo("cancel_no_target", { norm });
+      return twiml(autoReply ? REPLY_NO_TARGET : undefined);
     }
-    // Known customer but nothing upcoming-not-today to cancel (e.g. same-day job).
-    logInfo("cancel_no_target", { norm });
-    return twiml(autoReply ? REPLY_NO_TARGET : undefined);
+
+    // Step 1 — read the target back so the logs show EXACTLY what we matched
+    // (found? what status/version/owner? any read error from RLS or a bad sk?).
+    const { data: cur, error: readErr } = await admin
+      .from("inspections")
+      .select("inspection_sk, status, _version, user_id, _deleted")
+      .eq("inspection_sk", targetSk)
+      .maybeSingle();
+    logInfo("cancel_step.read", {
+      targetSk,
+      found: !!cur,
+      status: cur?.status ?? null,
+      version: cur?._version ?? null,
+      deleted: cur?._deleted ?? null,
+      user_id: cur?.user_id ?? null,
+      readErr: readErr?.message ?? null,
+    });
+
+    // Step 2 — flip to CANCELLED, matched on the sk ALONE (no status guard).
+    // OPEN is the only pre-inspection state, and an inspector can always revert a
+    // cancel and complete/invoice, so there's nothing to guard against. .select()
+    // returns the rows actually changed, so we never claim a cancel that didn't happen.
+    const nextVersion = Number(cur?._version ?? 1) + 1;
+    const { data: updatedRows, error: updErr } = await admin
+      .from("inspections")
+      .update({
+        status: "CANCELLED",
+        _version: nextVersion,
+        _last_changed_at: Date.now(),
+      })
+      .eq("inspection_sk", targetSk)
+      .select("inspection_sk, status, _version");
+    const affected = Array.isArray(updatedRows) ? updatedRows.length : 0;
+    logInfo("cancel_step.update", {
+      targetSk,
+      affected,
+      newStatus: updatedRows?.[0]?.status ?? null,
+      updErr: updErr?.message ?? null,
+    });
+
+    if (updErr) {
+      logError("cancel_failed", updErr, { targetSk });
+      return twiml(); // fail safe: never error back to Twilio
+    }
+    if (affected === 0) {
+      // Matched a target but changed 0 rows — surface it (RLS? sk mismatch?)
+      // instead of falsely telling the client the job was cancelled.
+      logError("cancel_no_rows", new Error("update affected 0 rows"), { targetSk });
+      return twiml(autoReply ? REPLY_NO_TARGET : undefined);
+    }
+
+    logInfo("cancelled", { targetSk, norm });
+    void logCloudEvent(admin, SOURCE, "reminder.replied", {
+      data: { action: "cancel", targetSk },
+    });
+    return twiml(autoReply ? REPLY_CANCELLED : undefined);
   }
 
   if (first === "c") {
