@@ -43,9 +43,13 @@ export async function fetchCustomerInfo() {
   return await Purchases.getCustomerInfo();
 }
 
-// Returns an EmitterSubscription — call .remove() on cleanup
+// Registers a customer-info listener and returns a disposer. In
+// react-native-purchases v10 addCustomerInfoUpdateListener returns void (you
+// remove by passing the same callback back), so we hand back a cleanup function
+// for callers to run on unmount.
 export function addCustomerInfoListener(callback) {
-  return Purchases.addCustomerInfoUpdateListener(callback);
+  Purchases.addCustomerInfoUpdateListener(callback);
+  return () => Purchases.removeCustomerInfoUpdateListener(callback);
 }
 
 // Presents the paywall only if the user lacks the Pro entitlement.
