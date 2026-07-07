@@ -11,6 +11,7 @@
 // Response:
 //   { state: "active" | "trial" | "expired" | "seat_locked",
 //     role, daysLeft, seats, members, seatsExceeded,
+//     billingOwnerId, billingOwnerName, isBillingOwner,
 //     trialEndsAt, periodEndsAt, productId }
 //
 // State decision order (first match wins):
@@ -156,6 +157,9 @@ serve(async (req) => {
       trialEndsAt: null,
       periodEndsAt: null,
       productId: null,
+      billingOwnerId: null,
+      billingOwnerName: null,
+      isBillingOwner: true,
     });
   }
 
@@ -293,6 +297,37 @@ serve(async (req) => {
   const members = ranked.length;
   const seatsExceeded = entitled && members > seats;
 
+  // ── Billing owner: the single payer authorized to buy/change seats ─────────
+  // Only this user's Apple/Play account pays for the org; every other owner is
+  // read-only for billing. Lazily default a null designation to the earliest
+  // owner (fallback earliest admin) so pre-existing and brand-new orgs always
+  // resolve one. The FK auto-blanks it when that user is deleted.
+  const { data: orgRow } = await admin
+    .from("organizations")
+    .select("billing_owner_id")
+    .eq("org_sk", orgSk)
+    .maybeSingle();
+  let billingOwnerId: string | null = orgRow?.billing_owner_id ?? null;
+  if (!billingOwnerId) {
+    const candidate =
+      ranked.find((u) => u.user_profile === "owner") ??
+      ranked.find((u) => u.user_profile === "admin");
+    if (candidate) {
+      billingOwnerId = candidate.id;
+      await admin
+        .from("organizations")
+        .update({ billing_owner_id: billingOwnerId })
+        .eq("org_sk", orgSk);
+      logInfo("billing_owner_defaulted", { org_sk: orgSk, billingOwnerId });
+    }
+  }
+  const isBillingOwner = billingOwnerId != null && billingOwnerId === user.id;
+  const billingOwner = ranked.find((u) => u.id === billingOwnerId);
+  const billingOwnerName = billingOwner
+    ? `${billingOwner.fname ?? ""} ${billingOwner.lname ?? ""}`.trim() ||
+      "your billing owner"
+    : null;
+
   const trialEndMs = Date.parse(billing.trial_ends_at);
   // Grace clock for an over-seat member: 15 days from when billing
   // responsibility began for them — their join, or trial end if they joined
@@ -333,7 +368,7 @@ serve(async (req) => {
     locked: boolean;
   }> = [];
   let seatsGraceEndsAt: string | null = null;
-  if (role === "owner" && seatsNeeded > 0) {
+  if ((role === "owner" || isBillingOwner) && seatsNeeded > 0) {
     pendingApprovals = ranked.slice(seats).map((u) => {
       const gEnd = graceEndFor(u.created_at);
       const nm = `${u.fname ?? ""} ${u.lname ?? ""}`.trim();
@@ -376,6 +411,9 @@ serve(async (req) => {
     graceEndsAt,
     seatsGraceEndsAt,
     pendingApprovals,
+    billingOwnerId,
+    billingOwnerName,
+    isBillingOwner,
     trialEndsAt: billing.trial_ends_at,
     periodEndsAt: billing.period_ends_at,
     productId: billing.product_id,
