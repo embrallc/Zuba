@@ -14,6 +14,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { logError } from "../db/logs";
 import { useSettingsStore } from "../stores/useSettingsStore";
+import { useSubscriptionStore } from "../stores/useSubscriptionStore";
 import { supabase } from "../utils/supabase";
 
 const ROLES = [
@@ -33,14 +34,20 @@ export default function ManageUsersScreen() {
   const orgSk = useSettingsStore((s) => s.orgSk);
   const userProfile = useSettingsStore((s) => s.userProfile);
   const setUserProfile = useSettingsStore((s) => s.setUserProfile);
+  const refreshSubscription = useSubscriptionStore((s) => s.refreshStatus);
 
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   // Map of userId → true while their role is being updated. Disables their
   // pills + shows a spinner on the row.
   const [updating, setUpdating] = useState({});
+  // The one user whose Apple/Play account pays for the org (null = unassigned).
+  const [billingOwnerId, setBillingOwnerId] = useState(null);
 
   const canManage = userProfile === "owner";
+  // Who may transfer the $ designation: an owner, or the current holder.
+  const canTransferBilling =
+    userProfile === "owner" || (!!billingOwnerId && userSk === billingOwnerId);
 
   const load = useCallback(async () => {
     if (!orgSk) {
@@ -48,11 +55,19 @@ export default function ManageUsersScreen() {
       return;
     }
     try {
-      const { data, error } = await supabase
-        .from("users")
-        .select("id, fname, lname, user_profile, org_sk")
-        .eq("org_sk", orgSk);
+      const [{ data, error }, orgRes] = await Promise.all([
+        supabase
+          .from("users")
+          .select("id, fname, lname, user_profile, org_sk")
+          .eq("org_sk", orgSk),
+        supabase
+          .from("organizations")
+          .select("billing_owner_id")
+          .eq("org_sk", orgSk)
+          .maybeSingle(),
+      ]);
       if (error) throw error;
+      setBillingOwnerId(orgRes?.data?.billing_owner_id ?? null);
       // Sort: owners first, then admins, then members, then alpha by name.
       const sortKey = (u) =>
         u.user_profile === "owner" ? 0 : u.user_profile === "admin" ? 1 : 2;
@@ -171,10 +186,88 @@ export default function ManageUsersScreen() {
     );
   }
 
+  // Make `target` the org's sole billing owner (approve teammates + change the
+  // plan). Server enforces the real rules; this guards the UI.
+  function transferBilling(target) {
+    const name = displayName(target);
+    const hasCurrent = !!billingOwnerId;
+    Alert.alert(
+      hasCurrent ? "Transfer billing control?" : "Set billing owner?",
+      `You're ${hasCurrent ? "transferring" : "assigning"} the only org rights to approve new users and subscription upgrades to ${name}. After this, only ${name} can add seats or change the plan.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: hasCurrent ? "Transfer" : "Assign",
+          onPress: async () => {
+            setUpdating((m) => ({ ...m, [target.id]: true }));
+            try {
+              const { error } = await supabase.rpc("set_billing_owner", {
+                p_target_user_id: target.id,
+              });
+              if (error) throw error;
+              setBillingOwnerId(target.id);
+              // Refresh the shared status so Settings/Approvals re-gate for the
+              // new (and former) billing owner right away.
+              refreshSubscription?.();
+            } catch (e) {
+              logError(
+                e,
+                `ManageUsersScreen.transferBilling target=${target.id}`,
+              );
+              Alert.alert(
+                "Couldn't transfer",
+                e?.message ?? "The server rejected this change.",
+              );
+            } finally {
+              setUpdating((m) => {
+                const next = { ...m };
+                delete next[target.id];
+                return next;
+              });
+            }
+          },
+        },
+      ],
+    );
+  }
+
+  // Tapping any $ badge: explain the state or start a transfer, with friendly
+  // reasons when it can't be moved to this person.
+  function onBadgePress(item) {
+    const isBillingOwner = item.id === billingOwnerId;
+    const eligible =
+      item.user_profile === "owner" || item.user_profile === "admin";
+    if (isBillingOwner) {
+      Alert.alert(
+        "Billing owner",
+        `${displayName(item)} is the billing owner — the only person who can approve teammates and change the subscription.`,
+      );
+      return;
+    }
+    if (!eligible) {
+      Alert.alert(
+        "Not eligible",
+        "The billing owner must be an owner or admin. Change this person's role first.",
+      );
+      return;
+    }
+    if (!canTransferBilling) {
+      Alert.alert(
+        "Not allowed",
+        "Only an owner or the current billing owner can change who pays.",
+      );
+      return;
+    }
+    transferBilling(item);
+  }
+
   function renderItem({ item }) {
     const isSelf = item.id === userSk;
     const busy = !!updating[item.id];
     const showDelete = canManage && !isSelf;
+    const isBillingOwner = item.id === billingOwnerId;
+    const eligibleForBilling =
+      item.user_profile === "owner" || item.user_profile === "admin";
     return (
       <View style={styles.userRow}>
         <View style={styles.userHeader}>
@@ -188,21 +281,49 @@ export default function ManageUsersScreen() {
               </View>
             )}
           </View>
-          {busy ? (
-            <ActivityIndicator size="small" color={theme.colors.primary} />
-          ) : showDelete ? (
+          <View style={styles.headerActions}>
             <TouchableOpacity
-              onPress={() => deleteUser(item)}
+              onPress={() => onBadgePress(item)}
               hitSlop={theme.layout.hitSlop.medium}
-              style={styles.deleteBtn}
+              style={[
+                styles.dollarBadge,
+                isBillingOwner && styles.dollarBadgeActive,
+                !isBillingOwner &&
+                  !eligibleForBilling &&
+                  styles.dollarBadgeMuted,
+              ]}
+              accessibilityLabel={
+                isBillingOwner ? "Billing owner" : "Set as billing owner"
+              }
             >
               <MaterialCommunityIcons
-                name="trash-can-outline"
-                size={20}
-                color={theme.colors.error}
+                name="currency-usd"
+                size={16}
+                color={
+                  isBillingOwner
+                    ? "#fff"
+                    : eligibleForBilling
+                      ? theme.colors.primary
+                      : theme.colors.textFine
+                }
               />
             </TouchableOpacity>
-          ) : null}
+            {busy ? (
+              <ActivityIndicator size="small" color={theme.colors.primary} />
+            ) : showDelete ? (
+              <TouchableOpacity
+                onPress={() => deleteUser(item)}
+                hitSlop={theme.layout.hitSlop.medium}
+                style={styles.deleteBtn}
+              >
+                <MaterialCommunityIcons
+                  name="trash-can-outline"
+                  size={20}
+                  color={theme.colors.error}
+                />
+              </TouchableOpacity>
+            ) : null}
+          </View>
         </View>
 
         <View style={styles.roleRow}>
@@ -270,7 +391,7 @@ export default function ManageUsersScreen() {
           ListHeaderComponent={
             <Text style={styles.helpText}>
               {canManage
-                ? "Tap a role to change a member's permission. Owners can manage roles; admins can view all org inspections; members see only their own."
+                ? "Tap a role to change a member's permission. Tap the $ to choose who pays for the org — the billing owner is the only one who can approve teammates or change the plan."
                 : "Only an owner can change roles."}
             </Text>
           }
@@ -367,8 +488,34 @@ const styles = StyleSheet.create({
     fontSize: 10,
     letterSpacing: 0.5,
   },
+  headerActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing.s,
+  },
   deleteBtn: {
     padding: theme.spacing.xs,
+  },
+  // $ badge: outline by default, filled for the billing owner, dimmed for
+  // members (who can't hold billing).
+  dollarBadge: {
+    width: 28,
+    height: 28,
+    borderRadius: theme.layout.borderRadius.full,
+    borderWidth: theme.layout.borderWidth.base,
+    borderColor: theme.colors.primary,
+    backgroundColor: theme.colors.mainBackground,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  dollarBadgeActive: {
+    backgroundColor: theme.colors.primary,
+    borderColor: theme.colors.primary,
+  },
+  dollarBadgeMuted: {
+    borderColor: theme.colors.input,
+    backgroundColor: "transparent",
+    opacity: 0.5,
   },
   roleRow: {
     flexDirection: "row",

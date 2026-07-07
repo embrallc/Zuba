@@ -695,6 +695,10 @@ export default function SettingsScreen() {
 function SubscriptionSection({ status, onSubscribe, onReviewApprovals, onReducePlan }) {
   const [busy, setBusy] = useState(false);
   const isOwner = status?.role === "owner";
+  // Only the billing owner's Apple/Play account pays — they alone can
+  // subscribe, approve seats, or change the plan. Other owners are read-only.
+  const isBillingOwner = status?.isBillingOwner === true;
+  const billingOwnerName = status?.billingOwnerName ?? "your billing owner";
   const state = status?.state ?? null;
   const comp = (status?.seats ?? 0) >= 9999;
 
@@ -756,29 +760,46 @@ function SubscriptionSection({ status, onSubscribe, onReviewApprovals, onReduceP
         </View>
       </View>
 
-      {isOwner && (state === "trial" || state === "expired") && !comp && (
+      {isOwner && !isBillingOwner && !comp && (
+        <View style={rowStyles.container}>
+          <View style={rowStyles.text}>
+            <Text style={rowStyles.label}>Billing</Text>
+            <Text style={rowStyles.description}>
+              Managed by {billingOwnerName} — only they can approve teammates or
+              change the plan
+            </Text>
+          </View>
+        </View>
+      )}
+      {isBillingOwner && (state === "trial" || state === "expired") && !comp && (
         <NavRow
           label="Subscribe"
           description="One plan covers your whole team — pick the seat count that fits"
           onPress={() => run(onSubscribe)}
         />
       )}
-      {isOwner && state === "active" && !comp && (status?.seatsNeeded ?? 0) > 0 && (
-        <NavRow
-          label="Review Approvals"
-          description={`${status.seatsNeeded} teammate${status.seatsNeeded === 1 ? "" : "s"} waiting — approve to keep or deny to remove`}
-          onPress={() => onReviewApprovals()}
-          badge={status.seatsNeeded}
-        />
-      )}
-      {isOwner && state === "active" && !comp && (status?.unusedSeats ?? 0) > 0 && (
-        <NavRow
-          label="Reduce Plan"
-          description={`You're paying for ${status.unusedSeats} unused seat${status.unusedSeats === 1 ? "" : "s"} — lower it (applies next renewal, no partial refund)`}
-          onPress={() => run(onReducePlan)}
-        />
-      )}
-      {isOwner && state === "active" && !comp && (
+      {isBillingOwner &&
+        state === "active" &&
+        !comp &&
+        (status?.seatsNeeded ?? 0) > 0 && (
+          <NavRow
+            label="Review Approvals"
+            description={`${status.seatsNeeded} teammate${status.seatsNeeded === 1 ? "" : "s"} waiting — approve to keep or deny to remove`}
+            onPress={() => onReviewApprovals()}
+            badge={status.seatsNeeded}
+          />
+        )}
+      {isBillingOwner &&
+        state === "active" &&
+        !comp &&
+        (status?.unusedSeats ?? 0) > 0 && (
+          <NavRow
+            label="Reduce Plan"
+            description={`You're paying for ${status.unusedSeats} unused seat${status.unusedSeats === 1 ? "" : "s"} — lower it (applies next renewal, no partial refund)`}
+            onPress={() => run(onReducePlan)}
+          />
+        )}
+      {isBillingOwner && state === "active" && !comp && (
         <NavRow
           label="Manage Subscription"
           description="Change plan, cancel, restore purchases, or get support"

@@ -39,7 +39,10 @@ function money(n) {
 function Navbar({ onBack }) {
   return (
     <View style={styles.navbar}>
-      <TouchableOpacity onPress={onBack} hitSlop={theme?.layout?.hitSlop?.medium}>
+      <TouchableOpacity
+        onPress={onBack}
+        hitSlop={theme?.layout?.hitSlop?.medium}
+      >
         <MaterialCommunityIcons
           name="arrow-left"
           size={theme?.layout?.iconSize?.l}
@@ -58,6 +61,8 @@ export default function ApprovalsScreen() {
   const refreshStatus = useSubscriptionStore((s) => s.refreshStatus);
 
   const isOwner = status?.role === "owner";
+  const isBillingOwner = status?.isBillingOwner === true;
+  const billingOwnerName = status?.billingOwnerName ?? "your billing owner";
   const pending = status?.pendingApprovals ?? [];
   const seats = status?.seats ?? 0;
   const members = status?.members ?? 0;
@@ -172,10 +177,16 @@ export default function ApprovalsScreen() {
             <Text
               style={[
                 styles.statusText,
-                { color: locked ? theme?.colors?.error : theme?.colors?.textSubtle },
+                {
+                  color: locked
+                    ? theme?.colors?.error
+                    : theme?.colors?.textSubtle,
+                },
               ]}
             >
-              {locked ? "Locked out" : `${daysLeft(item.graceEndsAt)}d left in grace`}
+              {locked
+                ? "Locked out"
+                : `${daysLeft(item.graceEndsAt)}d left in grace`}
             </Text>
           </View>
         </View>
@@ -184,29 +195,33 @@ export default function ApprovalsScreen() {
           <ActivityIndicator size="small" color={theme?.colors?.primary} />
         ) : (
           <View style={styles.rowActions}>
-            <TouchableOpacity
-              style={styles.denyBtn}
-              onPress={() => onDeny(item)}
-              disabled={!!busy}
-              activeOpacity={0.75}
-            >
-              <Text style={styles.denyText}>Deny</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.approveBtn}
-              onPress={onApproveOne}
-              disabled={!!busy}
-              activeOpacity={0.85}
-            >
-              <Text style={styles.approveText}>Approve</Text>
-            </TouchableOpacity>
+            {isOwner && (
+              <TouchableOpacity
+                style={styles.denyBtn}
+                onPress={() => onDeny(item)}
+                disabled={!!busy}
+                activeOpacity={0.75}
+              >
+                <Text style={styles.denyText}>Deny</Text>
+              </TouchableOpacity>
+            )}
+            {isBillingOwner && (
+              <TouchableOpacity
+                style={styles.approveBtn}
+                onPress={onApproveOne}
+                disabled={!!busy}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.approveText}>Approve</Text>
+              </TouchableOpacity>
+            )}
           </View>
         )}
       </View>
     );
   }
 
-  if (!isOwner) {
+  if (!isOwner && !isBillingOwner) {
     return (
       <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
         <Navbar onBack={() => router.back()} />
@@ -238,14 +253,21 @@ export default function ApprovalsScreen() {
           pending.length > 0 ? (
             <View style={styles.headerWrap}>
               <Text style={styles.helpText}>
-                {pending.length} teammate{pending.length === 1 ? "" : "s"} joined
-                with your org key and {pending.length === 1 ? "is" : "are"} using
-                Zanbi on your plan. Approve to keep{" "}
-                {pending.length === 1 ? "them" : "each"} at $19.99/mo per seat, or
-                deny to remove. Seats are granted to the longest-waiting teammate
-                first.
+                {pending.length} teammate{pending.length === 1 ? "" : "s"}{" "}
+                joined with your org key and{" "}
+                {pending.length === 1 ? "is" : "are"} using Zanbi on your plan.
+                Approve to keep {pending.length === 1 ? "them" : "each"} at
+                $19.99/mo per seat, or deny to remove. Seats are granted to the
+                longest-waiting teammate first.
               </Text>
-              {pending.length > 1 && (
+              {!isBillingOwner && (
+                <Text style={styles.billingNote}>
+                  {billingOwnerName} is the billing owner — only they can approve
+                  new seats.
+                  {isOwner ? " You can still deny (remove) a teammate." : ""}
+                </Text>
+              )}
+              {isBillingOwner && pending.length > 1 && (
                 <TouchableOpacity
                   style={styles.approveAllBtn}
                   onPress={onApproveAll}
@@ -321,6 +343,11 @@ const styles = StyleSheet.create({
   helpText: {
     ...theme?.typography?.label,
     color: theme?.colors?.textSubtle,
+  },
+  billingNote: {
+    ...theme?.typography?.label,
+    color: theme?.colors?.primary,
+    fontWeight: "600",
   },
   approveAllBtn: {
     backgroundColor: theme?.colors?.primary,
