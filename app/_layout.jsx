@@ -166,7 +166,7 @@ export default function RootLayout() {
     startConnectivityWatch();
     // Batch-ship buffered logs/telemetry to the cloud app_logs table.
     startLogShipper();
-    const purchasesListener = addCustomerInfoListener((info) => {
+    const removePurchasesListener = addCustomerInfoListener((info) => {
       setCustomerInfo(info);
     });
     hydrateSubscription().catch((e) =>
@@ -221,7 +221,7 @@ export default function RootLayout() {
 
     return () => {
       authSubscription.unsubscribe();
-      purchasesListener.remove();
+      removePurchasesListener?.();
       stopConnectivityWatch();
       stopLogShipper();
     };
