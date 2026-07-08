@@ -74,6 +74,8 @@ function logError(
   fields: Record<string, unknown> = {},
 ) {
   const anyErr = err as Record<string, unknown> | null | undefined;
+  // PostgREST errors carry the actionable detail in code/details/hint, NOT in
+  // message — surface all of them so a swallowed write reveals its cause.
   console.error(
     `${TAG} ${event}`,
     JSON.stringify({
@@ -82,6 +84,10 @@ function logError(
         anyErr instanceof Error
           ? anyErr.message
           : (anyErr?.message ?? String(err)),
+      code: anyErr?.code,
+      details: anyErr?.details,
+      hint: anyErr?.hint,
+      status: anyErr?.status,
     }),
   );
 }
@@ -147,6 +153,11 @@ serve(async (req) => {
     // Path after the function slug: "" | "/api/template" | "/api/publish"
     const subPath = url.pathname.replace(/^.*?\/form-editor/, "") || "/";
     const rawToken = url.searchParams.get("t");
+    logInfo("request", {
+      method: req.method,
+      subPath,
+      hasToken: !!rawToken,
+    });
 
     // ── Browser routes (token-authenticated) ────────────────────────────────
     if (subPath === "/api/asset") {
@@ -277,45 +288,72 @@ serve(async (req) => {
         }
 
         const nowIso = new Date().toISOString();
-        const { error } = await admin.from("form_templates").upsert(
-          {
-            org_sk: tok.org_sk,
-            name:
-              typeof body?.name === "string" && body.name.trim()
-                ? body.name.trim().slice(0, 120)
-                : "Inspection Report",
-            draft_schema: schema,
-            draft_updated_at: nowIso,
-            updated_by: tok.user_id,
-          },
-          { onConflict: "org_sk" },
-        );
+        const { data: saved, error } = await admin
+          .from("form_templates")
+          .upsert(
+            {
+              org_sk: tok.org_sk,
+              name:
+                typeof body?.name === "string" && body.name.trim()
+                  ? body.name.trim().slice(0, 120)
+                  : "Inspection Report",
+              draft_schema: schema,
+              draft_updated_at: nowIso,
+              updated_by: tok.user_id,
+            },
+            { onConflict: "org_sk" },
+          )
+          .select("org_sk, draft_updated_at");
         if (error) {
           logError("template_save_failed", error, { org: tok.org_sk });
           return json({ error: "db_error" }, 500);
         }
+        logInfo("template_save.result", {
+          org: tok.org_sk,
+          rowsWritten: Array.isArray(saved) ? saved.length : 0,
+          savedOrg: saved?.[0]?.org_sk ?? null,
+        });
         return json({ draftUpdatedAt: nowIso });
       }
 
       if (subPath === "/api/publish" && req.method === "POST") {
+        logInfo("publish.begin", { org: tok.org_sk, user: tok.user_id });
         const { data: row, error: readErr } = await admin
           .from("form_templates")
           .select("draft_schema")
           .eq("org_sk", tok.org_sk)
           .maybeSingle();
+        if (readErr) {
+          logError("publish.read_failed", readErr, { org: tok.org_sk });
+        }
+        logInfo("publish.read", {
+          org: tok.org_sk,
+          rowExists: !!row,
+          hasDraft: !!row?.draft_schema,
+        });
         if (readErr || !row?.draft_schema) {
+          logInfo("publish.exit", {
+            org: tok.org_sk,
+            why: "nothing_to_publish",
+            reason: readErr ? "read_error" : "no_draft_schema",
+          });
           return json({ error: "nothing_to_publish" }, 400);
         }
         const nowIso = new Date().toISOString();
-        const { error } = await admin
+        const { data: pub, error } = await admin
           .from("form_templates")
           .update({ published_schema: row.draft_schema, published_at: nowIso })
-          .eq("org_sk", tok.org_sk);
+          .eq("org_sk", tok.org_sk)
+          .select("org_sk, published_at");
         if (error) {
           logError("publish_failed", error, { org: tok.org_sk });
           return json({ error: "db_error" }, 500);
         }
-        logInfo("published", { org: tok.org_sk });
+        logInfo("published", {
+          org: tok.org_sk,
+          rowsWritten: Array.isArray(pub) ? pub.length : 0,
+          savedOrg: pub?.[0]?.org_sk ?? null,
+        });
         return json({ publishedAt: nowIso });
       }
 
@@ -354,18 +392,40 @@ serve(async (req) => {
       if (subPath === "/api/walkthrough" && req.method === "PUT") {
         const body = await req.json().catch(() => null);
         const schema = body?.schema;
+        const schemaBytes = schema ? JSON.stringify(schema).length : 0;
+        logInfo("walkthrough_save.begin", {
+          org: tok.org_sk,
+          user: tok.user_id,
+          hasSchema: !!schema && typeof schema === "object",
+          schemaBytes,
+          sections: Array.isArray(schema?.sections)
+            ? schema.sections.length
+            : null,
+          baseUpdatedAt: body?.baseUpdatedAt ?? null,
+        });
         if (!schema || typeof schema !== "object") {
+          logInfo("walkthrough_save.exit", { org: tok.org_sk, why: "missing_schema" });
           return json({ error: "missing_schema" }, 400);
         }
-        if (JSON.stringify(schema).length > MAX_SCHEMA_BYTES) {
+        if (schemaBytes > MAX_SCHEMA_BYTES) {
+          logInfo("walkthrough_save.exit", {
+            org: tok.org_sk,
+            why: "schema_too_large",
+            schemaBytes,
+          });
           return json({ error: "schema_too_large" }, 413);
         }
 
-        const { data: existing } = await admin
+        const { data: existing, error: existErr } = await admin
           .from("walkthrough_templates")
           .select("draft_updated_at")
           .eq("org_sk", tok.org_sk)
           .maybeSingle();
+        if (existErr) {
+          logError("walkthrough_save.existing_read_failed", existErr, {
+            org: tok.org_sk,
+          });
+        }
 
         // Optimistic concurrency — compare as instants, not strings (Postgres
         // serializes "+00:00", we write "...Z").
@@ -375,11 +435,19 @@ serve(async (req) => {
         const baseMs = body?.baseUpdatedAt
           ? new Date(body.baseUpdatedAt).getTime()
           : NaN;
+        logInfo("walkthrough_save.concurrency", {
+          org: tok.org_sk,
+          rowExists: !!existing,
+          existingStamp: existing?.draft_updated_at ?? null,
+          existingMs: Number.isFinite(existingMs) ? existingMs : null,
+          baseMs: Number.isFinite(baseMs) ? baseMs : null,
+        });
         if (
           Number.isFinite(existingMs) &&
           Number.isFinite(baseMs) &&
           existingMs !== baseMs
         ) {
+          logInfo("walkthrough_save.exit", { org: tok.org_sk, why: "conflict" });
           return json(
             { error: "conflict", draftUpdatedAt: existing.draft_updated_at },
             409,
@@ -387,45 +455,80 @@ serve(async (req) => {
         }
 
         const nowIso = new Date().toISOString();
-        const { error } = await admin.from("walkthrough_templates").upsert(
-          {
-            org_sk: tok.org_sk,
-            name:
-              typeof body?.name === "string" && body.name.trim()
-                ? body.name.trim().slice(0, 120)
-                : "Walkthrough",
-            draft_schema: schema,
-            draft_updated_at: nowIso,
-            updated_by: tok.user_id,
-          },
-          { onConflict: "org_sk" },
-        );
+        // .select() so we can see the ACTUAL persisted rows — a service-role
+        // upsert that writes 0 rows (or a filtered/denied write) is the whole
+        // mystery, so capture and log the row count + echo.
+        const { data: saved, error } = await admin
+          .from("walkthrough_templates")
+          .upsert(
+            {
+              org_sk: tok.org_sk,
+              name:
+                typeof body?.name === "string" && body.name.trim()
+                  ? body.name.trim().slice(0, 120)
+                  : "Walkthrough",
+              draft_schema: schema,
+              draft_updated_at: nowIso,
+              updated_by: tok.user_id,
+            },
+            { onConflict: "org_sk" },
+          )
+          .select("org_sk, draft_updated_at, updated_by");
         if (error) {
           logError("walkthrough_save_failed", error, { org: tok.org_sk });
           return json({ error: "db_error" }, 500);
         }
+        logInfo("walkthrough_save.result", {
+          org: tok.org_sk,
+          rowsWritten: Array.isArray(saved) ? saved.length : 0,
+          savedOrg: saved?.[0]?.org_sk ?? null,
+          savedStamp: saved?.[0]?.draft_updated_at ?? null,
+        });
         return json({ draftUpdatedAt: nowIso });
       }
 
       if (subPath === "/api/walkthrough/publish" && req.method === "POST") {
+        logInfo("walkthrough_publish.begin", {
+          org: tok.org_sk,
+          user: tok.user_id,
+        });
         const { data: row, error: readErr } = await admin
           .from("walkthrough_templates")
           .select("draft_schema, published_version")
           .eq("org_sk", tok.org_sk)
           .maybeSingle();
+        if (readErr) {
+          logError("walkthrough_publish.read_failed", readErr, {
+            org: tok.org_sk,
+          });
+        }
+        logInfo("walkthrough_publish.read", {
+          org: tok.org_sk,
+          rowExists: !!row,
+          hasDraft: !!row?.draft_schema,
+          publishedVersion: row?.published_version ?? null,
+        });
         if (readErr || !row?.draft_schema) {
+          // Formerly a SILENT exit — this is the most likely place the publish
+          // "runs but nothing persists" if the draft save never landed.
+          logInfo("walkthrough_publish.exit", {
+            org: tok.org_sk,
+            why: "nothing_to_publish",
+            reason: readErr ? "read_error" : "no_draft_schema",
+          });
           return json({ error: "nothing_to_publish" }, 400);
         }
         const nowIso = new Date().toISOString();
         const nextVersion = (row.published_version ?? 0) + 1;
-        const { error } = await admin
+        const { data: pub, error } = await admin
           .from("walkthrough_templates")
           .update({
             published_schema: row.draft_schema,
             published_at: nowIso,
             published_version: nextVersion,
           })
-          .eq("org_sk", tok.org_sk);
+          .eq("org_sk", tok.org_sk)
+          .select("org_sk, published_version, published_at");
         if (error) {
           logError("walkthrough_publish_failed", error, { org: tok.org_sk });
           return json({ error: "db_error" }, 500);
@@ -433,6 +536,9 @@ serve(async (req) => {
         logInfo("walkthrough_published", {
           org: tok.org_sk,
           version: nextVersion,
+          rowsWritten: Array.isArray(pub) ? pub.length : 0,
+          savedOrg: pub?.[0]?.org_sk ?? null,
+          savedVersion: pub?.[0]?.published_version ?? null,
         });
         return json({ publishedAt: nowIso, publishedVersion: nextVersion });
       }
