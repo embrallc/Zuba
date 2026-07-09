@@ -33,6 +33,7 @@ import {
   updateInspection,
 } from "../db/inspections";
 import { logError, logEvent } from "../db/logs";
+import { isOnline } from "./connectivity";
 import { useCalendarStore } from "../stores/useCalendarStore";
 import { useInspectionStore } from "../stores/useInspectionStore";
 import { useSettingsStore } from "../stores/useSettingsStore";
@@ -815,34 +816,65 @@ export async function runPull() {
         `untagged(ignored)=${nUntagged} allDay(skipped)=${nAllDay}`,
     );
 
-    // Owned links whose event vanished from the window → deleted on the
-    // calendar → soft-delete the inspection. Only conclude deletion for links
-    // whose time falls INSIDE the scanned window (an appt beyond the window is
-    // simply out of range, not deleted).
+    // Owned links whose event vanished from the window MIGHT mean the user
+    // deleted them on the calendar — but a "vanished" event looks identical to
+    // an UNTRUSTWORTHY read: offline with a remote-backed calendar (returns
+    // nothing), an account mid-resync, a permission blip. Concluding deletion
+    // from a bad read soft-deletes real inspections — an airplane-mode test sent
+    // EVERY inspection to the deleted archive this way. So only vanish-delete
+    // when the read is demonstrably sound. Only consider links whose time falls
+    // INSIDE the scanned window (an appt beyond the window is out of range, not
+    // deleted).
     const startMs = windowStart.getTime();
     const endMs = windowEnd.getTime();
-    let nDeleted = 0;
-    for (const l of links) {
-      if (seen.has(l.CalendarEventId)) continue;
-      if (!l.ScheduledAt) continue;
+    const ownedInWindow = links.filter((l) => {
+      if (!l.ScheduledAt) return false;
       const t = new Date(l.ScheduledAt).getTime();
-      if (!Number.isFinite(t) || t < startMs || t > endMs) continue;
-      // Don't conclude a calendar-side deletion for a row with local pending
-      // changes (Synced=0): the user just restored/edited it in-app, so a missing
-      // event is a link awaiting (re)creation, not a user calendar deletion. Real
-      // calendar-side deletes land on settled (Synced=1) rows and are caught on a
-      // later pull. This closes the race where a dangling link could soft-delete a
-      // just-restored inspection before its recreate lands.
-      if (l.Synced === 0) continue;
-      applyingRemote = true;
-      try {
-        // eslint-disable-next-line no-await-in-loop
-        await softDeleteInspection(l.InspectionSk);
-      } finally {
-        applyingRemote = false;
+      return Number.isFinite(t) && t >= startMs && t <= endMs;
+    });
+    // Candidates = settled (Synced=1) owned rows whose event wasn't seen. A row
+    // with local pending changes (Synced=0) is awaiting (re)creation, not a
+    // calendar-side delete, so it's never a candidate.
+    const missing = ownedInWindow.filter(
+      (l) => !seen.has(l.CalendarEventId) && l.Synced !== 0,
+    );
+    // Trust the read only if we're online, it returned events at all, AND at
+    // least one of OUR OWN events came back. If we hold events in the window but
+    // saw none of them, the read never reached our data — never mass-delete on
+    // that. A legitimate single delete still works: the other owned events are
+    // seen (anyOwnedSeen = true), so the one truly-missing row is removed.
+    const anyOwnedSeen = ownedInWindow.some((l) => seen.has(l.CalendarEventId));
+    const trustworthyRead =
+      isOnline() &&
+      (events?.length ?? 0) > 0 &&
+      (ownedInWindow.length === 0 || anyOwnedSeen);
+
+    let nDeleted = 0;
+    if (missing.length > 0 && !trustworthyRead) {
+      console.warn(
+        `[calendar] runPull — SKIP vanish-delete of ${missing.length} inspection(s): ` +
+          `untrustworthy read (online=${isOnline()} events=${events?.length ?? 0} ` +
+          `ownedInWindow=${ownedInWindow.length} anyOwnedSeen=${anyOwnedSeen})`,
+      );
+      logEvent("calendar.vanish_delete_skipped", {
+        candidates: missing.length,
+        online: isOnline(),
+        events: events?.length ?? 0,
+        ownedInWindow: ownedInWindow.length,
+        anyOwnedSeen,
+      });
+    } else {
+      for (const l of missing) {
+        applyingRemote = true;
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          await softDeleteInspection(l.InspectionSk);
+        } finally {
+          applyingRemote = false;
+        }
+        useInspectionStore.getState().remove(l.InspectionSk);
+        nDeleted++;
       }
-      useInspectionStore.getState().remove(l.InspectionSk);
-      nDeleted++;
     }
 
     // Only record when the pull actually changed something — this runs on every

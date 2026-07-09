@@ -15,6 +15,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { logError } from "../db/logs";
 import { useSettingsStore } from "../stores/useSettingsStore";
 import { useSubscriptionStore } from "../stores/useSubscriptionStore";
+import { isOnline } from "../utils/connectivity";
 import { supabase } from "../utils/supabase";
 
 const ROLES = [
@@ -51,6 +52,12 @@ export default function ManageUsersScreen() {
 
   const load = useCallback(async () => {
     if (!orgSk) {
+      setLoading(false);
+      return;
+    }
+    // Team + billing-owner live server-side. Offline, skip the fetch so it
+    // doesn't hang the spinner + throw — reopen when connected.
+    if (!isOnline()) {
       setLoading(false);
       return;
     }
@@ -93,6 +100,10 @@ export default function ManageUsersScreen() {
     if (!canManage) return;
     if (targetUser.user_profile === newRole) return;
     if (updating[targetUser.id]) return;
+    if (!isOnline()) {
+      Alert.alert("You're offline", "Connect to the internet to change roles.");
+      return;
+    }
 
     // Optimistic update locally; server is the source of truth and will
     // reject (via trigger) if the change isn't allowed.
@@ -134,6 +145,10 @@ export default function ManageUsersScreen() {
   async function deleteUser(target) {
     if (!canManage || target.id === userSk) return;
     if (updating[target.id]) return;
+    if (!isOnline()) {
+      Alert.alert("You're offline", "Connect to the internet to delete a user.");
+      return;
+    }
     Alert.alert(
       "Delete user?",
       `Permanently delete ${displayName(target)}'s account. Their inspections and photos will move to Unassigned Records so you can reassign them. This cannot be undone.`,
@@ -189,6 +204,13 @@ export default function ManageUsersScreen() {
   // Make `target` the org's sole billing owner (approve teammates + change the
   // plan). Server enforces the real rules; this guards the UI.
   function transferBilling(target) {
+    if (!isOnline()) {
+      Alert.alert(
+        "You're offline",
+        "Connect to the internet to change the billing owner.",
+      );
+      return;
+    }
     const name = displayName(target);
     const hasCurrent = !!billingOwnerId;
     Alert.alert(

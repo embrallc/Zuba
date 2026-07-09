@@ -14,6 +14,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { logError } from "../db/logs";
 import { useSubscriptionStore } from "../stores/useSubscriptionStore";
+import { isOnline } from "../utils/connectivity";
 import { purchaseSeatCount } from "../utils/purchases";
 import { supabase } from "../utils/supabase";
 
@@ -71,6 +72,10 @@ export default function ApprovalsScreen() {
   const [busy, setBusy] = useState(null);
 
   async function buySeats(targetSeats, who) {
+    if (!isOnline()) {
+      Alert.alert("You're offline", "Connect to the internet to add seats.");
+      return;
+    }
     setBusy(who);
     try {
       await purchaseSeatCount(targetSeats);
@@ -120,6 +125,10 @@ export default function ApprovalsScreen() {
   }
 
   function onDeny(item) {
+    if (!isOnline()) {
+      Alert.alert("You're offline", "Connect to the internet to remove a teammate.");
+      return;
+    }
     Alert.alert(
       "Remove teammate?",
       `Remove ${item.name} from your organization. Their inspections and photos move to Unassigned Records so you can reassign them. They lose access immediately.`,

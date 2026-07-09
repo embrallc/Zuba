@@ -2,6 +2,7 @@ import { Platform } from "react-native";
 import Purchases, { LOG_LEVEL } from "react-native-purchases";
 import RevenueCatUI, { PAYWALL_RESULT } from "react-native-purchases-ui";
 import { logError } from "../db/logs";
+import { isOnline } from "./connectivity";
 
 // Test Store key — full purchase flow works against RevenueCat's simulator.
 // Replace with separate iOS/Android production keys before store submission.
@@ -55,6 +56,10 @@ export function addCustomerInfoListener(callback) {
 // Presents the paywall only if the user lacks the Pro entitlement.
 // Returns a PAYWALL_RESULT value.
 export async function presentPaywall() {
+  // Purchasing needs the store + our webhook; offline the paywall can't load
+  // offerings. Bail (callers treat non-PURCHASED as a no-op) instead of showing
+  // a broken sheet.
+  if (!isOnline()) return PAYWALL_RESULT.ERROR;
   try {
     return await RevenueCatUI.presentPaywallIfNeeded({
       requiredEntitlementIdentifier: ENTITLEMENT_ID,
@@ -69,6 +74,7 @@ export async function presentPaywall() {
 // "if needed" variant would refuse to show. Present unconditionally and let
 // the store sheet handle the tier change + proration.
 export async function presentPaywallForUpgrade() {
+  if (!isOnline()) return PAYWALL_RESULT.ERROR;
   try {
     return await RevenueCatUI.presentPaywall();
   } catch (e) {
@@ -78,6 +84,7 @@ export async function presentPaywallForUpgrade() {
 }
 
 export async function restorePurchases() {
+  if (!isOnline()) return null;
   try {
     return await Purchases.restorePurchases();
   } catch (e) {
@@ -87,6 +94,7 @@ export async function restorePurchases() {
 }
 
 export async function presentCustomerCenter() {
+  if (!isOnline()) return;
   try {
     await RevenueCatUI.presentCustomerCenter({
       callbacks: {
@@ -131,6 +139,11 @@ async function seatPackages() {
 // StoreKit/Play upgrade + proration. Throws (with .userCancelled when the user
 // backs out) so callers can distinguish a cancel from a real failure.
 export async function purchaseSeatCount(target) {
+  if (!isOnline()) {
+    const e = new Error("You're offline — connect to change your plan.");
+    e.code = "offline";
+    throw e;
+  }
   const map = await seatPackages();
   const pkg = map.get(target);
   if (!pkg) {
@@ -142,6 +155,7 @@ export async function purchaseSeatCount(target) {
 // Per-seat localized price ($19.99) read off the seats_1 package, for showing
 // accurate totals in the approvals inbox. Returns null if unavailable.
 export async function seatUnitPrice() {
+  if (!isOnline()) return null;
   try {
     const one = (await seatPackages()).get(1);
     if (!one?.product) return null;

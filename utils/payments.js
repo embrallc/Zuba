@@ -4,6 +4,7 @@ import { Share } from "react-native";
 import { setInspectionPaymentStateLocal } from "../db/inspections";
 import { logError, logEvent } from "../db/logs";
 import { useInspectionStore } from "../stores/useInspectionStore";
+import { isOnline } from "./connectivity";
 import { pushInspection } from "./sync";
 import { supabase } from "./supabase";
 
@@ -16,6 +17,12 @@ import { supabase } from "./supabase";
 const INVOKE_TIMEOUT_MS = 30000;
 
 async function invoke(name, body) {
+  // Offline: fail instantly instead of waiting out the timeout below.
+  if (!isOnline()) {
+    const err = new Error("You're offline — connect to the internet and try again.");
+    err.code = "offline";
+    throw err;
+  }
   // Race the call against a timeout so a hung request recovers the UI with a
   // clear message instead of spinning forever.
   let result;

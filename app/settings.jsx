@@ -30,6 +30,7 @@ import { signOutAndClear, supabase } from "../utils/supabase";
 import { syncAll } from "../utils/sync";
 import { useSubscriptionStore } from "../stores/useSubscriptionStore";
 import { openManageSubscriptions, requestAccountDeletion } from "../utils/account";
+import { isOnline } from "../utils/connectivity";
 import {
   logOutPurchases,
   PAYWALL_RESULT,
@@ -229,6 +230,10 @@ export default function SettingsScreen() {
   const clearSubscription = useSubscriptionStore((s) => s.clear);
 
   async function handleSubscribe() {
+    if (!isOnline()) {
+      Alert.alert("You're offline", "Connect to the internet to subscribe.");
+      return;
+    }
     const result = await presentPaywall();
     if (
       result === PAYWALL_RESULT.PURCHASED ||
@@ -820,6 +825,13 @@ function FormBuilderCard() {
 
   async function mintLink() {
     if (status === "loading") return;
+    if (!isOnline()) {
+      Alert.alert(
+        "You're offline",
+        "Connect to the internet to create a Form Builder link.",
+      );
+      return;
+    }
     setStatus("loading");
     try {
       const { data, error } = await supabase.functions.invoke("form-editor", {

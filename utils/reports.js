@@ -13,6 +13,7 @@ import * as FileSystem from "expo-file-system/legacy";
 import { setInspectionLocalReport } from "../db/inspections";
 import { logError, logEvent } from "../db/logs";
 import { useInspectionStore } from "../stores/useInspectionStore";
+import { isOnline } from "./connectivity";
 import { isWorkerConfigured, startCloudReport } from "./reportJobs";
 import { supabase } from "./supabase";
 import { syncAll } from "./sync";
@@ -160,6 +161,16 @@ export async function generateInspectionReport(inspection, onProgress) {
   if (!isWorkerConfigured()) {
     const err = new Error(
       "The report service isn't configured on this build. Please contact support.",
+    );
+    err.presentable = true;
+    throw err;
+  }
+  // Reports render in the cloud (worker reads Postgres/Storage), so this is
+  // useless offline — fail fast with a clear message instead of hanging on the
+  // job insert / worker request.
+  if (!isOnline()) {
+    const err = new Error(
+      "You're offline — reports generate in the cloud and need a connection.",
     );
     err.presentable = true;
     throw err;

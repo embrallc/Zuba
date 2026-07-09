@@ -86,6 +86,12 @@ export default function AllInspectionsScreen() {
       setLoading(false);
       return;
     }
+    // Cloud-only screen (org-wide records live server-side). Offline, skip the
+    // fetch so it doesn't hang the spinner + throw — reopen when connected.
+    if (!isOnline()) {
+      setLoading(false);
+      return;
+    }
     try {
       const [{ data: inspectionRows, error: inspErr }, { data: userRows, error: userErr }] =
         await Promise.all([

@@ -1,5 +1,6 @@
 import { Linking, Platform } from "react-native";
 import { logError } from "../db/logs";
+import { isOnline } from "./connectivity";
 import { supabase } from "./supabase";
 
 // Where users manage (and cancel) their App Store / Play subscription.
@@ -22,6 +23,9 @@ export function openManageSubscriptions() {
 // "blocked_sole_owner", message? }. Throws an Error whose message is the
 // real server-side reason (parsed out of the FunctionsHttpError body).
 export async function requestAccountDeletion() {
+  if (!isOnline()) {
+    throw new Error("You're offline — deleting your account needs a connection.");
+  }
   const { data, error } = await supabase.functions.invoke("delete-account");
   if (error) {
     let detail = error.message ?? "Could not delete account.";
