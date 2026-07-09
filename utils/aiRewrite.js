@@ -6,6 +6,7 @@
 // call Google from the device.
 
 import { logError, logEvent } from "../db/logs";
+import { isOnline } from "./connectivity";
 import { supabase } from "./supabase";
 
 // Throws an Error whose `.code` is the server reason ("rate_limited",
@@ -17,6 +18,12 @@ export async function requestRewrite({
   context,
   regenerate = false,
 }) {
+  // Fail fast offline instead of spinning on a doomed EF call.
+  if (!isOnline()) {
+    const e = new Error("offline");
+    e.code = "offline";
+    throw e;
+  }
   const { data, error } = await supabase.functions.invoke("ai-rewrite", {
     body: { text, fieldLabel, sectionTitle, context, regenerate },
   });
@@ -47,6 +54,8 @@ export async function requestRewrite({
 // User-facing copy for the failure codes the sheet/Alert may surface.
 export function rewriteErrorMessage(code) {
   switch (code) {
+    case "offline":
+      return "You're offline — AI Rewrite needs a connection.";
     case "rate_limited":
       return "You've reached today's AI Rewrite limit. Try again tomorrow.";
     case "ai_failed":

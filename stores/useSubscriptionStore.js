@@ -1,6 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { create } from "zustand";
 import { logError } from "../db/logs";
+import { isOnline } from "../utils/connectivity";
 import { supabase } from "../utils/supabase";
 import { getTrialAnchor } from "../utils/trialAnchor";
 
@@ -48,6 +49,9 @@ export const useSubscriptionStore = create((set, get) => ({
   // pulls RevenueCat's REST truth instead of waiting on the webhook.
   refreshStatus: async ({ sync = false } = {}) => {
     if (get().refreshing) return get().status;
+    // Offline: keep the last persisted verdict (the gate is designed to fail
+    // open) rather than spinning on a doomed EF call. Reconnect re-runs this.
+    if (!isOnline()) return get().status;
     set({ refreshing: true });
     try {
       const deviceAnchor = await getTrialAnchor();

@@ -28,6 +28,7 @@ import { NOTIFICATION_NAMES } from "../db/notificationSettings";
 import { showBanner } from "../stores/useBannerStore";
 import { useInspectionStore } from "../stores/useInspectionStore";
 import { useSettingsStore } from "../stores/useSettingsStore";
+import { isOnline } from "../utils/connectivity";
 import { maybePromptForUpcomingApptNotif } from "../utils/notifications";
 import { findOverlappingInspection } from "../utils/overlapUtils";
 
@@ -228,6 +229,13 @@ export default function AddInspectionScreen() {
     let cancelled = false;
     const timeout = setTimeout(async () => {
       try {
+        // Geocoding is network enrichment. Offline, skip it (don't hang the
+        // save waiting on this promise) — the typed address is kept locally and
+        // re-geocodes on a later online edit.
+        if (!isOnline()) {
+          resolveGeo(null);
+          return;
+        }
         const results = await Location.geocodeAsync(
           `${AddressLine1}, ${City}, ${State} ${ZipCode}`,
         );

@@ -16,6 +16,7 @@ import {
 } from "react-native";
 import { wipeDatabase } from "../db/devQuery";
 import { logError, logEvent } from "../db/logs";
+import { isOnline } from "../utils/connectivity";
 import { supabase } from "../utils/supabase";
 
 export default function LoginScreen() {
@@ -49,6 +50,10 @@ export default function LoginScreen() {
     }
 
     setError(null);
+    if (!isOnline()) {
+      setError("You're offline — connect to the internet to continue.");
+      return;
+    }
     setLoading(true);
     try {
       if (mode === "signin") {
@@ -92,6 +97,10 @@ export default function LoginScreen() {
 
   async function handleResend() {
     if (resending || !sentTo) return;
+    if (!isOnline()) {
+      setResendNote("You're offline — connect to the internet to resend.");
+      return;
+    }
     setResending(true);
     setResendNote(null);
     try {

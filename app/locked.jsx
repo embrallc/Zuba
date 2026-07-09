@@ -14,6 +14,7 @@ import {
 import { logError } from "../db/logs";
 import { useSubscriptionStore } from "../stores/useSubscriptionStore";
 import { openManageSubscriptions, requestAccountDeletion } from "../utils/account";
+import { isOnline } from "../utils/connectivity";
 import {
   logOutPurchases,
   PAYWALL_RESULT,
@@ -45,6 +46,10 @@ export default function LockedScreen() {
 
   async function handleSubscribe() {
     if (busy) return;
+    if (!isOnline()) {
+      Alert.alert("You're offline", "Connect to the internet to subscribe.");
+      return;
+    }
     setBusy("subscribe");
     try {
       const result = await presentPaywall();
@@ -65,6 +70,10 @@ export default function LockedScreen() {
 
   async function handleRestore() {
     if (busy) return;
+    if (!isOnline()) {
+      Alert.alert("You're offline", "Connect to the internet to restore purchases.");
+      return;
+    }
     setBusy("restore");
     try {
       await restorePurchases();

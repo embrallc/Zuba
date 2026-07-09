@@ -16,6 +16,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { logError } from "../db/logs";
 import { showBanner } from "../stores/useBannerStore";
 import { useSettingsStore } from "../stores/useSettingsStore";
+import { isOnline } from "../utils/connectivity";
 import { supabase } from "../utils/supabase";
 
 export function useMyDayRoute({ enabled = true } = {}) {
@@ -41,6 +42,15 @@ export function useMyDayRoute({ enabled = true } = {}) {
         data: { session },
       } = await supabase.auth.getSession();
       if (!session) return;
+
+      // 0b. Offline gate. The route summary (drive times / traffic) needs the
+      // EF + Routes API — impossible offline. Skip cleanly so the dashboard
+      // shows local inspections instead of prompting for location and hanging
+      // on a doomed EF call. refresh() re-runs when connectivity returns.
+      if (!isOnline()) {
+        setError({ kind: "offline" });
+        return;
+      }
 
       // 1. Foreground location permission. Request once; if denied, surface
       // via banner and exit. Caller can call refresh() to try again after
