@@ -233,10 +233,15 @@ export default function MyDayDashboard({ data, loading, error, onRefresh }) {
     );
   }
 
-  const { nextStop, dailyTotals, fetchedAt, mode, summary } = data;
+  const { nextStop, upNext, dailyTotals, fetchedAt, mode, summary } = data;
   const trafficMeta =
     TRAFFIC_META[nextStop.trafficLevel] ?? TRAFFIC_META.moderate;
-  const isLate = (nextStop.lateByMinutes ?? 0) > 0;
+  const isOnSite = mode === "in-progress";
+  // "Running late" only makes sense while en route. Once you're on site,
+  // lateByMinutes is just minutes into the appointment, not a delay — so we
+  // never show the late warning in progress (that was the "it can't see I'm
+  // on site" bug).
+  const isLate = !isOnSite && (nextStop.lateByMinutes ?? 0) > 0;
 
   return (
     <AnimatePresence>
@@ -253,15 +258,14 @@ export default function MyDayDashboard({ data, loading, error, onRefresh }) {
               style={[
                 styles.modeDot,
                 {
-                  backgroundColor:
-                    mode === "in-progress"
-                      ? theme?.colors?.warning
-                      : theme?.colors?.primary,
+                  backgroundColor: isOnSite
+                    ? theme?.colors?.success
+                    : theme?.colors?.primary,
                 },
               ]}
             />
             <Text style={styles.modeText}>
-              {mode === "in-progress" ? "In progress" : "Up next"}
+              {isOnSite ? "On site" : "Up next"}
             </Text>
           </View>
           <RefreshButton refreshing={loading} onPress={onRefresh} />
@@ -300,67 +304,99 @@ export default function MyDayDashboard({ data, loading, error, onRefresh }) {
           </MotiView>
         )}
 
-        {/* Drive metrics row */}
-        <View style={styles.metricsRow}>
-          <View style={styles.metric}>
-            <MaterialCommunityIcons
-              name="car-outline"
-              size={18}
-              color={theme?.colors?.primary}
-            />
-            <Text style={styles.metricValue}>
-              {formatMinutes(nextStop.driveDurationSec)}
-            </Text>
-            <Text style={styles.metricLabel}>drive</Text>
+        {/* Drive metrics row — meaningless on site (drive ≈ 0, 0 mi away), so
+            it's hidden once the inspector has arrived. */}
+        {!isOnSite && (
+          <View style={styles.metricsRow}>
+            <View style={styles.metric}>
+              <MaterialCommunityIcons
+                name="car-outline"
+                size={18}
+                color={theme?.colors?.primary}
+              />
+              <Text style={styles.metricValue}>
+                {formatMinutes(nextStop.driveDurationSec)}
+              </Text>
+              <Text style={styles.metricLabel}>drive</Text>
+            </View>
+            <View style={styles.metricDivider} />
+            <View style={styles.metric}>
+              <MaterialCommunityIcons
+                name="map-marker-distance"
+                size={18}
+                color={theme?.colors?.primary}
+              />
+              <Text style={styles.metricValue}>
+                {formatMiles(nextStop.driveDistanceMeters)}
+              </Text>
+              <Text style={styles.metricLabel}>away</Text>
+            </View>
+            <View style={styles.metricDivider} />
+            <View style={styles.metric}>
+              <MaterialCommunityIcons
+                name={trafficMeta.icon}
+                size={18}
+                color={trafficMeta.color}
+              />
+              <Text style={[styles.metricValue, { color: trafficMeta.color }]}>
+                {nextStop.trafficLevel === "light"
+                  ? "Light"
+                  : nextStop.trafficLevel === "heavy"
+                    ? "Heavy"
+                    : "Moderate"}
+              </Text>
+              <Text style={styles.metricLabel}>traffic</Text>
+            </View>
           </View>
-          <View style={styles.metricDivider} />
-          <View style={styles.metric}>
-            <MaterialCommunityIcons
-              name="map-marker-distance"
-              size={18}
-              color={theme?.colors?.primary}
-            />
-            <Text style={styles.metricValue}>
-              {formatMiles(nextStop.driveDistanceMeters)}
-            </Text>
-            <Text style={styles.metricLabel}>away</Text>
-          </View>
-          <View style={styles.metricDivider} />
-          <View style={styles.metric}>
-            <MaterialCommunityIcons
-              name={trafficMeta.icon}
-              size={18}
-              color={trafficMeta.color}
-            />
-            <Text style={[styles.metricValue, { color: trafficMeta.color }]}>
-              {nextStop.trafficLevel === "light"
-                ? "Light"
-                : nextStop.trafficLevel === "heavy"
-                  ? "Heavy"
-                  : "Moderate"}
-            </Text>
-            <Text style={styles.metricLabel}>traffic</Text>
-          </View>
-        </View>
+        )}
 
-        {/* ETA / late line */}
-        <View style={styles.etaRow}>
-          <MaterialCommunityIcons
-            name={isLate ? "alert-circle-outline" : "clock-check-outline"}
-            size={16}
-            color={isLate ? theme?.colors?.error : theme?.colors?.success}
-          />
-          <Text
-            style={[
-              styles.etaText,
-              { color: isLate ? theme?.colors?.error : theme?.colors?.text },
-            ]}
-          >
-            {isLate
-              ? `Running ${nextStop.lateByMinutes} min late — ETA ${formatTime(nextStop.etaIso)}`
-              : `On time — ETA ${formatTime(nextStop.etaIso)}`}
-          </Text>
-        </View>
+        {/* Status line — on site vs. en route */}
+        {isOnSite ? (
+          <>
+            <View style={styles.etaRow}>
+              <MaterialCommunityIcons
+                name="map-marker-check-outline"
+                size={16}
+                color={theme?.colors?.success}
+              />
+              <Text style={[styles.etaText, { color: theme?.colors?.text }]}>
+                On site
+              </Text>
+            </View>
+            {/* Up next — the following stop + when to leave to arrive on time.
+                Uses the already-fetched stop→stop leg (no extra Routes call). */}
+            <View style={styles.upNextRow}>
+              <MaterialCommunityIcons
+                name="arrow-right-circle-outline"
+                size={16}
+                color={theme?.colors?.primary}
+              />
+              <Text style={styles.upNextText} numberOfLines={2}>
+                {upNext
+                  ? `Up next: ${upNext.fullName} at ${formatTime(upNext.scheduledAt)} · leave by ${formatTime(upNext.leaveByIso)}`
+                  : "Last stop of the day."}
+              </Text>
+            </View>
+          </>
+        ) : (
+          <View style={styles.etaRow}>
+            <MaterialCommunityIcons
+              name={isLate ? "alert-circle-outline" : "clock-check-outline"}
+              size={16}
+              color={isLate ? theme?.colors?.error : theme?.colors?.success}
+            />
+            <Text
+              style={[
+                styles.etaText,
+                { color: isLate ? theme?.colors?.error : theme?.colors?.text },
+              ]}
+            >
+              {isLate
+                ? `Running ${nextStop.lateByMinutes} min late — ETA ${formatTime(nextStop.etaIso)}`
+                : `On time — ETA ${formatTime(nextStop.etaIso)}`}
+            </Text>
+          </View>
+        )}
 
         {/* Daily totals */}
         {dailyTotals ? (
@@ -524,6 +560,18 @@ const styles = StyleSheet.create({
   etaText: {
     ...(theme?.typography?.body ?? {}),
     fontSize: 13,
+  },
+  upNextRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginTop: theme?.spacing?.xs,
+  },
+  upNextText: {
+    ...(theme?.typography?.body ?? {}),
+    fontSize: 13,
+    color: theme?.colors?.textSubtle,
+    flex: 1,
   },
   totalsBlock: {
     marginTop: theme?.spacing?.m,

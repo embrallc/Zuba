@@ -18,9 +18,10 @@
 //   7. Build response, upsert cache row with TTL 30 min, return.
 //
 // "Mode" is a UI label on the response, not a separate codepath:
-//   - "upcoming"    — first remaining inspection is still in the future
-//   - "in-progress" — first remaining inspection has started (geofence or
-//                     scheduledAt + 5 min has passed)
+//   - "upcoming"    — inspector is still driving to the first remaining stop
+//   - "in-progress" — inspector is ON SITE: within the ½-mile arrival radius of
+//                     the first remaining stop (or, when the stop has no coords,
+//                     scheduledAt + 5 min has passed as a fallback)
 //   - "done"        — no remaining inspections today
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
@@ -30,7 +31,13 @@ declare const Deno: { env: { get(name: string): string | undefined } };
 
 const TAG = "[my-day-route]";
 const CACHE_TTL_MS = 30 * 60 * 1000; // 30 min
-const GEOFENCE_METERS = 150;
+// On-site ("in-progress") threshold: how close to the stop counts as "arrived".
+// A generous ½ mile (not a tight door-step geofence) on purpose — it must survive
+// parking a block away AND the known geocoder-snaps-to-a-neighbor offset, so an
+// inspector standing at the property is never mislabeled "en route / running late".
+// It's still far tighter than any real drive: a stop 25 min away is miles > 800 m,
+// so a late inspector still at home stays correctly excluded (keeps counting drive).
+const ARRIVAL_RADIUS_METERS = 800;
 const IN_PROGRESS_GRACE_MS = 5 * 60 * 1000; // 5 min after scheduled
 // On cache hit, if the user has moved more than this distance from the
 // location used to compute the cached drive duration, bust the cache and
@@ -504,10 +511,24 @@ serve(async (req) => {
     // excluded from `remaining`, so completing one advances `remaining[0]`,
     // changes the fingerprint, and frees a fresh call for the next stop.
     const topStartMs = new Date(remaining[0].scheduled_at).getTime();
+    // On-site detection for the cache short-circuit. Being inside the
+    // appointment window is NOT enough: a late inspector who's still driving is
+    // in the window but hasn't arrived, so their ETA must keep counting drive
+    // time (fall through to the normal cache/fresh path). Require proximity to
+    // the stop — the same ½-mile arrival radius the live path uses. When the
+    // stop has no coords we can't measure distance, so fall back to time-only.
+    const topCoords =
+      remaining[0].latitude != null && remaining[0].longitude != null
+        ? { lat: remaining[0].latitude, lng: remaining[0].longitude }
+        : null;
+    const distanceToTop = topCoords
+      ? haversineMeters(currentLocation, topCoords)
+      : null;
     const inProgress =
       Number.isFinite(topStartMs) &&
       topStartMs <= nowMs &&
-      nowMs < topStartMs + apptMs;
+      nowMs < topStartMs + apptMs &&
+      (distanceToTop == null || distanceToTop < ARRIVAL_RADIUS_METERS);
 
     // 6. Cache lookup
     const { data: cached, error: cacheErr } = await admin
@@ -645,6 +666,31 @@ serve(async (req) => {
     );
     const firstLegDistanceMeters = (firstLeg.distanceMeters as number) ?? 0;
 
+    // The stop AFTER the current one, if any. The Routes call is multi-waypoint
+    // (current → stop0 → stop1 → …), so legs[1] is already the stop0→stop1 drive
+    // — no extra API request. Surfaced as `upNext` so the dashboard can show a
+    // "you're on site; here's what's next and when to leave" line while the
+    // inspector works the current job. Null when the current stop is the last.
+    const secondStop = remaining.length >= 2 ? remaining[1] : null;
+    const secondLeg = legs[1] ?? {};
+    const secondLegDurationSec = parseDurationSec(secondLeg.duration as string);
+    const secondLegDistanceMeters = (secondLeg.distanceMeters as number) ?? 0;
+    const upNext = secondStop
+      ? {
+          inspectionSk: secondStop.inspection_sk,
+          fullName: secondStop.full_name ?? "Inspection",
+          address: inspectionAddress(secondStop),
+          scheduledAt: secondStop.scheduled_at,
+          driveDurationSec: secondLegDurationSec,
+          driveDistanceMeters: secondLegDistanceMeters,
+          // When to leave the current stop to reach the next one on time.
+          leaveByIso: new Date(
+            new Date(secondStop.scheduled_at).getTime() -
+              secondLegDurationSec * 1000,
+          ).toISOString(),
+        }
+      : null;
+
     // 8. Build next-stop block + mode
     const nextStop = remaining[0];
     const nextStopCoords =
@@ -656,9 +702,14 @@ serve(async (req) => {
       : Number.POSITIVE_INFINITY;
 
     const nextStartMs = new Date(nextStop.scheduled_at).getTime();
-    const isInProgress =
-      distanceToNext < GEOFENCE_METERS ||
-      nowMs > nextStartMs + IN_PROGRESS_GRACE_MS;
+    // "in-progress" mode means ON SITE. Use proximity when we have coords — a
+    // late inspector still driving is inside the appointment window but has NOT
+    // arrived, so don't flip to in-progress on time alone (that would show an
+    // "on site" briefing while they're en route). Without coords we can't
+    // measure distance, so keep the time-based grace as a fallback.
+    const isInProgress = nextStopCoords
+      ? distanceToNext < ARRIVAL_RADIUS_METERS
+      : nowMs > nextStartMs + IN_PROGRESS_GRACE_MS;
 
     const etaMs = nowMs + firstLegDurationSec * 1000;
     const lateByMinutes = Math.max(
@@ -688,6 +739,9 @@ serve(async (req) => {
         etaIso: new Date(etaMs).toISOString(),
         lateByMinutes,
       },
+      // The following stop (if any) with its own drive + "leave by". Shown on
+      // the dashboard once the inspector is on site at the current stop.
+      upNext,
       dailyTotals: {
         totalDriveSec: totalDurationSec,
         totalStaticDriveSec: totalStaticSec,
