@@ -31,6 +31,7 @@ import { useSettingsBadgeTotal } from "../../hooks/useSettingsBadges";
 import { useInspectionStore } from "../../stores/useInspectionStore";
 import { useMapStore } from "../../stores/useMapStore";
 import { useSettingsStore } from "../../stores/useSettingsStore";
+import { isOnline } from "../../utils/connectivity";
 import { syncAll } from "../../utils/sync";
 
 const FAB_SIZE = (theme?.layout?.iconSize?.l ?? 28) * 2;
@@ -134,9 +135,14 @@ export default function MyDayScreen() {
   // Routes if the fingerprint or TTL invalidates). Shared by pull-to-refresh and
   // the automatic on-change refresh below.
   const reconcileDay = useCallback(async () => {
-    await syncAll();
+    // Local list first — always works offline, and refreshing the inspections
+    // list is what pull-to-refresh is really for.
     const fresh = await getAllInspections();
     loadInspections(fresh ?? []);
+    // Network parts only when online (NetInfo-backed). Offline this skips
+    // cleanly — the local list above is already refreshed.
+    if (!isOnline()) return;
+    await syncAll();
     await refreshRoute();
   }, [loadInspections, refreshRoute]);
 

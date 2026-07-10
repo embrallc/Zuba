@@ -111,11 +111,16 @@ export function useMyDayRoute({ enabled = true } = {}) {
       if (invokeErr) {
         logError(invokeErr, "useMyDayRoute.invoke");
         setError({ kind: "fetch_failed", detail: invokeErr?.message });
-        showBanner({
-          message: "Sync network not ready. Pull down on My Day to refresh.",
-          kind: "warning",
-          duration: 4500,
-        });
+        // Don't alarm on a plain connectivity failure — the dashboard keeps its
+        // last route and the local list still refreshes. Banner only when we're
+        // genuinely online but the EF/route service is unreachable.
+        if (isOnline()) {
+          showBanner({
+            message: "Sync network not ready. Pull down on My Day to refresh.",
+            kind: "warning",
+            duration: 4500,
+          });
+        }
         return;
       }
 
