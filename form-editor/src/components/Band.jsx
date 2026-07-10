@@ -1,5 +1,5 @@
 import { useRef } from "react";
-import { bandHeight, makeElement, makeShape } from "../schema";
+import { bandGroups, bandHeight, makeElement, makeShape, objectBBox } from "../schema";
 import { MIME, dropPoint, getPayload } from "../dnd";
 import { useEditorStore } from "../store";
 import ElementView from "./ElementView";
@@ -13,6 +13,9 @@ export default function Band({ band, index, total }) {
     (s) => s.selected?.kind === "band" && s.selected.bandId === band.id,
   );
   const guides = useEditorStore((s) => s.guides);
+  const selectedNode = useEditorStore((s) => s.selected);
+  const selectedIds = useEditorStore((s) => s.selectedIds);
+  const selectionBandId = useEditorStore((s) => s.selectionBandId);
   const select = useEditorStore((s) => s.select);
   const moveBand = useEditorStore((s) => s.moveBand);
   const duplicateBand = useEditorStore((s) => s.duplicateBand);
@@ -24,6 +27,18 @@ export default function Band({ band, index, total }) {
   const { onPointerDown: onResizeBand } = useBandResize(band.id, height);
 
   const selectBand = () => select({ kind: "band", bandId: band.id, id: band.id });
+
+  // Editor-only selection outlines for groups + multi-select. Single element /
+  // shape rings are drawn by their own view. NONE of this prints on the report.
+  const overlays = [];
+  if (selectionBandId === band.id && selectedIds.length >= 2) {
+    for (const oid of selectedIds) {
+      const isGroup = bandGroups(band).some((g) => g.id === oid);
+      overlays.push({ id: oid, bb: objectBBox(band, oid), kind: isGroup ? "group" : "multi" });
+    }
+  } else if (selectedNode?.kind === "group" && selectedNode.bandId === band.id) {
+    overlays.push({ id: selectedNode.id, bb: objectBBox(band, selectedNode.id), kind: "group" });
+  }
 
   function handleDrop(e) {
     // Tiptap consumes binding drops aimed at text; don't double-handle.
@@ -122,6 +137,21 @@ export default function Band({ band, index, total }) {
             <ElementView key={el.id} band={band} el={el} />
           ))}
         </div>
+        {overlays.length > 0 && (
+          <div className="layer sel-overlay" style={{ zIndex: 5 }}>
+            {overlays.map((o) => (
+              <div
+                key={o.id}
+                className={`obj-outline ${o.kind}`}
+                style={{ left: o.bb.x, top: o.bb.y, width: o.bb.w, height: o.bb.h }}
+              >
+                {o.kind === "group" && (
+                  <span className="obj-outline-tag">Group · guide only, not on report</span>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
         {guides
           .filter((g) => g.bandId === band.id)
           .map((g, i) =>

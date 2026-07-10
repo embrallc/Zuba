@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { uploadAsset } from "../api";
 import {
   bindingByKey,
@@ -7,7 +7,8 @@ import {
   photoBindings,
 } from "../bindings";
 import { repeatableSections } from "../../../shared/walkthroughToReport";
-import { useEditorStore } from "../store";
+import { objectBBox } from "../schema";
+import { textMarkActive, useEditorStore } from "../store";
 
 const SWATCHES = [
   "#111827",
@@ -397,6 +398,36 @@ function ImageUpload({ el, update }) {
   );
 }
 
+// Whole-box bold / italic / underline for a text element (applies to all runs).
+// Per-word formatting is still available by double-clicking into the text and
+// using the floating toolbar — this is the quick "make the whole box bold" path.
+// Disabled while editing, where the floating toolbar owns formatting.
+function TextFormatButtons({ band, el }) {
+  const toggle = useEditorStore((s) => s.toggleTextMark);
+  const editing = useEditorStore((s) => s.editingTextId === el.id);
+  const sel = { kind: "element", bandId: band.id, id: el.id };
+  const mk = (label, mark, title) => (
+    <button
+      className={textMarkActive(el, mark) ? "active" : ""}
+      disabled={editing}
+      title={title}
+      onClick={() => toggle(sel, mark)}
+    >
+      {label}
+    </button>
+  );
+  return (
+    <div className="row">
+      <label>Format</label>
+      <span className="seg">
+        {mk(<b>B</b>, "bold", "Bold")}
+        {mk(<i>I</i>, "italic", "Italic")}
+        {mk(<u>U</u>, "underline", "Underline")}
+      </span>
+    </div>
+  );
+}
+
 function ElementPanel({ band, el, update }) {
   const walkthroughSchema = useEditorStore((s) => s.walkthroughSchema);
   const groups = bindingGroups(walkthroughSchema);
@@ -478,6 +509,7 @@ function ElementPanel({ band, el, update }) {
 
       {(el.type === "text" || el.type === "field") && (
         <>
+          {el.type === "text" && <TextFormatButtons band={band} el={el} />}
           <Num
             label="Font size"
             value={el.style.fontSize}
@@ -603,13 +635,246 @@ function ElementPanel({ band, el, update }) {
   );
 }
 
+// Six-way align + (≥3) distribute for the current multi-selection. Operations
+// act on the top-level members only — a group moves as a rigid body.
+function AlignControls() {
+  const align = useEditorStore((s) => s.alignSelection);
+  const distribute = useEditorStore((s) => s.distributeSelection);
+  const count = useEditorStore((s) => s.selectedIds.length);
+  return (
+    <>
+      <label>Align</label>
+      <div className="align-grid">
+        <button className="btn icon" title="Left edges" onClick={() => align("left")}>L</button>
+        <button className="btn icon" title="Horizontal centers" onClick={() => align("hcenter")}>C</button>
+        <button className="btn icon" title="Right edges" onClick={() => align("right")}>R</button>
+        <button className="btn icon" title="Top edges" onClick={() => align("top")}>T</button>
+        <button className="btn icon" title="Vertical centers" onClick={() => align("vcenter")}>M</button>
+        <button className="btn icon" title="Bottom edges" onClick={() => align("bottom")}>B</button>
+      </div>
+      {count >= 3 && (
+        <>
+          <label>Distribute evenly</label>
+          <div className="row">
+            <button className="btn" onClick={() => distribute("h")}>Horizontal</button>
+            <button className="btn" onClick={() => distribute("v")}>Vertical</button>
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+
+// Set a uniform width/height across the whole selection. Seeded from the first
+// selected object's size so "make them all match this one" is a single edit.
+// (Groups are skipped — resize a group by ungrouping first.)
+function SizeControls() {
+  const resize = useEditorStore((s) => s.resizeSelection);
+  const schema = useEditorStore((s) => s.schema);
+  const selectedIds = useEditorStore((s) => s.selectedIds);
+  const selectionBandId = useEditorStore((s) => s.selectionBandId);
+
+  const band = schema?.bands.find((b) => b.id === selectionBandId);
+  const firstBB = band && selectedIds[0] ? objectBBox(band, selectedIds[0]) : null;
+  const seedW = firstBB ? Math.round(firstBB.w) : "";
+  const seedH = firstBB ? Math.round(firstBB.h) : "";
+  const selKey = selectedIds.join(",");
+
+  const [w, setW] = useState(seedW);
+  const [h, setH] = useState(seedH);
+  // Re-seed only when the SET of selected objects changes (not on every edit),
+  // so typing isn't clobbered by the apply that follows.
+  useEffect(() => {
+    setW(seedW);
+    setH(seedH);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selKey]);
+
+  return (
+    <>
+      <label>Size (applies to all)</label>
+      <div className="row2">
+        <div className="row">
+          <label>W</label>
+          <input
+            type="number"
+            min={16}
+            value={w}
+            onChange={(e) => setW(e.target.value)}
+            onBlur={() => w !== "" && resize("w", parseFloat(w))}
+            onKeyDown={(e) => e.key === "Enter" && w !== "" && resize("w", parseFloat(w))}
+          />
+        </div>
+        <div className="row">
+          <label>H</label>
+          <input
+            type="number"
+            min={10}
+            value={h}
+            onChange={(e) => setH(e.target.value)}
+            onBlur={() => h !== "" && resize("h", parseFloat(h))}
+            onKeyDown={(e) => e.key === "Enter" && h !== "" && resize("h", parseFloat(h))}
+          />
+        </div>
+      </div>
+    </>
+  );
+}
+
+// Re-space the selection to an exact pixel gap along an axis (first item fixed).
+function GapControls() {
+  const setGap = useEditorStore((s) => s.setGapSelection);
+  const [h, setH] = useState(12);
+  const [v, setV] = useState(12);
+  return (
+    <>
+      <label>Even gap (px)</label>
+      <div className="row">
+        <label>Across</label>
+        <input type="number" min={0} value={h} onChange={(e) => setH(parseFloat(e.target.value) || 0)} />
+        <button className="btn" onClick={() => setGap("h", h)}>Set</button>
+      </div>
+      <div className="row">
+        <label>Down</label>
+        <input type="number" min={0} value={v} onChange={(e) => setV(parseFloat(e.target.value) || 0)} />
+        <button className="btn" onClick={() => setGap("v", v)}>Set</button>
+      </div>
+    </>
+  );
+}
+
+// Shared styling applied to every text/field member (no single current value,
+// so these are "set" controls that write to all).
+function SharedStyle() {
+  const applyShared = useEditorStore((s) => s.applySharedStyle);
+  const applyBold = useEditorStore((s) => s.applySharedBold);
+  const [size, setSize] = useState("");
+  const commitSize = () => {
+    const n = parseFloat(size);
+    if (n) applyShared({ fontSize: n });
+  };
+  return (
+    <>
+      <label>Apply to all text</label>
+      <div className="row">
+        <label>Font size</label>
+        <input
+          type="number"
+          min={7}
+          placeholder="—"
+          value={size}
+          onChange={(e) => setSize(e.target.value)}
+          onBlur={commitSize}
+          onKeyDown={(e) => e.key === "Enter" && commitSize()}
+        />
+      </div>
+      <div className="row">
+        <label>Align</label>
+        <Seg
+          options={[
+            { value: "left", label: "L" },
+            { value: "center", label: "C" },
+            { value: "right", label: "R" },
+          ]}
+          value={null}
+          onChange={(align) => applyShared({ align })}
+        />
+      </div>
+      <div className="row">
+        <label>Bold</label>
+        <Seg
+          options={[
+            { value: false, label: "Off" },
+            { value: true, label: "On" },
+          ]}
+          value={null}
+          onChange={(bold) => applyBold(bold)}
+        />
+      </div>
+      <Swatches label="Color" value={null} onChange={(color) => applyShared({ color })} />
+    </>
+  );
+}
+
+function MultiSelectPanel() {
+  const count = useEditorStore((s) => s.selectedIds.length);
+  const group = useEditorStore((s) => s.groupSelection);
+  const del = useEditorStore((s) => s.deleteSelection);
+  return (
+    <>
+      <h2>{count} items selected</h2>
+      <p className="muted">Align, size, or space these, or group them so they move as one.</p>
+      <AlignControls />
+      <SizeControls />
+      <GapControls />
+      <hr />
+      <SharedStyle />
+      <hr />
+      <button className="btn primary block" onClick={group}>
+        ⧉ Group (Ctrl+G)
+      </button>
+      <div className="row">
+        <button className="btn danger" onClick={del}>Delete all</button>
+      </div>
+    </>
+  );
+}
+
+function GroupPanel({ band, group }) {
+  const ungroup = useEditorStore((s) => s.ungroupSelection);
+  const duplicateNode = useEditorStore((s) => s.duplicateNode);
+  const del = useEditorStore((s) => s.deleteSelection);
+  const translate = useEditorStore((s) => s.translateObjectBy);
+  const bb = objectBBox(band, group.id);
+  return (
+    <>
+      <h2>Group</h2>
+      <p className="muted">{group.memberIds.length} items · moves and restyles as one.</p>
+      <p className="note-guide">
+        The dashed outline is a guide — it won't appear on the report.
+      </p>
+      <div className="row2">
+        <Num label="X" value={bb.x} onChange={(x) => translate(band.id, group.id, x - bb.x, 0)} />
+        <Num label="Y" value={bb.y} onChange={(y) => translate(band.id, group.id, 0, y - bb.y)} />
+      </div>
+      <SharedStyle />
+      <hr />
+      <div className="row">
+        <button
+          className="btn"
+          onClick={() => duplicateNode({ kind: "group", bandId: band.id, id: group.id })}
+        >
+          Duplicate
+        </button>
+        <button className="btn" onClick={ungroup}>
+          Ungroup (Ctrl+Shift+G)
+        </button>
+      </div>
+      <div className="row">
+        <button className="btn danger" onClick={del}>Delete group</button>
+      </div>
+    </>
+  );
+}
+
 export default function Inspector() {
   const schema = useEditorStore((s) => s.schema);
   const selected = useEditorStore((s) => s.selected);
+  const selectedIds = useEditorStore((s) => s.selectedIds);
+  const selectionBandId = useEditorStore((s) => s.selectionBandId);
   const updateNode = useEditorStore((s) => s.updateNode);
   const addBand = useEditorStore((s) => s.addBand);
 
   if (!schema) return <div className="inspector" />;
+
+  // Multi-selection takes precedence over any single selection.
+  if (selectedIds.length >= 2 && selectionBandId) {
+    return (
+      <div className="inspector">
+        <MultiSelectPanel />
+      </div>
+    );
+  }
 
   const band = selected ? schema.bands.find((b) => b.id === selected.bandId) : null;
 
@@ -635,13 +900,16 @@ export default function Inspector() {
           Select anything on the page to edit its properties here.
           <br />
           <br />
-          Drag to move · handles to resize · Alt disables snapping · Del
-          deletes · Ctrl+Z undo.
+          Drag to move · handles to resize · Ctrl-click to multi-select · Alt
+          disables snapping · Del deletes · Ctrl+Z undo.
         </p>
       </>
     );
   } else if (selected.kind === "band") {
     body = <BandPanel band={band} />;
+  } else if (selected.kind === "group") {
+    const group = (band.groups ?? []).find((g) => g.id === selected.id);
+    body = group ? <GroupPanel band={band} group={group} /> : null;
   } else if (selected.kind === "shape") {
     const shape = band.shapes.find((s) => s.id === selected.id);
     body = shape ? (
