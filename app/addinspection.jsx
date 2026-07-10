@@ -21,6 +21,7 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import AddressAutocomplete from "../components/AddressAutocomplete";
 import KeyboardToolbar from "../components/KeyboardToolbar";
 import { insertInspection, updateInspection } from "../db/inspections";
 import { logError } from "../db/logs";
@@ -171,6 +172,13 @@ export default function AddInspectionScreen() {
   // is in-flight, so handleSave can await it rather than saving stale null coords.
   const geocodingRef = useRef(null);
 
+  // When an address is chosen from Places Autocomplete we already have the
+  // authoritative lat/lng, so the manual geocode effect below must NOT re-run for
+  // it (the on-device geocoder can snap a house number to the nearest valid one).
+  // This holds the exact "line1|city|state|zip" we applied from Places; the
+  // geocode effect skips while the form still matches it.
+  const placesAppliedRef = useRef(null);
+
   // ── Keyboard toolbar state ────────────────────────────────────────────────
   const inputRefs = useRef({});
   const [focusedField, setFocusedField] = useState(null);
@@ -217,6 +225,15 @@ export default function AddInspectionScreen() {
   useEffect(() => {
     const { AddressLine1, City, State, ZipCode } = form;
     if (!AddressLine1 || !City || !State || !ZipCode) {
+      geocodingRef.current = null;
+      return;
+    }
+
+    // Address chosen from Places Autocomplete — its lat/lng is already set and
+    // authoritative; skip the on-device geocode (which can snap to a neighbor).
+    if (
+      placesAppliedRef.current === `${AddressLine1}|${City}|${State}|${ZipCode}`
+    ) {
       geocodingRef.current = null;
       return;
     }
@@ -758,6 +775,26 @@ export default function AddInspectionScreen() {
           </View>
 
           <Text style={styles.sectionLabel}>LOCATION</Text>
+
+          <AddressAutocomplete
+            onSelectAddress={({ line1, city, state, zip, lat, lng }) => {
+              setForm((prev) => ({
+                ...prev,
+                AddressLine1: line1 || prev.AddressLine1,
+                City: city || prev.City,
+                State: state || prev.State,
+                ZipCode: zip || prev.ZipCode,
+              }));
+              if (lat != null && lng != null) {
+                setGeo({ Latitude: lat, Longitude: lng });
+                // Mark this exact address as Places-sourced so the geocode effect
+                // leaves its authoritative coordinates alone.
+                placesAppliedRef.current = `${line1 || ""}|${city || ""}|${
+                  state || ""
+                }|${zip || ""}`;
+              }
+            }}
+          />
 
           <Field label="Address Line 1">
             <TextInput

@@ -151,6 +151,7 @@ PUBLIC (safe in app bundle / committed config) — never the service-role key:
 | `EXPO_PUBLIC_SUPABASE_URL` | EAS env (preview/production), `.env.local` (local) |
 | `EXPO_PUBLIC_SUPABASE_KEY` (anon/publishable) | EAS env, `.env.local` |
 | `EXPO_PUBLIC_REPORT_WORKER_URL` | EAS env, `.env.local` |
+| `EXPO_PUBLIC_GOOGLE_PLACES_KEY` | EAS env, `.env.local` — **application-restricted** client key (iOS bundle ids + Places API New only); ships in the bundle but the value is never committed |
 | `VITE_API_BASE` (form-editor) | `form-editor/.env.production` / `.env.staging` (committed; public URL) |
 
 SERVER-SIDE secrets — set per Supabase project via `supabase secrets set` (cloud) or `supabase/functions/.env` (local). Never committed:
