@@ -400,6 +400,58 @@ select.zoom {
   left: 0;
   right: 0;
 }
+
+/* ── Grouping + multi-select overlays (EDITOR guides — never printed) ───────── */
+.sel-overlay {
+  pointer-events: none;
+}
+.obj-outline {
+  position: absolute;
+  pointer-events: none;
+  border-radius: 4px;
+}
+.obj-outline.multi {
+  outline: 1.5px solid var(--primary);
+  outline-offset: 2px;
+  background: var(--primary-ghost);
+}
+.obj-outline.group {
+  outline: 1.5px dashed var(--primary);
+  outline-offset: 3px;
+}
+.obj-outline-tag {
+  position: absolute;
+  top: -18px;
+  left: 0;
+  font-size: 10px;
+  line-height: 1;
+  padding: 3px 6px;
+  border-radius: 4px;
+  background: var(--primary);
+  color: #fff;
+  white-space: nowrap;
+}
+/* Align-button grid, full-width buttons, and the "guide only" note. */
+.align-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.btn.block {
+  width: 100%;
+  justify-content: center;
+  margin-bottom: 8px;
+}
+.note-guide {
+  font-size: 12px;
+  color: var(--text-subtle);
+  background: var(--primary-ghost);
+  border-left: 3px solid var(--primary);
+  padding: 6px 8px;
+  border-radius: 6px;
+  margin: 4px 0 10px;
+}
 .band-resize {
   position: absolute;
   left: 0;

@@ -106,23 +106,31 @@ export default function ReportEditor() {
       if (inField || st.editingTextId) return;
 
       const mod = e.ctrlKey || e.metaKey;
+      const hasMulti = st.selectedIds.length >= 2;
       if (mod && e.key.toLowerCase() === "z") {
         e.preventDefault();
         e.shiftKey ? st.redo() : st.undo();
       } else if (mod && e.key.toLowerCase() === "y") {
         e.preventDefault();
         st.redo();
+      } else if (mod && e.key.toLowerCase() === "g") {
+        e.preventDefault();
+        if (e.shiftKey) st.ungroupSelection();
+        else st.groupSelection();
       } else if (mod && e.key.toLowerCase() === "d") {
         if (st.selected && st.selected.kind !== "band") {
           e.preventDefault();
           st.duplicateNode(st.selected);
         }
       } else if (e.key === "Delete" || e.key === "Backspace") {
-        if (st.selected) {
+        if (st.selected || hasMulti) {
           e.preventDefault();
           st.deleteSelection();
         }
-      } else if (e.key.startsWith("Arrow") && st.selected && st.selected.kind !== "band") {
+      } else if (
+        e.key.startsWith("Arrow") &&
+        ((st.selected && st.selected.kind !== "band") || hasMulti)
+      ) {
         e.preventDefault();
         const step = e.shiftKey ? 10 : 1;
         const d = {

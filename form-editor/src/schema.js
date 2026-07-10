@@ -29,7 +29,18 @@ export function makeBand(kind = "static", name) {
     minHeightPx: 140,
     shapes: [],
     elements: [],
+    // Editor-only grouping metadata. Members are element/shape/group ids in this
+    // same band (nestable). Groups have NO frame — bbox is derived from members.
+    // The PDF worker ignores this field entirely; leaves keep absolute frames.
+    groups: [],
   };
+}
+
+// A group is pure metadata: a named set of member ids (elements, shapes, or
+// other groups in the same band). Selecting/moving/aligning operate on the
+// top-level group; children keep their absolute frames.
+export function makeGroup(memberIds = []) {
+  return { id: id(), type: "group", memberIds: [...memberIds] };
 }
 
 export function makeShape(shape, frame = {}) {
@@ -120,9 +131,16 @@ export function makeElement(type, frame = {}, extra = {}) {
 
 export function cloneWithNewIds(node) {
   const copy = structuredClone(node);
+  // First pass: give every object with an `id` a fresh id, recording old→new so
+  // we can fix up id *references* afterward.
+  const idMap = new Map();
   const walk = (n) => {
     if (n && typeof n === "object") {
-      if (typeof n.id === "string") n.id = id();
+      if (typeof n.id === "string") {
+        const nid = id();
+        idMap.set(n.id, nid);
+        n.id = nid;
+      }
       for (const v of Object.values(n)) {
         if (Array.isArray(v)) v.forEach(walk);
         else walk(v);
@@ -130,6 +148,20 @@ export function cloneWithNewIds(node) {
     }
   };
   walk(copy);
+  // Second pass: remap id-reference arrays (group memberIds) to the cloned ids,
+  // so duplicating a band/group doesn't leave members pointing at the originals.
+  const remap = (n) => {
+    if (n && typeof n === "object") {
+      if (Array.isArray(n.memberIds)) {
+        n.memberIds = n.memberIds.map((m) => idMap.get(m) ?? m);
+      }
+      for (const v of Object.values(n)) {
+        if (Array.isArray(v)) v.forEach(remap);
+        else remap(v);
+      }
+    }
+  };
+  remap(copy);
   return copy;
 }
 
@@ -258,3 +290,122 @@ export const clampFrame = (f) => ({
   x: Math.max(0, Math.min(f.x, BAND_W - Math.max(16, Math.min(f.w, BAND_W)))),
   y: Math.max(0, f.y),
 });
+
+// ── Grouping helpers ─────────────────────────────────────────────────────────
+// All pure + tolerant of legacy bands that predate the `groups` field.
+
+export const bandGroups = (band) => band?.groups ?? [];
+
+// The group that DIRECTLY lists `memberId`, or null.
+const directGroupOf = (band, memberId) =>
+  bandGroups(band).find((g) => g.memberIds.includes(memberId)) ?? null;
+
+// Is this id referenced by any group (i.e. not a top-level object)?
+const isContained = (band, someId) =>
+  bandGroups(band).some((g) => g.memberIds.includes(someId));
+
+// Walk up to the highest-level group that transitively contains `memberId`,
+// or null if it isn't in any group. Clicking a grouped child resolves here.
+export function rootGroupOf(band, memberId) {
+  let g = directGroupOf(band, memberId);
+  if (!g) return null;
+  let parent = directGroupOf(band, g.id);
+  while (parent) {
+    g = parent;
+    parent = directGroupOf(band, g.id);
+  }
+  return g;
+}
+
+// Find any id (element / shape / group) → { kind, node }.
+export function findNode(band, someId) {
+  const e = (band?.elements ?? []).find((n) => n.id === someId);
+  if (e) return { kind: "element", node: e };
+  const s = (band?.shapes ?? []).find((n) => n.id === someId);
+  if (s) return { kind: "shape", node: s };
+  const g = bandGroups(band).find((n) => n.id === someId);
+  if (g) return { kind: "group", node: g };
+  return null;
+}
+
+// Top-level objects in a band (elements/shapes/groups not inside another group),
+// as { kind, id } refs. Shapes first, then elements, then groups.
+export function topLevelObjects(band) {
+  const out = [];
+  for (const s of band?.shapes ?? [])
+    if (!isContained(band, s.id)) out.push({ kind: "shape", id: s.id });
+  for (const e of band?.elements ?? [])
+    if (!isContained(band, e.id)) out.push({ kind: "element", id: e.id });
+  for (const g of bandGroups(band))
+    if (!isContained(band, g.id)) out.push({ kind: "group", id: g.id });
+  return out;
+}
+
+// All leaf (element/shape) ids under an object id, recursing through groups.
+export function objectLeafIds(band, someId) {
+  const found = findNode(band, someId);
+  if (!found) return [];
+  if (found.kind !== "group") return [someId];
+  const out = [];
+  for (const m of found.node.memberIds) out.push(...objectLeafIds(band, m));
+  return out;
+}
+
+// All group ids at/under an object id (self + descendant groups).
+export function descendantGroupIds(band, someId) {
+  const found = findNode(band, someId);
+  if (!found || found.kind !== "group") return [];
+  const out = [someId];
+  for (const m of found.node.memberIds) out.push(...descendantGroupIds(band, m));
+  return out;
+}
+
+// Bounding box of an object: an element/shape frame, or the union for a group.
+export function objectBBox(band, someId) {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const lid of objectLeafIds(band, someId)) {
+    const f = findNode(band, lid)?.node?.frame;
+    if (!f) continue;
+    minX = Math.min(minX, f.x);
+    minY = Math.min(minY, f.y);
+    maxX = Math.max(maxX, f.x + f.w);
+    maxY = Math.max(maxY, f.y + f.h);
+  }
+  if (minX === Infinity) return { x: 0, y: 0, w: 0, h: 0 };
+  return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+}
+
+// Translate every leaf under an object by (dx,dy) in place (immer draft-safe).
+// Keeps coords >= 0; callers bound the delta so a group stays rigid in-bounds.
+export function translateLeaves(band, someId, dx, dy) {
+  for (const lid of objectLeafIds(band, someId)) {
+    const f = findNode(band, lid)?.node?.frame;
+    if (!f) continue;
+    f.x = Math.max(0, f.x + dx);
+    f.y = Math.max(0, f.y + dy);
+  }
+}
+
+// Drop dangling member refs and dissolve groups left with < 2 members. Call
+// after any structural delete so groups never reference removed nodes.
+export function pruneGroups(band) {
+  if (!band?.groups?.length) return;
+  const exists = (someId) =>
+    (band.elements ?? []).some((e) => e.id === someId) ||
+    (band.shapes ?? []).some((s) => s.id === someId) ||
+    band.groups.some((g) => g.id === someId);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const g of band.groups) {
+      const kept = g.memberIds.filter(exists);
+      if (kept.length !== g.memberIds.length) {
+        g.memberIds = kept;
+        changed = true;
+      }
+    }
+    const before = band.groups.length;
+    band.groups = band.groups.filter((g) => g.memberIds.length >= 2);
+    if (band.groups.length !== before) changed = true;
+  }
+}
