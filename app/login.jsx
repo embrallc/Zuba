@@ -154,7 +154,7 @@ export default function LoginScreen() {
               resizeMode="contain"
             />
             <Text style={styles.appName}>Zanbi</Text>
-            <Text style={styles.tagline}>Home Inspection Management</Text>
+            <Text style={styles.tagline}>Inspection Management</Text>
           </View>
 
           {/* Post-signup: verification-pending screen */}

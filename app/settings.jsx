@@ -655,6 +655,14 @@ export default function SettingsScreen() {
           onReducePlan={handleReducePlan}
         />
 
+        <Text style={styles.sectionLabel}>SUPPORT</Text>
+
+        <NavRow
+          label="Ideas, Feedback, & Issues"
+          description="Share feature ideas, feedback on the app, or report a problem — we read every note"
+          onPress={() => router.push("/feedback")}
+        />
+
         <Text style={styles.sectionLabel}>ACCOUNT</Text>
 
         <TouchableOpacity
