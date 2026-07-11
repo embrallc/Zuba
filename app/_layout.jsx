@@ -456,6 +456,10 @@ export default function RootLayout() {
           options={{ headerShown: false, animation: "slide_from_right" }}
         />
         <Stack.Screen
+          name="feedback"
+          options={{ headerShown: false, animation: "slide_from_right" }}
+        />
+        <Stack.Screen
           name="calendarsettings"
           options={{ headerShown: false, animation: "slide_from_right" }}
         />

@@ -18,6 +18,7 @@ import {
   getOrgPaymentStatus,
   setOrgPaymentPolicy,
 } from "../db/organizations";
+import { isOnline } from "../utils/connectivity";
 import { useSettingsStore } from "../stores/useSettingsStore";
 
 // Owner-only "what gets sent automatically on completion" settings. The report
@@ -34,14 +35,34 @@ export default function AutoDocSendScreen() {
 
   const [status, setStatus] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [offline, setOffline] = useState(false);
 
   const reload = useCallback(async () => {
-    const s = await getOrgPaymentStatus(orgSk);
-    setStatus(s);
-    // Mirror the invoice policy into the store so the completion flow (which
-    // prompts for an amount when this is on) sees changes without a reboot.
-    if (s) setAutoSendInvoice(!!s.auto_send_invoice);
-    setLoading(false);
+    setLoading(true);
+    // These are ORG-LEVEL policies that live only in Supabase — there's no local
+    // copy. Offline (or on a failed fetch) we can't know their real values, so we
+    // must NOT render the toggles: defaulting them to off reads as "you never
+    // turned this on" when it may well be on. Show an offline notice instead.
+    if (!isOnline()) {
+      setOffline(true);
+      setStatus(null);
+      setLoading(false);
+      return;
+    }
+    try {
+      const s = await getOrgPaymentStatus(orgSk);
+      setStatus(s);
+      setOffline(false);
+      // Mirror the invoice policy into the store so the completion flow (which
+      // prompts for an amount when this is on) sees changes without a reboot.
+      if (s) setAutoSendInvoice(!!s.auto_send_invoice);
+    } catch (e) {
+      logError(e, "AutoDocSend.reload");
+      setOffline(true);
+      setStatus(null);
+    } finally {
+      setLoading(false);
+    }
   }, [orgSk, setAutoSendInvoice]);
 
   useEffect(() => {
@@ -95,6 +116,34 @@ export default function AutoDocSendScreen() {
             color={theme.colors.primary}
             style={{ marginTop: theme.spacing.xl }}
           />
+        ) : offline ? (
+          <View style={styles.card}>
+            <View style={styles.offlineHead}>
+              <MaterialCommunityIcons
+                name="wifi-off"
+                size={20}
+                color={theme.colors.textFine}
+              />
+              <Text style={styles.cardTitle}>Can't load these settings</Text>
+            </View>
+            <Text style={styles.cardBody}>
+              These automatic-send options are stored with your organization, so
+              they need an internet connection to load. Reconnect and tap Retry —
+              your current settings are safe and unchanged.
+            </Text>
+            <TouchableOpacity
+              style={styles.retryBtn}
+              onPress={reload}
+              activeOpacity={0.8}
+            >
+              <MaterialCommunityIcons
+                name="refresh"
+                size={16}
+                color={theme.colors.primary}
+              />
+              <Text style={styles.retryText}>Retry</Text>
+            </TouchableOpacity>
+          </View>
         ) : (
           <>
             <Text style={styles.intro}>
@@ -208,6 +257,29 @@ const styles = StyleSheet.create({
     color: theme.colors.textSubtle,
     marginTop: 2,
     lineHeight: 19,
+  },
+  offlineHead: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing.s,
+    marginBottom: theme.spacing.xs,
+  },
+  retryBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    alignSelf: "flex-start",
+    marginTop: theme.spacing.m,
+    borderWidth: theme.layout.borderWidth.base,
+    borderColor: theme.colors.primary,
+    borderRadius: theme.layout.borderRadius.full,
+    paddingHorizontal: theme.spacing.m,
+    paddingVertical: 6,
+  },
+  retryText: {
+    ...theme.typography.label,
+    color: theme.colors.primary,
+    fontWeight: "600",
   },
   sectionLabel: {
     ...theme.typography.overline,
