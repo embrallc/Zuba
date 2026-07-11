@@ -4,6 +4,7 @@ import { useRouter } from "expo-router";
 import { useState } from "react";
 import {
   ActivityIndicator,
+  Image,
   KeyboardAvoidingView,
   Platform,
   SafeAreaView,
@@ -147,14 +148,12 @@ export default function LoginScreen() {
         >
           {/* Logo / brand */}
           <View style={styles.brand}>
-            <View style={styles.logoCircle}>
-              <MaterialCommunityIcons
-                name="clipboard-check-outline"
-                size={42}
-                color="#fff"
-              />
-            </View>
-            <Text style={styles.appName}>Embra</Text>
+            <Image
+              source={require("../assets/images/icon.png")}
+              style={styles.logo}
+              resizeMode="contain"
+            />
+            <Text style={styles.appName}>Zanbi</Text>
             <Text style={styles.tagline}>Home Inspection Management</Text>
           </View>
 
@@ -357,13 +356,10 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: theme.spacing.xl,
   },
-  logoCircle: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: theme.colors.primary,
-    alignItems: "center",
-    justifyContent: "center",
+  logo: {
+    width: 92,
+    height: 92,
+    borderRadius: 22,
     marginBottom: theme.spacing.m,
     ...theme.shadows.medium,
   },

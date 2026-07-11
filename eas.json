@@ -14,6 +14,11 @@
       "environment": "preview",
       "env": { "EXPO_PUBLIC_ENV": "preview" }
     },
+    "preview-testflight": {
+      "extends": "preview",
+      "distribution": "store",
+      "autoIncrement": true
+    },
     "production": {
       "autoIncrement": true,
       "environment": "production",
@@ -21,6 +26,7 @@
     }
   },
   "submit": {
+    "preview-testflight": {},
     "production": {}
   }
 }
