@@ -4,10 +4,15 @@ import RevenueCatUI, { PAYWALL_RESULT } from "react-native-purchases-ui";
 import { logError } from "../db/logs";
 import { isOnline } from "./connectivity";
 
-// Test Store key — full purchase flow works against RevenueCat's simulator.
-// Replace with separate iOS/Android production keys before store submission.
-const API_KEY_IOS = "test_qiUnPrUuAJAugaWbUOnLjyDOxwL";
-const API_KEY_ANDROID = "test_qiUnPrUuAJAugaWbUOnLjyDOxwL";
+// RevenueCat SDK keys. These are PUBLIC (safe to ship, like the Supabase anon
+// key). The *Test Store* key (test_…) works ONLY in debug / dev-client builds —
+// it deliberately CRASHES release builds (TestFlight / App Store) as a safeguard.
+// So release builds MUST use the real platform keys: set EXPO_PUBLIC_RC_IOS_KEY /
+// EXPO_PUBLIC_RC_ANDROID_KEY in the EAS environment (preview + production). Local
+// dev falls back to the Test Store key so the simulator purchase flow still works.
+const TEST_STORE_KEY = "test_qiUnPrUuAJAugaWbUOnLjyDOxwL";
+const API_KEY_IOS = process.env.EXPO_PUBLIC_RC_IOS_KEY ?? TEST_STORE_KEY;
+const API_KEY_ANDROID = process.env.EXPO_PUBLIC_RC_ANDROID_KEY ?? TEST_STORE_KEY;
 
 export const ENTITLEMENT_ID = "Embra LLC Pro";
 

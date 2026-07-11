@@ -499,7 +499,27 @@ export default function AddInspectionScreen() {
           <Text style={styles.navTitle}>
             {isEditing ? "Edit Inspection" : "New Inspection"}
           </Text>
-          <View style={{ width: theme.layout.iconSize.l }} />
+          {/* Quick-save — same action as the bottom "Save Inspection" button, so
+              the user can commit from anywhere in the modal without scrolling. */}
+          <TouchableOpacity
+            onPress={handleSave}
+            disabled={saving}
+            hitSlop={theme.layout.hitSlop.medium}
+            style={styles.navSave}
+            activeOpacity={0.7}
+            accessibilityLabel="Save inspection"
+            accessibilityRole="button"
+          >
+            {saving ? (
+              <ActivityIndicator size="small" color={theme.colors.primary} />
+            ) : (
+              <MaterialCommunityIcons
+                name="check"
+                size={theme.layout.iconSize.l}
+                color={theme.colors.primary}
+              />
+            )}
+          </TouchableOpacity>
         </View>
 
         <ScrollView
@@ -991,6 +1011,11 @@ const styles = StyleSheet.create({
   },
   navTitle: {
     ...theme.typography.h4,
+  },
+  navSave: {
+    width: theme.layout.iconSize.l,
+    alignItems: "center",
+    justifyContent: "center",
   },
   scroll: {
     flex: 1,

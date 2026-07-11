@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "ClientManagment",
+    "name": "Zanbi",
     "slug": "ClientManagment",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -21,8 +21,8 @@
       "bundleIdentifier": "com.embrallc.ClientManagment",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
-        "NSCalendarsFullAccessUsageDescription": "Allow ClientManagement to view your calendars and add your scheduled inspections to your calendar.",
-        "NSCalendarsWriteOnlyAccessUsageDescription": "Allow ClientManagement to add your scheduled inspections to your calendar."
+        "NSCalendarsFullAccessUsageDescription": "Allow Zanbi to view your calendars and add your scheduled inspections to your calendar.",
+        "NSCalendarsWriteOnlyAccessUsageDescription": "Allow Zanbi to add your scheduled inspections to your calendar."
       }
     },
     "android": {
@@ -63,8 +63,8 @@
       [
         "expo-media-library",
         {
-          "photosPermission": "Allow ClientManagement to access your photos to organize inspection photos into an album.",
-          "savePhotosPermission": "Allow ClientManagement to save inspection photos to your device.",
+          "photosPermission": "Allow Zanbi to access your photos to organize inspection photos into an album.",
+          "savePhotosPermission": "Allow Zanbi to save inspection photos to your device.",
           "isAccessMediaLocationEnabled": false
         }
       ],
@@ -80,7 +80,7 @@
       [
         "expo-calendar",
         {
-          "calendarPermission": "Allow ClientManagement to view your calendars and add your scheduled inspections to your calendar."
+          "calendarPermission": "Allow Zanbi to view your calendars and add your scheduled inspections to your calendar."
         }
       ]
     ],
