@@ -3,6 +3,7 @@ import { theme } from "@theme";
 import { Tabs } from "expo-router";
 import { AnimatePresence, MotiView } from "moti";
 import { View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 function AnimatedTabIcon({ name, focused, color, size }) {
   return (
@@ -40,6 +41,11 @@ function AnimatedTabIcon({ name, focused, color, size }) {
 }
 
 export default function TabsLayout() {
+  // Bottom safe-area inset (home indicator on notched iPhones / gesture-nav
+  // Androids). Supplying an explicit numeric `height` to tabBarStyle overrides
+  // React Navigation's built-in inset math, so we add the inset ourselves —
+  // otherwise the icons/labels sit crammed against the home indicator.
+  const insets = useSafeAreaInsets();
   return (
     <Tabs
       screenOptions={{
@@ -53,8 +59,8 @@ export default function TabsLayout() {
           shadowOpacity: 0.1,
           shadowRadius: 16,
           elevation: 16,
-          height: 62,
-          paddingBottom: 6,
+          height: 62 + insets.bottom,
+          paddingBottom: 6 + insets.bottom,
           paddingTop: 4,
         },
         tabBarActiveTintColor: theme.colors.primary,
