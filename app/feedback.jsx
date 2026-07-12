@@ -6,7 +6,6 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
@@ -14,6 +13,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { logError, logEvent } from "../db/logs";
 import { useSettingsStore } from "../stores/useSettingsStore";
 import { FEEDBACK_MAX, submitFeedback } from "../utils/feedback";
@@ -55,7 +55,7 @@ export default function FeedbackScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.safe}>
+    <SafeAreaView style={styles.safe} edges={["top", "left", "right"]}>
       <View style={styles.navbar}>
         <TouchableOpacity
           onPress={() => router.back()}

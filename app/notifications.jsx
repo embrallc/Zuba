@@ -4,7 +4,6 @@ import { useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Switch,
@@ -12,6 +11,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { logError } from "../db/logs";
 import {
   NOTIFICATION_NAMES,
@@ -104,7 +104,7 @@ export default function NotificationsScreen() {
   }
 
   return (
-    <SafeAreaView style={styles?.safe}>
+    <SafeAreaView style={styles?.safe} edges={["top", "left", "right"]}>
       <View style={styles?.navbar}>
         <TouchableOpacity
           onPress={() => router.back()}

@@ -6,13 +6,13 @@ import { useCallback, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
-  SafeAreaView,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import PaymentsUpsellSheet from "../components/PaymentsUpsellSheet";
 import RequestPaymentSheet from "../components/RequestPaymentSheet";
 import {
@@ -265,7 +265,7 @@ export default function ArchiveScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.safe}>
+    <SafeAreaView style={styles.safe} edges={["top", "left", "right"]}>
       <View style={styles.navbar}>
         <TouchableOpacity
           onPress={() => router.back()}

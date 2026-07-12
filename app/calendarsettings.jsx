@@ -6,7 +6,6 @@ import {
   ActivityIndicator,
   Alert,
   Linking,
-  SafeAreaView,
   ScrollView,
   Share,
   StyleSheet,
@@ -15,6 +14,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { logError } from "../db/logs";
 import { useCalendarStore } from "../stores/useCalendarStore";
 import {
@@ -152,7 +152,7 @@ export default function CalendarSettingsScreen() {
   const subTogglesDisabled = !enabled || !calendarId;
 
   return (
-    <SafeAreaView style={styles.safe}>
+    <SafeAreaView style={styles.safe} edges={["top", "left", "right"]}>
       <View style={styles.navbar}>
         <TouchableOpacity
           onPress={() => router.back()}
