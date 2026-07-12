@@ -5,13 +5,13 @@ import { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { logError } from "../db/logs";
 import { getOrgPaymentStatus } from "../db/organizations";
 import { useSettingsStore } from "../stores/useSettingsStore";
@@ -118,7 +118,7 @@ export default function PaymentsSettingsScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.safe}>
+    <SafeAreaView style={styles.safe} edges={["top", "left", "right"]}>
       <View style={styles.navbar}>
         <TouchableOpacity
           onPress={() => router.back()}
