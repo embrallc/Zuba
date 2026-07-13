@@ -298,6 +298,12 @@ export default function InspectionCard({ inspection, onPress }) {
   const [completeGated, setCompleteGated] = useState(false);
   const smsRef = useRef(null);
   const swipeRef = useRef(null);
+  // A swipe-to-reveal drag ends in a touch release that the inner RN
+  // TouchableOpacity can misread as a tap (more reliably on release builds like
+  // TestFlight), which would fire the card's onPress and open the edit modal.
+  // Set true the moment a swipe drag begins and checked in the tap handler so
+  // that stray tap is dropped; a genuine tap (no drag) never sets it.
+  const swipingRef = useRef(false);
   const removeFromStore = useInspectionStore((s) => s.remove);
   const showBanner = useBannerStore((s) => s.show);
   const userProfile = useSettingsStore((s) => s.userProfile);
@@ -620,6 +626,15 @@ export default function InspectionCard({ inspection, onPress }) {
     );
   }
 
+  function handleCardPress() {
+    if (swipingRef.current) {
+      // Tail of a swipe gesture — swallow this tap, don't open the modal.
+      swipingRef.current = false;
+      return;
+    }
+    onPress?.();
+  }
+
   return (
     <ReanimatedSwipeable
       ref={swipeRef}
@@ -628,10 +643,16 @@ export default function InspectionCard({ inspection, onPress }) {
       overshootRight={false}
       friction={2}
       containerStyle={styles.swipeContainer}
+      onSwipeableOpenStartDrag={() => {
+        swipingRef.current = true;
+      }}
+      onSwipeableClose={() => {
+        swipingRef.current = false;
+      }}
     >
       <Animated.View style={cardStyle}>
         <TouchableOpacity
-          onPress={onPress}
+          onPress={handleCardPress}
           onPressIn={() => {
             scale.value = withSpring(0.97, { damping: 14, stiffness: 220 });
           }}
