@@ -212,6 +212,7 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.primary,
     borderRadius: theme.layout.borderRadius.m,
     paddingVertical: theme.spacing.m,
+    alignSelf: "stretch",
     alignItems: "center",
     justifyContent: "center",
     marginTop: theme.spacing.l,
