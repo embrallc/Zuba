@@ -453,6 +453,10 @@ verify_jwt = true
 # bearer that the gateway validates; keep JWT verification on.
 verify_jwt = true
 
+[functions.resend-report]
+# User taps "Send" in the report viewer; the owner's JWT authorizes it.
+verify_jwt = true
+
 [functions.revenuecat-webhook]
 # RevenueCat's servers hold no Supabase JWT; auth via shared RC_WEBHOOK_SECRET.
 verify_jwt = false
