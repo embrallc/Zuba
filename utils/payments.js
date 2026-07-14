@@ -5,7 +5,7 @@ import { setInspectionPaymentStateLocal } from "../db/inspections";
 import { logError, logEvent } from "../db/logs";
 import { useInspectionStore } from "../stores/useInspectionStore";
 import { isOnline } from "./connectivity";
-import { pushInspection } from "./sync";
+import { pushInspection, pushInspectionForm } from "./sync";
 import { supabase } from "./supabase";
 
 // Client-side wrappers for the Stripe Connect Edge Functions. All Stripe API
@@ -102,12 +102,24 @@ export async function refreshPaymentStatus() {
 // row so the server state is current. Throws on failure (e.code carries the
 // machine reason, e.g. 'onboarding_incomplete').
 export async function requestPayment(inspectionSk, amountCents) {
-  // Make sure the inspection exists in the cloud BEFORE the server tries to
-  // bill it — a just-created inspection may not have synced yet, and the
-  // checkout function looks the row up by sk (else `inspection_not_found`).
-  // Pushing here is safe: pushInspection omits the server-owned payment
-  // columns, so it can't roll back a payment_state the server may later set.
-  await pushInspection(inspectionSk);
+  // Make sure the cloud has this inspection AND its walkthrough answers BEFORE
+  // the server bills it:
+  //  - inspection row: the checkout function looks it up by sk, and a
+  //    just-created inspection may not have synced yet (else `inspection_not_found`).
+  //  - walkthrough form (inspection_forms): the report worker renders purely from
+  //    the cloud. When payment is gated (require_payment_first) the report is
+  //    rendered LATER by the Stripe webhook with NO device involved — so if the
+  //    answers only rode the fire-and-forget completion push, they can still be
+  //    in flight when the render fires, producing a header-only report (all
+  //    sections blank). "Complete without invoice" then bill-later is exactly
+  //    that path. Landing the form here — before the invoice exists, and always
+  //    before payment — guarantees the cloud is complete for any later render.
+  // Pushing here is safe: pushInspection omits the server-owned payment columns,
+  // so it can't roll back a payment_state the server may later set.
+  await Promise.all([
+    pushInspection(inspectionSk),
+    pushInspectionForm(inspectionSk),
+  ]);
 
   const data = await invoke("stripe-create-checkout", { inspectionSk, amountCents });
   if (!data?.checkoutUrl) throw new Error("No payment link was returned.");

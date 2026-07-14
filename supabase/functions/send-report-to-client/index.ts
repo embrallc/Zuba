@@ -140,51 +140,48 @@ serve(async (req) => {
     }
   }
 
-  // Ensure a rendered PDF exists; generate one (internal mode) if not.
+  // Always render a FRESH PDF right before sending. Auto-send is one-time
+  // (reconcile claims report_state around this call and sets 'sent'), so the PDF
+  // we email is the client's authoritative copy — it MUST reflect the CURRENT
+  // cloud answers, never a cached earlier render. We used to reuse the latest
+  // inspection_reports row and only render `if (!storagePath)`; that mailed a
+  // stale report whenever one had already been rendered before the final edits —
+  // e.g. the inspector taps Generate to preview, fixes a typo/adds a photo, then
+  // marks Complete → auto-send reused the pre-fix preview. Rendering here is
+  // cheap (one worker call, ~once per inspection) and render-internal records the
+  // new inspection_reports row itself, so Share/restore still find the newest.
+  // Service-role bearer = trusted server-to-server.
+  const workerUrl = (Deno.env.get("REPORT_WORKER_URL") ?? "").replace(/\/$/, "");
+  if (!workerUrl) {
+    logError("worker_not_configured", new Error("REPORT_WORKER_URL not set"), {
+      inspectionSk,
+    });
+    return json({ ok: false, error: "generate_failed" }, 200);
+  }
   let storagePath: string | null = null;
-  const { data: latest } = await admin
-    .from("inspection_reports")
-    .select("storage_path")
-    .eq("inspection_sk", inspectionSk)
-    .order("generated_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  storagePath = latest?.storage_path ?? null;
-
-  if (!storagePath) {
-    // Render via the Railway worker (the sole renderer for the user-facing
-    // Generate button too). Service-role bearer = trusted server-to-server.
-    const workerUrl = (Deno.env.get("REPORT_WORKER_URL") ?? "").replace(/\/$/, "");
-    if (!workerUrl) {
-      logError("worker_not_configured", new Error("REPORT_WORKER_URL not set"), {
+  try {
+    const res = await fetch(`${workerUrl}/api/render-internal`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${serviceKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        inspectionSk,
+        tzOffsetMinutes: tzOffsetMinutes(orgTz),
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data?.storagePath) {
+      logError("generate_failed", new Error(data?.error ?? `status ${res.status}`), {
         inspectionSk,
       });
       return json({ ok: false, error: "generate_failed" }, 200);
     }
-    try {
-      const res = await fetch(`${workerUrl}/api/render-internal`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${serviceKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          inspectionSk,
-          tzOffsetMinutes: tzOffsetMinutes(orgTz),
-        }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data?.storagePath) {
-        logError("generate_failed", new Error(data?.error ?? `status ${res.status}`), {
-          inspectionSk,
-        });
-        return json({ ok: false, error: "generate_failed" }, 200);
-      }
-      storagePath = data.storagePath;
-    } catch (e) {
-      logError("generate_threw", e, { inspectionSk });
-      return json({ ok: false, error: "generate_failed" }, 200);
-    }
+    storagePath = data.storagePath;
+  } catch (e) {
+    logError("generate_threw", e, { inspectionSk });
+    return json({ ok: false, error: "generate_failed" }, 200);
   }
 
   // Long-TTL signed link.
