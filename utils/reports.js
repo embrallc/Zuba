@@ -209,6 +209,63 @@ export async function generateInspectionReport(inspection, onProgress) {
   }
 }
 
+// Map the resend-report Edge Function's machine codes to presentable copy.
+function friendlyResendError(code) {
+  switch (code) {
+    case "no_report":
+      return "No report has been generated yet — tap Generate first.";
+    case "no_recipients":
+      return "No report recipients are set for this inspection.";
+    case "email_failed":
+      return "The email couldn't be sent. Please try again.";
+    case "forbidden":
+      return "You don't have access to send this report.";
+    default:
+      return "Couldn't send the report. Please try again.";
+  }
+}
+
+// Server-side send: email the MOST RECENT generated report to the inspection's
+// report recipients via Resend (the resend-report Edge Function). Cross-platform
+// — no device mail app involved, unlike the old share-sheet path. Reuses the
+// latest generated PDF (Generate makes a fresh one; Send mails the latest).
+// Throws with a presentable `message`; resolves { recipientCount } on success.
+export async function emailReportToClient(inspectionSk) {
+  if (!inspectionSk) throw new Error("missing inspection");
+  if (!isOnline()) {
+    const err = new Error("You're offline — sending the report needs a connection.");
+    err.presentable = true;
+    throw err;
+  }
+  const { data, error } = await supabase.functions.invoke("resend-report", {
+    body: { inspectionSk },
+  });
+  // Transport / non-2xx (401/403/5xx): unwrap the machine code from the envelope.
+  if (error) {
+    let code = "";
+    try {
+      const parsed = await error.context?.json?.();
+      code = parsed?.error ?? "";
+    } catch (_) {}
+    logError(error, `utils/reports.emailReportToClient sk=${inspectionSk} code="${code}"`);
+    const e = new Error(friendlyResendError(code));
+    e.presentable = true;
+    throw e;
+  }
+  // Business errors return 200 with { ok:false, error } (no_report/no_recipients/…).
+  if (!data?.ok) {
+    logError(
+      new Error(data?.error ?? "unknown"),
+      `utils/reports.emailReportToClient sk=${inspectionSk}`,
+    );
+    const e = new Error(friendlyResendError(data?.error));
+    e.presentable = true;
+    throw e;
+  }
+  logEvent("report.resent", { sk: inspectionSk, recipientCount: data.recipientCount });
+  return { recipientCount: data.recipientCount };
+}
+
 // Remove ONE inspection's cached PDF + clear its device-local pointer. Called
 // when an inspection is completed: a completed report lives in the cloud and is
 // re-fetched on demand, so keeping it cached just grows the app's footprint.

@@ -12,13 +12,13 @@
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { theme } from "@theme";
 import dayjs from "dayjs";
-import * as MailComposer from "expo-mail-composer";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import * as Sharing from "expo-sharing";
 import * as SMS from "expo-sms";
 import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   Linking,
   Platform,
   SafeAreaView,
@@ -32,7 +32,9 @@ import { logError } from "../db/logs";
 import { useDebouncedPress } from "../hooks/useDebouncedPress";
 import { useBannerStore } from "../stores/useBannerStore";
 import { useInspectionStore } from "../stores/useInspectionStore";
+import { collectReportRecipients } from "../utils/recipients";
 import {
+  emailReportToClient,
   generateInspectionReport,
   getOrRestoreReport,
   reportFileName,
@@ -72,6 +74,7 @@ export default function ReportViewerScreen() {
   const [fileState, setFileState] = useState("checking");
   const [path, setPath] = useState(null);
   const [generating, setGenerating] = useState(false);
+  const [sending, setSending] = useState(false);
 
   useEffect(() => {
     if (!inspection) return; // wait for the store/SQLite lookup to resolve
@@ -110,37 +113,50 @@ export default function ReportViewerScreen() {
 
   const canPreview = Platform.OS === "ios" && !!WebView;
 
-  const handleEmail = useDebouncedPress(async () => {
-    try {
-      // Preferred path: the native mail composer pre-fills the recipient,
-      // subject, body, and attaches the PDF.
-      if (await MailComposer.isAvailableAsync()) {
-        await MailComposer.composeAsync({
-          recipients: inspection.Email ? [inspection.Email] : undefined,
-          subject: `Inspection Report — ${inspection.AddressLine1 || inspection.FullName || ""}`,
-          body: `Hi ${inspection.FullName || "there"},\n\nAttached is your inspection report.\n\nThank you!`,
-          attachments: [path],
-        });
-        return;
-      }
-      // No native mail UI (Apple Mail not configured, or the user emails via
-      // Gmail/Outlook). Fall back to the OS share sheet so they can still pick a
-      // mail app and send the PDF rather than dead-ending.
-      if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(path, {
-          mimeType: "application/pdf",
-          UTI: "com.adobe.pdf",
-          dialogTitle: "Email report",
-        });
-        return;
-      }
+  // Server-side send: the backend emails the MOST RECENT generated report to the
+  // registered report recipients via Resend (cross-platform — no device mail app,
+  // no share sheet that can't pre-fill recipients). Confirm the address list
+  // first so nobody sends by accident.
+  const handleSend = useDebouncedPress(() => {
+    if (sending) return;
+    const recipients = collectReportRecipients(inspection);
+    if (!recipients.length) {
       showBanner({
-        message: "No email or sharing option is available on this device.",
+        message: "No report recipients are set for this inspection.",
         kind: "warning",
       });
-    } catch (e) {
-      logError(e, `ReportViewer.handleEmail sk=${inspectionSk}`);
+      return;
     }
+    Alert.alert(
+      "Send report",
+      `Email the report to:\n\n${recipients.join("\n")}`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Send",
+          onPress: async () => {
+            setSending(true);
+            try {
+              const { recipientCount } = await emailReportToClient(inspectionSk);
+              showBanner({
+                message: `Report sent to ${recipientCount} recipient${
+                  recipientCount === 1 ? "" : "s"
+                }.`,
+                kind: "success",
+              });
+            } catch (e) {
+              logError(e, `ReportViewer.handleSend sk=${inspectionSk}`);
+              showBanner({
+                message: e?.presentable ? e.message : "Couldn't send the report.",
+                kind: "error",
+              });
+            } finally {
+              setSending(false);
+            }
+          },
+        },
+      ],
+    );
   });
 
   const handleText = useDebouncedPress(async () => {
@@ -186,7 +202,7 @@ export default function ReportViewerScreen() {
     }
   });
 
-  const hasEmail = !!inspection?.Email;
+  const hasEmail = collectReportRecipients(inspection).length > 0;
   const hasPhone = !!inspection?.Phone;
 
   if (loadingInspection) {
@@ -296,9 +312,20 @@ export default function ReportViewerScreen() {
       {fileState === "ready" && (
         <View style={styles.shareRow}>
           {hasEmail && (
-            <TouchableOpacity style={styles.shareBtn} onPress={handleEmail} activeOpacity={0.8}>
-              <MaterialCommunityIcons name="email-outline" size={18} color="#fff" />
-              <Text style={styles.shareBtnText}>Email</Text>
+            <TouchableOpacity
+              style={[styles.shareBtn, sending && { opacity: 0.6 }]}
+              onPress={handleSend}
+              disabled={sending}
+              activeOpacity={0.8}
+            >
+              {sending ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <>
+                  <MaterialCommunityIcons name="email-send-outline" size={18} color="#fff" />
+                  <Text style={styles.shareBtnText}>Send</Text>
+                </>
+              )}
             </TouchableOpacity>
           )}
           {hasPhone && (
