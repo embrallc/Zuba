@@ -138,6 +138,21 @@ export default function SettingsScreen() {
     scheduleNameSave(fname, value);
   }
 
+  // Owners/admins share the org ID so a new teammate can paste it into the
+  // "Join existing organization" field when signing up.
+  async function handleShareOrgId() {
+    if (!orgSk) return;
+    try {
+      await Share.share({
+        message:
+          `Join my organization on Zanbi. When you sign up, choose ` +
+          `"Join an existing organization" and enter this Organization ID:\n\n${orgSk}`,
+      });
+    } catch (e) {
+      logError(e, "SettingsScreen.handleShareOrgId");
+    }
+  }
+
   async function handleSyncNow() {
     if (syncStatus === "syncing") return;
     setSyncStatus("syncing");
@@ -452,6 +467,34 @@ export default function SettingsScreen() {
             autoCorrect={false}
             returnKeyType="done"
           />
+
+          {(userProfile === "owner" || userProfile === "admin") && orgSk && (
+            <>
+              <View style={styles.fieldDivider} />
+              <Text style={styles.fieldLabel}>Organization ID</Text>
+              <View style={styles.orgIdRow}>
+                <Text style={styles.orgIdValue} selectable numberOfLines={1}>
+                  {orgSk}
+                </Text>
+                <TouchableOpacity
+                  style={styles.orgIdShareBtn}
+                  onPress={handleShareOrgId}
+                  hitSlop={theme.layout.hitSlop.medium}
+                  activeOpacity={0.7}
+                >
+                  <MaterialCommunityIcons
+                    name="share-variant"
+                    size={18}
+                    color={theme.colors.primary}
+                  />
+                </TouchableOpacity>
+              </View>
+              <Text style={styles.orgIdHint}>
+                Share this with teammates so they can join your organization when
+                they sign up.
+              </Text>
+            </>
+          )}
         </View>
 
         <Text style={styles.sectionLabel}>ARCHIVE</Text>
@@ -1311,6 +1354,31 @@ const styles = StyleSheet.create({
     height: theme.layout.borderWidth.thin,
     backgroundColor: theme.colors.input,
     marginVertical: theme.spacing.xs,
+  },
+  orgIdRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing.s,
+    paddingVertical: theme.spacing.xs,
+  },
+  orgIdValue: {
+    ...theme.typography.body,
+    color: theme.colors.text,
+    flex: 1,
+  },
+  orgIdShareBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: theme.layout.borderRadius.s,
+    backgroundColor: theme.colors.primaryGhost ?? "#EEF2FF",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  orgIdHint: {
+    ...theme.typography.caption,
+    color: theme.colors.textFine,
+    marginTop: 2,
+    marginBottom: theme.spacing.xs,
   },
   syncRow: {
     flexDirection: "row",
