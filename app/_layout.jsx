@@ -262,6 +262,8 @@ export default function RootLayout() {
     const settings = useSettingsStore.getState();
     settings.refreshCancelledCount?.();
     settings.bumpCancelBadgePulse?.();
+    // Pull global product announcements + recompute their unread badge.
+    settings.refreshProductNotifs?.();
 
     const sub = AppState.addEventListener("change", (state) => {
       if (state === "active") {
@@ -276,6 +278,7 @@ export default function RootLayout() {
         const s = useSettingsStore.getState();
         s.refreshCancelledCount?.();
         s.bumpCancelBadgePulse?.();
+        s.refreshProductNotifs?.();
       }
     });
     return () => {
@@ -457,6 +460,10 @@ export default function RootLayout() {
         />
         <Stack.Screen
           name="feedback"
+          options={{ headerShown: false, animation: "slide_from_right" }}
+        />
+        <Stack.Screen
+          name="announcements"
           options={{ headerShown: false, animation: "slide_from_right" }}
         />
         <Stack.Screen

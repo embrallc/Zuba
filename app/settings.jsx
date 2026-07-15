@@ -80,6 +80,7 @@ export default function SettingsScreen() {
   // Unread-cancellation badge (on the Cancelled archive row + the bounce).
   const cancelCount = useSettingsStore((s) => s.unviewedCancelledCount);
   const cancelPulse = useSettingsStore((s) => s.cancelBadgePulseKey);
+  const productNotifCount = useSettingsStore((s) => s.unviewedProductNotifCount);
   const refreshCancelledCount = useSettingsStore((s) => s.refreshCancelledCount);
   const bumpCancelBadgePulse = useSettingsStore((s) => s.bumpCancelBadgePulse);
 
@@ -699,6 +700,14 @@ export default function SettingsScreen() {
         />
 
         <Text style={styles.sectionLabel}>SUPPORT</Text>
+
+        <NavRow
+          label="Product Notifications"
+          description="Updates, new releases, and service notices from the Zanbi team"
+          badge={productNotifCount}
+          badgePulse={cancelPulse}
+          onPress={() => router.push("/announcements")}
+        />
 
         <NavRow
           label="Ideas, Feedback, & Issues"

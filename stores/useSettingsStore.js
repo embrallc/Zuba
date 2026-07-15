@@ -6,6 +6,7 @@ import {
   listNotificationSettings,
   NOTIFICATION_NAMES,
 } from "../db/notificationSettings";
+import { fetchProductNotifications } from "../utils/announcements";
 
 const KEYS = {
   showWeekends: "settings_showWeekends",
@@ -19,6 +20,7 @@ const KEYS = {
   persistPhotos: "settings_persistPhotosToDevice",
   photoAlbum: "settings_photoAlbumEnabled",
   cancelledViewedAt: "settings_cancelledViewedAt",
+  productNotifsViewedAt: "settings_productNotifsViewedAt",
 };
 
 // Default OFF until the user opts in.
@@ -94,6 +96,14 @@ export const useSettingsStore = create((set, get) => ({
   unviewedCancelledCount: 0,
   cancelBadgePulseKey: 0,
 
+  // Product notifications (global announcements) unread badge — same per-device
+  // watermark model as cancellations. productNotifs = the fetched cloud list
+  // (read-only); productNotifsViewedAt = epoch-ms the user last opened the
+  // screen; unviewedProductNotifCount = notifications published after that.
+  productNotifs: [],
+  productNotifsViewedAt: 0,
+  unviewedProductNotifCount: 0,
+
   loadSettings: async () => {
     try {
       const [
@@ -108,6 +118,7 @@ export const useSettingsStore = create((set, get) => ({
         persistPhotos,
         photoAlbum,
         cancelledViewedAt,
+        productNotifsViewedAt,
       ] = await Promise.all([
         AsyncStorage.getItem(KEYS.showWeekends),
         AsyncStorage.getItem(KEYS.userSk),
@@ -120,6 +131,7 @@ export const useSettingsStore = create((set, get) => ({
         AsyncStorage.getItem(KEYS.persistPhotos),
         AsyncStorage.getItem(KEYS.photoAlbum),
         AsyncStorage.getItem(KEYS.cancelledViewedAt),
+        AsyncStorage.getItem(KEYS.productNotifsViewedAt),
       ]);
       set({
         showWeekends: showWeekends ? JSON.parse(showWeekends) : false,
@@ -142,6 +154,9 @@ export const useSettingsStore = create((set, get) => ({
         photoAlbumEnabled: photoAlbum ? JSON.parse(photoAlbum) : false,
         cancelledViewedAt: cancelledViewedAt
           ? JSON.parse(cancelledViewedAt)
+          : 0,
+        productNotifsViewedAt: productNotifsViewedAt
+          ? JSON.parse(productNotifsViewedAt)
           : 0,
       });
     } catch (e) {
@@ -177,6 +192,34 @@ export const useSettingsStore = create((set, get) => ({
   // Replay the badge attention bounce (app-enter + entering Settings).
   bumpCancelBadgePulse: () =>
     set((s) => ({ cancelBadgePulseKey: s.cancelBadgePulseKey + 1 })),
+
+  // Fetch the global product announcements (cloud, read-only) and recompute the
+  // unread count = notifications published after productNotifsViewedAt. No-op
+  // (keeps the prior list) when offline or on error.
+  refreshProductNotifs: async () => {
+    const list = await fetchProductNotifications();
+    if (!list) return;
+    const viewedAt = get().productNotifsViewedAt;
+    const unseen = list.filter(
+      (n) => (Date.parse(n.published_at) || 0) > viewedAt,
+    ).length;
+    set({ productNotifs: list, unviewedProductNotifCount: unseen });
+  },
+
+  // The user opened Product Notifications → stamp the watermark forward and
+  // clear the badge.
+  markProductNotifsViewed: async () => {
+    try {
+      const now = Date.now();
+      set({ productNotifsViewedAt: now, unviewedProductNotifCount: 0 });
+      await AsyncStorage.setItem(
+        KEYS.productNotifsViewedAt,
+        JSON.stringify(now),
+      );
+    } catch (e) {
+      logError(e, "useSettingsStore.markProductNotifsViewed");
+    }
+  },
 
   // Hydrate the notifications map from the SQLite NotificationSettings table.
   // SQLite is the authoritative local copy (cloud sync writes to it); AsyncStorage
