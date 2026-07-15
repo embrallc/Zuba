@@ -14,6 +14,7 @@ export function usePendingApprovalsCount() {
 // Settings notification counts here so every placement of the icon stays in sync.
 export function useSettingsBadgeTotal() {
   const cancelled = useSettingsStore((s) => s.unviewedCancelledCount);
+  const productNotifs = useSettingsStore((s) => s.unviewedProductNotifCount);
   const approvals = usePendingApprovalsCount();
-  return cancelled + approvals;
+  return cancelled + productNotifs + approvals;
 }
