@@ -322,7 +322,7 @@ export default function ReportViewerScreen() {
                 <ActivityIndicator size="small" color="#fff" />
               ) : (
                 <>
-                  <MaterialCommunityIcons name="email-send-outline" size={18} color="#fff" />
+                  <MaterialCommunityIcons name="email-outline" size={18} color="#fff" />
                   <Text style={styles.shareBtnText}>Send</Text>
                 </>
               )}

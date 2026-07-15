@@ -76,28 +76,44 @@ function FilterChip({ label, active, onPress }) {
 }
 
 // ─── InspectionMarker ─────────────────────────────────────────────────────────
-function InspectionMarker({ insp, onEdit, onNav }) {
+function InspectionMarker({ insp, stopNumber, onEdit, onNav }) {
   const [tracksViewChanges, setTracksViewChanges] = useState(true);
   const complete = isComplete(insp);
+  const bg = complete ? "#16A34A" : "#D97706";
+  const numbered = typeof stopNumber === "number";
 
   return (
     <Marker
       coordinate={{ latitude: insp.Latitude, longitude: insp.Longitude }}
       tracksViewChanges={tracksViewChanges}
     >
-      <View
-        style={[
-          styles.markerDot,
-          { backgroundColor: complete ? "#16A34A" : "#D97706" },
-        ]}
-        onLayout={() => setTracksViewChanges(false)}
-      />
+      {numbered ? (
+        <View
+          style={[styles.markerPin, { backgroundColor: bg }]}
+          onLayout={() => setTracksViewChanges(false)}
+        >
+          <Text style={styles.markerPinText}>{stopNumber}</Text>
+        </View>
+      ) : (
+        <View
+          style={[styles.markerDot, { backgroundColor: bg }]}
+          onLayout={() => setTracksViewChanges(false)}
+        />
+      )}
       <Callout tooltip>
         <View style={styles.calloutBubble}>
           <CalloutSubview
             style={styles.calloutInfo}
             onPress={() => onEdit(insp)}
           >
+            {numbered && (
+              <Text style={styles.calloutStop}>
+                {`Stop ${stopNumber}`}
+                {insp.ScheduledAt
+                  ? ` · ${dayjs(insp.ScheduledAt).format("h:mm A")}`
+                  : ""}
+              </Text>
+            )}
             <Text style={styles.calloutName} numberOfLines={1}>
               {insp.FullName || "Unnamed Inspection"}
             </Text>
@@ -161,6 +177,22 @@ export default function MapScreen() {
       (i) => dayjs(i.ScheduledAt).format("YYYY-MM-DD") === activeDateFilter,
     );
   }, [mode, targetInspectionSk, allWithCoords, activeDateFilter]);
+
+  // Stop ordering: when a specific date is selected (not ALL), number the day's
+  // stops by scheduled time so the map shows the route order (8am → 1, 10am → 2,
+  // 2pm → 3). ALL / single mode → empty map → markers render as plain dots.
+  const stopNumbers = useMemo(() => {
+    const map = new Map();
+    if (mode !== "all" || activeDateFilter === "all") return map;
+    const ordered = [...plotted].sort((a, b) => {
+      const ta = dayjs(a.ScheduledAt).valueOf();
+      const tb = dayjs(b.ScheduledAt).valueOf();
+      if (ta !== tb) return ta - tb;
+      return String(a.InspectionSk).localeCompare(String(b.InspectionSk));
+    });
+    ordered.forEach((insp, i) => map.set(insp.InspectionSk, i + 1));
+    return map;
+  }, [plotted, mode, activeDateFilter]);
 
   // Unique sorted dates that have at least one geocoded inspection
   const filterDates = useMemo(() => {
@@ -314,14 +346,18 @@ export default function MapScreen() {
           showsMyLocationButton={false}
           onMapReady={handleMapReady}
         >
-          {plotted.map((insp) => (
-            <InspectionMarker
-              key={insp.InspectionSk}
-              insp={insp}
-              onEdit={handleEditForInspection}
-              onNav={handleNavForInspection}
-            />
-          ))}
+          {plotted.map((insp) => {
+            const stopNumber = stopNumbers.get(insp.InspectionSk);
+            return (
+              <InspectionMarker
+                key={`${insp.InspectionSk}:${stopNumber ?? ""}`}
+                insp={insp}
+                stopNumber={stopNumber}
+                onEdit={handleEditForInspection}
+                onNav={handleNavForInspection}
+              />
+            );
+          })}
         </MapView>
 
         {/*
@@ -436,6 +472,30 @@ const styles = StyleSheet.create({
     borderRadius: 11,
     borderWidth: 3,
   },
+  // Numbered "stop" marker — a circle for single digits, widening to a pill for
+  // double digits.
+  markerPin: {
+    minWidth: 26,
+    height: 26,
+    paddingHorizontal: 5,
+    borderRadius: 13,
+    borderWidth: 2.5,
+    borderColor: "#fff",
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.35,
+    shadowRadius: 2,
+    elevation: 3,
+  },
+  markerPinText: {
+    color: "#fff",
+    fontWeight: "700",
+    fontSize: 13,
+    lineHeight: 16,
+    textAlign: "center",
+  },
 
   recenterBtn: {
     position: "absolute",
@@ -481,6 +541,12 @@ const styles = StyleSheet.create({
     flex: 1,
     gap: 2,
     paddingVertical: 2,
+  },
+  calloutStop: {
+    ...theme.typography.caption,
+    color: theme.colors.primary,
+    fontWeight: "700",
+    marginBottom: 1,
   },
   calloutName: {
     ...theme.typography.bodyBold,
