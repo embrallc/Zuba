@@ -24,13 +24,13 @@ import { getOrgTimezone, setOrgTimezone } from "../db/organizations";
 import { updateUserName } from "../db/users";
 import { useInspectionStore } from "../stores/useInspectionStore";
 import { useSettingsStore } from "../stores/useSettingsStore";
-import { ensureMediaWritePermission } from "../utils/inspectionPhotos";
-import { clearAllReportCache } from "../utils/reports";
-import { signOutAndClear, supabase } from "../utils/supabase";
-import { syncAll } from "../utils/sync";
 import { useSubscriptionStore } from "../stores/useSubscriptionStore";
-import { openManageSubscriptions, requestAccountDeletion } from "../utils/account";
+import {
+  openManageSubscriptions,
+  requestAccountDeletion,
+} from "../utils/account";
 import { isOnline } from "../utils/connectivity";
+import { ensureMediaWritePermission } from "../utils/inspectionPhotos";
 import {
   logOutPurchases,
   PAYWALL_RESULT,
@@ -38,6 +38,9 @@ import {
   presentPaywall,
   presentPaywallForUpgrade,
 } from "../utils/purchases";
+import { clearAllReportCache } from "../utils/reports";
+import { signOutAndClear, supabase } from "../utils/supabase";
+import { syncAll } from "../utils/sync";
 
 const APPT_LENGTH_OPTIONS = [15, 30, 45, 60, 75, 90, 105, 120];
 
@@ -70,7 +73,9 @@ export default function SettingsScreen() {
   const setApptReminderSmsEnabled = useSettingsStore(
     (s) => s.setApptReminderSmsEnabled,
   );
-  const persistPhotosToDevice = useSettingsStore((s) => s.persistPhotosToDevice);
+  const persistPhotosToDevice = useSettingsStore(
+    (s) => s.persistPhotosToDevice,
+  );
   const setPersistPhotosToDevice = useSettingsStore(
     (s) => s.setPersistPhotosToDevice,
   );
@@ -80,8 +85,12 @@ export default function SettingsScreen() {
   // Unread-cancellation badge (on the Cancelled archive row + the bounce).
   const cancelCount = useSettingsStore((s) => s.unviewedCancelledCount);
   const cancelPulse = useSettingsStore((s) => s.cancelBadgePulseKey);
-  const productNotifCount = useSettingsStore((s) => s.unviewedProductNotifCount);
-  const refreshCancelledCount = useSettingsStore((s) => s.refreshCancelledCount);
+  const productNotifCount = useSettingsStore(
+    (s) => s.unviewedProductNotifCount,
+  );
+  const refreshCancelledCount = useSettingsStore(
+    (s) => s.refreshCancelledCount,
+  );
   const bumpCancelBadgePulse = useSettingsStore((s) => s.bumpCancelBadgePulse);
 
   // Recompute the count + replay the bounce each time Settings is entered.
@@ -491,8 +500,8 @@ export default function SettingsScreen() {
                 </TouchableOpacity>
               </View>
               <Text style={styles.orgIdHint}>
-                Share this with teammates so they can join your organization when
-                they sign up.
+                Share this with teammates so they can join your organization
+                when they sign up.
               </Text>
             </>
           )}
@@ -757,7 +766,12 @@ export default function SettingsScreen() {
 // Org-aware subscription card. The server's subscription-status verdict
 // (held in useSubscriptionStore) drives everything here — this component
 // never computes plan state itself, it just renders what it's told.
-function SubscriptionSection({ status, onSubscribe, onReviewApprovals, onReducePlan }) {
+function SubscriptionSection({
+  status,
+  onSubscribe,
+  onReviewApprovals,
+  onReducePlan,
+}) {
   const [busy, setBusy] = useState(false);
   const isOwner = status?.role === "owner";
   // Only the billing owner's Apple/Play account pays — they alone can
@@ -836,13 +850,15 @@ function SubscriptionSection({ status, onSubscribe, onReviewApprovals, onReduceP
           </View>
         </View>
       )}
-      {isBillingOwner && (state === "trial" || state === "expired") && !comp && (
-        <NavRow
-          label="Subscribe"
-          description="One plan covers your whole team — pick the seat count that fits"
-          onPress={() => run(onSubscribe)}
-        />
-      )}
+      {isBillingOwner &&
+        (state === "trial" || state === "expired") &&
+        !comp && (
+          <NavRow
+            label="Subscribe"
+            description="One plan covers your whole team — pick the seat count that fits"
+            onPress={() => run(onSubscribe)}
+          />
+        )}
       {isBillingOwner &&
         state === "active" &&
         !comp &&
@@ -958,16 +974,40 @@ function FormBuilderCard() {
       <View style={fbStyles.btnRow}>
         {status === "ready" ? (
           <>
-            <TouchableOpacity style={fbStyles.btn} onPress={handleOpen} activeOpacity={0.7}>
-              <MaterialCommunityIcons name="open-in-new" size={15} color={theme.colors.primary} />
+            <TouchableOpacity
+              style={fbStyles.btn}
+              onPress={handleOpen}
+              activeOpacity={0.7}
+            >
+              <MaterialCommunityIcons
+                name="open-in-new"
+                size={15}
+                color={theme.colors.primary}
+              />
               <Text style={fbStyles.btnText}>Open</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={fbStyles.btn} onPress={handleShare} activeOpacity={0.7}>
-              <MaterialCommunityIcons name="share-variant" size={15} color={theme.colors.primary} />
+            <TouchableOpacity
+              style={fbStyles.btn}
+              onPress={handleShare}
+              activeOpacity={0.7}
+            >
+              <MaterialCommunityIcons
+                name="share-variant"
+                size={15}
+                color={theme.colors.primary}
+              />
               <Text style={fbStyles.btnText}>Share</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={fbStyles.btn} onPress={handleRegenerate} activeOpacity={0.7}>
-              <MaterialCommunityIcons name="refresh" size={15} color={theme.colors.primary} />
+            <TouchableOpacity
+              style={fbStyles.btn}
+              onPress={handleRegenerate}
+              activeOpacity={0.7}
+            >
+              <MaterialCommunityIcons
+                name="refresh"
+                size={15}
+                color={theme.colors.primary}
+              />
               <Text style={fbStyles.btnText}>Regenerate</Text>
             </TouchableOpacity>
           </>
@@ -981,7 +1021,11 @@ function FormBuilderCard() {
             {status === "loading" ? (
               <ActivityIndicator size="small" color="#fff" />
             ) : (
-              <MaterialCommunityIcons name="link-variant" size={15} color="#fff" />
+              <MaterialCommunityIcons
+                name="link-variant"
+                size={15}
+                color="#fff"
+              />
             )}
             <Text style={[fbStyles.btnText, { color: "#fff" }]}>
               {status === "loading" ? "Creating…" : "Get editor link"}
@@ -1096,7 +1140,11 @@ function BusinessTimezoneCard({ orgSk }) {
       } catch (e) {
         // Non-fatal: `active` still shows `detected`, and the owner can tap to set
         // it; the reminder job also falls back to Central for a still-null org.
-        if (!cancelled) logError(e, `SettingsScreen.BusinessTimezoneCard.persistDefault tz=${detected}`);
+        if (!cancelled)
+          logError(
+            e,
+            `SettingsScreen.BusinessTimezoneCard.persistDefault tz=${detected}`,
+          );
       }
       if (!cancelled) setStatus("idle");
     })();
