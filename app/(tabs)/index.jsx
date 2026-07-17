@@ -15,9 +15,11 @@ import {
   View,
 } from "react-native";
 import Animated, { FadeInDown } from "react-native-reanimated";
+import { Guard } from "../../components/Guard";
 import InspectionCard from "../../components/InspectionCard";
 import MyDayDashboard from "../../components/MyDayDashboard";
 import NotificationBadge from "../../components/NotificationBadge";
+import OwnerSetupCard from "../../components/OwnerSetupCard";
 import { runDevQuery } from "../../db/devQuery";
 import { DB_EVENTS, subscribe } from "../../db/events";
 import {
@@ -27,6 +29,7 @@ import {
 import { logError } from "../../db/logs";
 import { useDebouncedPress } from "../../hooks/useDebouncedPress";
 import { useMyDayRoute } from "../../hooks/useMyDayRoute";
+import { useOwnerSetup } from "../../hooks/useOwnerSetup";
 import { useSettingsBadgeTotal } from "../../hooks/useSettingsBadges";
 import { useInspectionStore } from "../../stores/useInspectionStore";
 import { useMapStore } from "../../stores/useMapStore";
@@ -83,6 +86,10 @@ export default function MyDayScreen() {
   // Settings notification (cancellations + pending seat approvals).
   const badgeTotal = useSettingsBadgeTotal();
   const cancelPulse = useSettingsStore((s) => s.cancelBadgePulseKey);
+
+  // First-run guidance for a brand-new owner: until they've set up (or dismissed
+  // it), the dashboard slot shows a setup checklist instead of an empty route.
+  const { showSetup, hasForm, markDone } = useOwnerSetup();
 
   // My Day dashboard data. Fetches on mount; the hook handles location
   // permission, error banners, and inflight de-dupe.
@@ -320,14 +327,21 @@ export default function MyDayScreen() {
         </View>
       </View>
 
-      {/* Dashboard — top 3/5 */}
+      {/* Dashboard — top 3/5 (setup checklist takes this slot for a new owner) */}
       <View style={styles.dashboardSection}>
-        <MyDayDashboard
-          data={staleNextStop ? null : routeData}
-          loading={routeLoading || staleNextStop}
-          error={routeError}
-          onRefresh={refreshRoute}
-        />
+        <Guard
+          guard={showSetup}
+          fallback={
+            <MyDayDashboard
+              data={staleNextStop ? null : routeData}
+              loading={routeLoading || staleNextStop}
+              error={routeError}
+              onRefresh={refreshRoute}
+            />
+          }
+        >
+          <OwnerSetupCard hasForm={hasForm} onDismiss={markDone} />
+        </Guard>
       </View>
 
       {/* Today's inspections — bottom 2/5 */}

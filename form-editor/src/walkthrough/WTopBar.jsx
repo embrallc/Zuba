@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { hasToken, publishWalkthrough } from "../api";
+import { hasToken, publishAll } from "../api";
 import ModeSwitch from "../components/ModeSwitch";
 import { useWalkthroughStore } from "./store";
 
@@ -27,15 +27,17 @@ export default function WTopBar() {
     if (publishState === "publishing") return;
     if (
       !window.confirm(
-        "Publish this form? New inspections will use it from now on. " +
-          "In-progress inspections keep the form they started with.",
+        "Publish your form and report? New inspections and generated reports " +
+          "will use them from now on. In-progress inspections keep the form they " +
+          "started with.",
       )
     ) {
       return;
     }
     setPublishState("publishing");
     try {
-      await publishWalkthrough();
+      // Publishes BOTH halves so a click never leaves the form or report stale.
+      await publishAll();
       setPublishState("done");
       setTimeout(() => setPublishState("idle"), 2200);
     } catch (_) {

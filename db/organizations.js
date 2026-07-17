@@ -55,6 +55,37 @@ export async function getOrgPaymentStatus(orgSk) {
   }
 }
 
+// First-run onboarding flag. True once the org's owner has seen (or dismissed,
+// or completed) the "design your form & report" guidance. Reads fail CLOSED —
+// on any error we report "seen" so we never nag on a transient hiccup.
+export async function getWalkthroughIntroSeen(orgSk) {
+  if (!orgSk) return true;
+  try {
+    const { data, error } = await supabase
+      .from("organizations")
+      .select("has_seen_walkthrough_intro")
+      .eq("org_sk", orgSk)
+      .maybeSingle();
+    if (error) throw error;
+    return data?.has_seen_walkthrough_intro ?? false;
+  } catch (e) {
+    logError(e, `db/organizations.getWalkthroughIntroSeen orgSk=${orgSk}`);
+    return true;
+  }
+}
+
+// Owner-only (RLS auth_uid_owns_org). One-way flip to true. Throws on failure so
+// the caller can decide whether to retry; the card treats a failure as non-fatal.
+export async function markWalkthroughIntroSeen(orgSk) {
+  if (!orgSk) return false;
+  const { error } = await supabase
+    .from("organizations")
+    .update({ has_seen_walkthrough_intro: true })
+    .eq("org_sk", orgSk);
+  if (error) throw error;
+  return true;
+}
+
 // Owner-only (RLS auth_uid_owns_org). Updates one or more of the comms policy
 // toggles. Throws on failure (incl. RLS reject) so the caller can revert.
 export async function setOrgPaymentPolicy(orgSk, patch) {

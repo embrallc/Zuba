@@ -22,6 +22,7 @@ import WalkField, { PhotoModal } from "../components/walkthrough/WalkField";
 import { logError } from "../db/logs";
 import { SEVERITY_LEVELS } from "../shared/walkthroughSchema";
 import { requestRewrite, rewriteErrorMessage } from "../utils/aiRewrite";
+import { shareFormBuilderLink } from "../utils/formBuilder";
 import {
   ensureInspectionForm,
   fetchAndCacheTemplate,
@@ -73,8 +74,11 @@ export default function InspectionFormScreen() {
   const { inspectionSk } = useLocalSearchParams();
   const inspection = useInspectionStore((s) => s.getById(inspectionSk));
   const aiRewriteEnabled = useSettingsStore((s) => s.aiRewriteEnabled);
+  const userProfile = useSettingsStore((s) => s.userProfile);
+  const isOwner = userProfile === "owner";
 
   const [schema, setSchema] = useState(null);
+  const [sharingBuilder, setSharingBuilder] = useState(false);
   const [answers, setAnswers] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saveState, setSaveState] = useState("idle"); // idle | saving | saved
@@ -89,6 +93,29 @@ export default function InspectionFormScreen() {
   const answersRef = useRef({ sections: {} });
   const dirtyRef = useRef(false);
   const saveTimer = useRef(null);
+
+  // Owner hit this with no published form — hand them a builder link to open on
+  // their computer (see utils/formBuilder). Members get pointed at their owner.
+  async function handleShareBuilder() {
+    if (sharingBuilder) return;
+    setSharingBuilder(true);
+    try {
+      const res = await shareFormBuilderLink();
+      if (!res.ok && res.reason === "offline") {
+        Alert.alert(
+          "You're offline",
+          "Connect to the internet to create your builder link.",
+        );
+      } else if (!res.ok) {
+        Alert.alert(
+          "Couldn't create the link",
+          "Something went wrong. Please try again in a moment.",
+        );
+      }
+    } finally {
+      setSharingBuilder(false);
+    }
+  }
 
   // ── Load: snapshot the published template on first open ──────────────────
   useEffect(() => {
@@ -703,11 +730,38 @@ export default function InspectionFormScreen() {
             color={theme?.colors?.textFine}
           />
           <Text style={styles.emptyTitle}>No walkthrough form yet</Text>
-          <Text style={styles.emptyBody}>
-            Your organization's walkthrough form hasn't been published. Ask the
-            owner to design and publish it from the Form Builder, then reopen
-            this inspection.
-          </Text>
+          {isOwner ? (
+            <>
+              <Text style={styles.emptyBody}>
+                Design and publish your walkthrough form to start inspecting. The
+                builder works best on a computer — we'll create a private link you
+                can email to yourself and open on your PC.
+              </Text>
+              <TouchableOpacity
+                style={[
+                  styles.emptyActionBtn,
+                  sharingBuilder && styles.emptyActionBtnDisabled,
+                ]}
+                onPress={handleShareBuilder}
+                disabled={sharingBuilder}
+                activeOpacity={0.85}
+              >
+                {sharingBuilder ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <Text style={styles.emptyActionText}>
+                    Email myself the builder link
+                  </Text>
+                )}
+              </TouchableOpacity>
+            </>
+          ) : (
+            <Text style={styles.emptyBody}>
+              Your organization's walkthrough form hasn't been published. Ask the
+              owner to design and publish it from the Form Builder, then reopen
+              this inspection.
+            </Text>
+          )}
         </View>
       ) : (
         <KeyboardAvoidingView
@@ -877,5 +931,23 @@ const styles = StyleSheet.create({
     lineHeight: 21,
     color: theme?.colors?.textSubtle,
     textAlign: "center",
+  },
+  emptyActionBtn: {
+    marginTop: 14,
+    backgroundColor: theme?.colors?.primary,
+    borderRadius: theme?.layout?.borderRadius?.m ?? 12,
+    paddingVertical: 12,
+    paddingHorizontal: 22,
+    minWidth: 240,
+    alignItems: "center",
+    justifyContent: "center",
+    ...theme?.shadows?.light,
+  },
+  emptyActionBtnDisabled: {
+    opacity: 0.6,
+  },
+  emptyActionText: {
+    ...theme?.typography?.bodyBold,
+    color: "#fff",
   },
 });

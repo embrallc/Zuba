@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { walkthroughToReport } from "../../../shared/walkthroughToReport";
-import { hasToken, publishTemplate } from "../api";
+import { hasToken, publishAll } from "../api";
 import { useEditorStore } from "../store";
 import ModeSwitch from "./ModeSwitch";
 
@@ -46,14 +46,17 @@ export default function TopBar() {
     if (publishState === "publishing") return;
     if (
       !window.confirm(
-        "Publish this layout? Generated reports will use it from now on.",
+        "Publish your form and report? New inspections and generated reports " +
+          "will use them from now on. In-progress inspections keep the form they " +
+          "started with.",
       )
     ) {
       return;
     }
     setPublishState("publishing");
     try {
-      await publishTemplate();
+      // Publishes BOTH halves so a click never leaves the form or report stale.
+      await publishAll();
       setPublishState("done");
       setTimeout(() => setPublishState("idle"), 2200);
     } catch (_) {
