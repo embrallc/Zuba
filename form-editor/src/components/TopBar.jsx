@@ -92,6 +92,12 @@ export default function TopBar() {
         <option value={1.25}>125%</option>
         <option value={1.5}>150%</option>
       </select>
+      <span
+        className="multi-hint"
+        title="Ctrl-click items on the canvas to select several at once — then align, group, or restyle them together."
+      >
+        Hold <kbd>Ctrl</kbd> to select multiple items
+      </span>
       <span className="spacer" />
       <span className={`savestate ${saveState}`}>{SAVE_LABELS[saveState] ?? ""}</span>
       <button
