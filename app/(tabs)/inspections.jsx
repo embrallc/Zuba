@@ -145,7 +145,7 @@ export default function InspectionsScreen() {
 
           <TouchableOpacity
             onPress={handleSettings}
-            onLongPress={runDevQuery}
+            onLongPress={__DEV__ ? runDevQuery : undefined}
             hitSlop={theme.layout.hitSlop.medium}
             style={styles.headerBtn}
           >
@@ -220,7 +220,7 @@ export default function InspectionsScreen() {
         <TouchableOpacity
           style={styles.fab}
           onPress={handleAdd}
-          onLongPress={() => getAllLogs()}
+          onLongPress={__DEV__ ? () => getAllLogs() : undefined}
           activeOpacity={0.85}
         >
           <MaterialCommunityIcons

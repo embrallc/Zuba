@@ -302,7 +302,7 @@ export default function MyDayScreen() {
 
           <TouchableOpacity
             onPress={handleSettings}
-            onLongPress={runDevQuery}
+            onLongPress={__DEV__ ? runDevQuery : undefined}
             hitSlop={theme.layout.hitSlop.medium}
             style={styles.headerBtn}
           >
