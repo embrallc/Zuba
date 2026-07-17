@@ -197,6 +197,21 @@
   .storebtn{display:inline-flex;align-items:center;gap:10px;background:#15151f;color:#fff;border-radius:12px;padding:10px 16px;}
   .storebtn small{display:block;font-size:.66rem;letter-spacing:.04em;color:#c7c7d6;line-height:1.1;}
   .storebtn b{display:block;font-size:1rem;line-height:1.15;}
+  /* pre-launch: store buttons are informational, not clickable */
+  .storebtn--soon{position:relative;opacity:.6;cursor:default;filter:grayscale(.25);}
+  .notify-link{display:inline-block;margin-top:16px;font-weight:700;color:var(--brand);font-size:.98rem;}
+  .notify-link:hover{color:var(--brand-deep);}
+
+  /* ---------- waitlist ---------- */
+  .wait-form{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;max-width:520px;margin:26px auto 0;}
+  .wait-form input[type=email]{flex:1 1 260px;min-width:0;background:#fff;border:1px solid var(--line);border-radius:12px;
+    padding:15px 18px;font-size:1rem;font-family:var(--sans);color:var(--ink);box-shadow:var(--shadow-s);}
+  .wait-form input[type=email]:focus{outline:none;border-color:var(--brand-tint);box-shadow:0 0 0 3px rgba(139,139,230,.28);}
+  .wait-form .btn{flex:0 0 auto;}
+  .hp{position:absolute!important;left:-9999px!important;width:1px;height:1px;opacity:0;pointer-events:none;}
+  .wait-note{color:var(--muted);font-size:.9rem;margin:14px auto 0;max-width:46ch;}
+  .wait-note--ok{color:var(--green);font-weight:700;}
+  .wait-note--err{color:#c0392b;font-weight:700;}
 
   /* ---------- FAQ ---------- */
   .faq{max-width:760px;margin:0 auto;}
@@ -213,6 +228,11 @@
   .finalcta .lead{color:rgba(255,255,255,.9);max-width:44ch;margin:16px auto 28px;}
   .finalcta .btn-primary{background:#fff;color:var(--brand-deep);}
   .finalcta .btn-primary:hover{background:#f2f2ff;}
+  /* waitlist note colors tuned for the purple gradient background */
+  .finalcta .wait-note{color:rgba(255,255,255,.85);}
+  .finalcta .wait-note--ok{color:#c8f7de;}
+  .finalcta .wait-note--err{color:#ffd9d1;}
+  .finalcta .btn-primary[disabled]{opacity:.7;cursor:default;}
 
   /* ---------- footer ---------- */
   footer.site{background:#15151f;color:#b8b8cc;padding:52px 0 34px;}
@@ -446,18 +466,18 @@
         <li><span class="ck">✓</span> PDF reports delivered to clients</li>
         <li><span class="ck">✓</span> Integrated payments</li>
       </ul>
-      <div class="getstarted">Get started — download free:</div>
-      <!-- TODO at launch: replace the store links below with the real App Store / Google Play URLs -->
+      <div class="getstarted">Launching soon on iOS &amp; Android</div>
       <div class="badges">
-        <a class="storebtn" href="https://www.apple.com/app-store/" aria-label="Download on the App Store">
+        <span class="storebtn storebtn--soon" aria-label="Coming soon on the App Store">
           <svg width="20" height="24" viewBox="0 0 384 512" fill="#fff" aria-hidden="true"><path d="M318.7 268.7c-.2-36.7 16.4-64.4 50-84.8-18.8-26.9-47.2-41.7-84.7-44.6-35.5-2.8-74.3 20.7-88.5 20.7-15 0-49.4-19.7-76.4-19.7C63.3 141.2 4 184.8 4 273.5q0 39.3 14.4 81.2c12.8 36.7 59 126.7 107.2 125.2 25.2-.6 43-17.9 75.8-17.9 31.8 0 48.3 17.9 76.4 17.9 48.6-.7 90.4-82.5 102.6-119.3-65.2-30.7-61.7-90-61.7-91.9zM262 91.9c27.3-32.4 24.8-61.9 24-72.5-24.1 1.4-52 16.4-67.9 34.9-17.5 19.8-27.8 44.3-25.6 71.9 26.1 2 49.9-11.4 69.5-34.3z"/></svg>
-          <span><small>Download on the</small><b>App Store</b></span>
-        </a>
-        <a class="storebtn" href="https://play.google.com/store" aria-label="Get it on Google Play">
+          <span><small>Coming soon on the</small><b>App Store</b></span>
+        </span>
+        <span class="storebtn storebtn--soon" aria-label="Coming soon on Google Play">
           <svg width="20" height="22" viewBox="0 0 512 512" aria-hidden="true"><path fill="#fff" d="M48 24v464c0 9 5 17 13 21l257-253L61 3c-8 4-13 12-13 21z" opacity=".85"/><path fill="#fff" d="M355 195l-64-63L74 5c-5-3-10-3-13-2l257 253z" opacity=".65"/><path fill="#fff" d="M355 317L98 570c3 1 8 1 13-2l217-125z" opacity=".65"/><path fill="#fff" d="M451 235l-96-40-70 61 70 61 96-40c16-9 16-33 0-42z"/></svg>
-          <span><small>Get it on</small><b>Google Play</b></span>
-        </a>
+          <span><small>Coming soon on</small><b>Google Play</b></span>
+        </span>
       </div>
+      <a class="notify-link" href="#waitlist">Get notified the day we launch →</a>
     </div>
     <p style="text-align:center;color:var(--muted);font-size:.9rem;margin-top:18px;">Optionally invoice customers and collect payments in Zanbi for just a 1% Zanbi platform fee.</p>
   </div>
@@ -481,12 +501,19 @@
   </div>
 </section>
 
-<!-- ============================ FINAL CTA ============================ -->
-<section class="finalcta">
+<!-- ============================ FINAL CTA / WAITLIST ============================ -->
+<section class="finalcta" id="waitlist">
   <div class="wrap">
-    <h2>Your next inspection could run through Zanbi.</h2>
-    <p class="lead">Try the whole app free for 30 days. No card, no contract, no reason not to.</p>
-    <a class="btn btn-primary btn-lg" href="#pricing">Start your free trial</a>
+    <h2>Be first in line when Zanbi launches.</h2>
+    <p class="lead">We're putting the finishing touches on the App Store &amp; Google Play release. Leave your email and we'll tell you the day it goes live.</p>
+    <form id="waitForm" class="wait-form" novalidate>
+      <input type="email" id="waitEmail" name="email" required placeholder="you@example.com"
+             autocomplete="email" inputmode="email" aria-label="Email address" />
+      <!-- honeypot: hidden from people, tempting to bots; if filled we drop it -->
+      <input type="text" id="waitHp" name="company" tabindex="-1" autocomplete="off" aria-hidden="true" class="hp" />
+      <button type="submit" class="btn btn-primary btn-lg" id="waitBtn">Notify me</button>
+    </form>
+    <p class="wait-note" id="waitNote" role="status" aria-live="polite">No spam — just one email when we launch, then you decide.</p>
   </div>
 </section>
 
@@ -520,6 +547,65 @@
 <script>
   document.getElementById("yr").textContent = new Date().getFullYear();
   var reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  /* ---------- launch waitlist ---------- */
+  (function(){
+    // PROD Supabase project + its PUBLISHABLE key (sb_publishable_…). The
+    // publishable key is designed to be public (it already ships in the app
+    // bundle); RLS lets anon INSERT into `waitlist` only — no reads. Paste the
+    // prod publishable key below before deploying, or the form stays disabled.
+    var SB_URL = "https://wwspvjsnkkgdziixbeei.supabase.co";
+    var SB_KEY = "REPLACE_WITH_PROD_PUBLISHABLE_KEY";
+
+    var form = document.getElementById("waitForm");
+    if (!form) return;
+    var emailEl = document.getElementById("waitEmail");
+    var hpEl = document.getElementById("waitHp");
+    var btn = document.getElementById("waitBtn");
+    var note = document.getElementById("waitNote");
+    var done = false;
+    var EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+
+    function setNote(msg, kind){
+      note.textContent = msg;
+      note.className = "wait-note" + (kind ? " wait-note--" + kind : "");
+    }
+
+    form.addEventListener("submit", function(e){
+      e.preventDefault();
+      if (done) return;
+      var email = (emailEl.value || "").trim();
+      if (hpEl.value) { done = true; form.reset(); setNote("You're on the list!", "ok"); return; } // bot
+      if (!EMAIL_RE.test(email)) { setNote("Please enter a valid email address.", "err"); return; }
+      if (SB_KEY.indexOf("REPLACE_") === 0) { setNote("The waitlist isn't live yet — check back soon.", "err"); return; }
+
+      btn.disabled = true;
+      setNote("Adding you…");
+      fetch(SB_URL + "/rest/v1/waitlist", {
+        method: "POST",
+        headers: {
+          "apikey": SB_KEY,
+          "Authorization": "Bearer " + SB_KEY,
+          "Content-Type": "application/json",
+          // ignore-duplicates => a repeat email returns 201 (ON CONFLICT DO
+          // NOTHING), so a raw probe can't enumerate who's already signed up.
+          "Prefer": "return=minimal, resolution=ignore-duplicates"
+        },
+        body: JSON.stringify({ email: email, source: "landing" })
+      }).then(function(res){
+        // 409 = already on the list (unique index); treat as success, never leak.
+        if (res.ok || res.status === 409) {
+          done = true; form.reset();
+          setNote("You're on the list! We'll email you the moment Zanbi launches.", "ok");
+        } else {
+          throw new Error("status " + res.status);
+        }
+      }).catch(function(){
+        btn.disabled = false;
+        setNote("Hmm, that didn't go through. Please try again in a moment.", "err");
+      });
+    });
+  })();
 
   /* ---------- scroll reveal ---------- */
   (function(){

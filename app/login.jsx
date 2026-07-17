@@ -70,10 +70,20 @@ export default function LoginScreen() {
           ? { company_name: orgName.trim() }
           : { org_sk: orgId.trim() };
 
+        // Where the "confirm your email" link lands after Supabase verifies the
+        // token. Env-driven so we never hardcode a domain (pages.dev now,
+        // getzanbi.com later); when unset (dev), Supabase falls back to the
+        // project's Site URL. The URL must also be listed under Auth →
+        // URL Configuration → Redirect URLs, or Supabase ignores it.
+        const siteUrl = process.env.EXPO_PUBLIC_SITE_URL?.replace(/\/$/, "");
+
         const { data, error: signUpError } = await supabase.auth.signUp({
           email: email.trim(),
           password,
-          options: { data: metadata },
+          options: {
+            data: metadata,
+            ...(siteUrl ? { emailRedirectTo: `${siteUrl}/confirmed` } : {}),
+          },
         });
         if (signUpError) throw signUpError;
         logEvent("auth.signup");
@@ -319,7 +329,7 @@ export default function LoginScreen() {
             <TouchableOpacity
               style={styles.toggleBtn}
               onPress={toggleMode}
-              onLongPress={() => wipeDatabase()} //TESTING ONLY REMOVE AFTER DB ALL SET
+              onLongPress={__DEV__ ? () => wipeDatabase() : undefined} // dev client only; no-op in release builds
               disabled={loading}
             >
               <Text style={styles.toggleText}>

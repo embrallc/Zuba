@@ -152,6 +152,7 @@ PUBLIC (safe in app bundle / committed config) — never the service-role key:
 | `EXPO_PUBLIC_SUPABASE_KEY` (anon/publishable) | EAS env, `.env.local` |
 | `EXPO_PUBLIC_REPORT_WORKER_URL` | EAS env, `.env.local` |
 | `EXPO_PUBLIC_GOOGLE_PLACES_KEY` | EAS env, `.env.local` — **application-restricted** client key (iOS bundle ids + Places API New only); ships in the bundle but the value is never committed |
+| `EXPO_PUBLIC_SITE_URL` | EAS env (preview = Pages URL, production = `https://getzanbi.com`) — builds the email-confirm redirect `<site>/confirmed`. Must also be in Supabase → Auth → URL Configuration → Redirect URLs. Unset → falls back to the project Site URL |
 | `VITE_API_BASE` (form-editor) | `form-editor/.env.production` / `.env.staging` (committed; public URL) |
 
 SERVER-SIDE secrets — set per Supabase project via `supabase secrets set` (cloud) or `supabase/functions/.env` (local). Never committed:
@@ -175,6 +176,8 @@ GitHub Actions: `SUPABASE_ACCESS_TOKEN`, `STAGING_DB_PASSWORD`, `PROD_DB_PASSWOR
 
 - **Ship a schema/function change:** branch → edit migrations/functions → PR → merge to `main` → auto-deploys to staging → QA → `git tag vX.Y.Z && git push --tags` → approve prod deploy.
 - **Add an Edge Function secret:** `supabase secrets set --project-ref <ref> NAME=value` for each env; add to `supabase/functions/.env.example`; document it here.
+- **Add a public function / RPC:** since `20260716000100`, new `public` routines are **NOT** auto-executable by `anon`/`authenticated` (that blanket default was the root cause of a SECURITY DEFINER lockdown finding). Grant EXECUTE explicitly to the role that calls it, e.g. `grant execute on function public.my_fn(args) to authenticated;` (service-role EFs already hold it). A `SECURITY DEFINER` function that bypasses RLS must **never** be granted to `anon`. A missing grant fails closed (permission denied) — you'll catch it in testing.
+- **Add an anon-facing table** (public form, etc.): new `public` tables are no longer auto-granted to `anon`; grant + policy it explicitly (see `waitlist`). RLS is still required on every table.
 - **Rotate the service-role key:** update Railway worker env + Vault `service_role_key` + any GitHub secret that holds it.
 - **Rollback:** migrations are forward-only. To undo, write a new compensating migration and deploy. For prod data recovery, restore from Supabase backups (enable PITR before launch).
 
