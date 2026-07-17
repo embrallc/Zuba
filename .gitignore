@@ -3,6 +3,9 @@
 # dependencies
 node_modules/
 
+# Local MCP server config (holds a Supabase access token — never commit)
+.mcp.json
+
 # Expo
 .expo/
 dist/
