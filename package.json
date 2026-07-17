@@ -20,7 +20,8 @@
     "editor:build:staging": "npm --prefix form-editor run build -- --mode staging",
     "editor:deploy": "npm run editor:build && npx wrangler pages deploy form-editor/dist --project-name=kensa-form-editor",
     "editor:deploy:staging": "npm run editor:build:staging && npx wrangler pages deploy form-editor/dist --project-name=kensa-form-editor-staging",
-    "editor:deploy-api": "npx supabase functions deploy form-editor"
+    "editor:deploy-api": "npx supabase functions deploy form-editor",
+    "site:deploy": "npx wrangler pages deploy public --project-name=zanbi-site --branch=main --commit-dirty=true"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",
