@@ -587,9 +587,12 @@
           "apikey": SB_KEY,
           "Authorization": "Bearer " + SB_KEY,
           "Content-Type": "application/json",
-          // ignore-duplicates => a repeat email returns 201 (ON CONFLICT DO
-          // NOTHING), so a raw probe can't enumerate who's already signed up.
-          "Prefer": "return=minimal, resolution=ignore-duplicates"
+          // return=minimal => no RETURNING row, so anon needs only INSERT. This
+          // table is insert-only (no SELECT grant), and PostgREST upserts
+          // (Prefer: resolution=*) require SELECT — so ignore-duplicates would
+          // 401 here. A duplicate instead hits the unique index and returns 409,
+          // which we treat as success below; the UI reveals nothing either way.
+          "Prefer": "return=minimal"
         },
         body: JSON.stringify({ email: email, source: "landing" })
       }).then(function(res){

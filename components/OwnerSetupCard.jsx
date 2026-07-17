@@ -42,12 +42,19 @@ export default function OwnerSetupCard({ hasForm = false, onDismiss }) {
           "You're offline",
           "Connect to the internet to create your builder link.",
         );
-      } else if (!res.ok) {
+        return;
+      }
+      if (!res.ok) {
         Alert.alert(
           "Couldn't create the link",
           "Something went wrong. Please try again in a moment.",
         );
+        return;
       }
+      // Link shared — they've taken the key step, so retire the card. The org
+      // flag is one-way (it won't reappear), and the link is always available
+      // again from Settings → Report Designer.
+      onDismiss?.();
     } finally {
       setSharing(false);
     }
@@ -62,17 +69,16 @@ export default function OwnerSetupCard({ hasForm = false, onDismiss }) {
         <View style={styles.iconWrap}>
           <MaterialCommunityIcons
             name="clipboard-edit-outline"
-            size={30}
+            size={24}
             color={theme?.colors?.primary}
           />
         </View>
 
         <Text style={styles.title}>Let's set up your inspections</Text>
         <Text style={styles.body}>
-          Before your first inspection, design your walkthrough form and its
-          report. The builder is a drag-and-drop tool that works best on a
-          computer — we'll create a private link you can email to yourself and
-          open on your PC.
+          Design your walkthrough form and report before your first inspection.
+          The builder works best on a computer — we'll email you a private link
+          to open on your PC.
         </Text>
 
         <View style={styles.steps}>
@@ -80,7 +86,11 @@ export default function OwnerSetupCard({ hasForm = false, onDismiss }) {
           <Step done={hasForm} text="Design & publish your report layout" />
           <Step done={false} text="Add your first inspection" />
         </View>
+      </ScrollView>
 
+      {/* Actions pinned below the scroll area so the dismiss link is never
+          clipped, even on short screens. */}
+      <View style={styles.footer}>
         <TouchableOpacity
           style={[styles.primaryBtn, sharing && styles.primaryBtnDisabled]}
           onPress={handleShare}
@@ -106,7 +116,7 @@ export default function OwnerSetupCard({ hasForm = false, onDismiss }) {
             {hasForm ? "Done — hide this" : "I'll do this later"}
           </Text>
         </TouchableOpacity>
-      </ScrollView>
+      </View>
     </View>
   );
 }
@@ -122,17 +132,18 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     justifyContent: "center",
     alignItems: "center",
-    padding: theme?.spacing?.l,
-    gap: theme?.spacing?.s,
+    paddingHorizontal: theme?.spacing?.m,
+    paddingTop: theme?.spacing?.m,
+    paddingBottom: theme?.spacing?.xs,
+    gap: theme?.spacing?.xs,
   },
   iconWrap: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
+    width: 46,
+    height: 46,
+    borderRadius: 23,
     backgroundColor: theme?.colors?.input,
     alignItems: "center",
     justifyContent: "center",
-    marginBottom: theme?.spacing?.xs,
   },
   title: {
     ...theme?.typography?.h3,
@@ -143,13 +154,12 @@ const styles = StyleSheet.create({
     ...theme?.typography?.body,
     color: theme?.colors?.textSubtle,
     textAlign: "center",
-    lineHeight: 20,
+    lineHeight: 18,
   },
   steps: {
     alignSelf: "stretch",
     gap: theme?.spacing?.xs,
-    marginTop: theme?.spacing?.s,
-    marginBottom: theme?.spacing?.s,
+    marginTop: theme?.spacing?.xs,
   },
   step: {
     flexDirection: "row",
@@ -165,6 +175,11 @@ const styles = StyleSheet.create({
     color: theme?.colors?.textSubtle,
     textDecorationLine: "line-through",
   },
+  footer: {
+    paddingHorizontal: theme?.spacing?.m,
+    paddingTop: theme?.spacing?.xs,
+    paddingBottom: theme?.spacing?.m,
+  },
   primaryBtn: {
     flexDirection: "row",
     alignItems: "center",
@@ -173,8 +188,7 @@ const styles = StyleSheet.create({
     alignSelf: "stretch",
     backgroundColor: theme?.colors?.primary,
     borderRadius: theme?.layout?.borderRadius?.m,
-    paddingVertical: 13,
-    marginTop: theme?.spacing?.xs,
+    paddingVertical: 11,
     ...theme?.shadows?.light,
   },
   primaryBtnDisabled: {
@@ -185,7 +199,8 @@ const styles = StyleSheet.create({
     color: "#fff",
   },
   dismissBtn: {
-    paddingVertical: theme?.spacing?.s,
+    paddingVertical: theme?.spacing?.xs,
+    marginTop: 2,
     alignItems: "center",
   },
   dismissText: {
