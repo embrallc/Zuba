@@ -106,6 +106,25 @@ export async function publishWalkthrough() {
   return request("/api/walkthrough/publish", { method: "POST" });
 }
 
+// Publish BOTH the walkthrough (form) and the report layout in one action, so a
+// single "Publish" can never leave one half stale — they used to be two separate
+// buttons and it was easy to publish one and forget the other. A half with no
+// saved draft yet ("nothing_to_publish") is skipped rather than treated as an
+// error, so publishing works even before the other half has been designed; any
+// other failure on either half surfaces so the user knows to retry.
+export async function publishAll() {
+  const results = await Promise.allSettled([
+    publishWalkthrough(),
+    publishTemplate(),
+  ]);
+  for (const r of results) {
+    if (r.status === "rejected" && r.reason?.message !== "nothing_to_publish") {
+      throw r.reason;
+    }
+  }
+  return { ok: true };
+}
+
 // Upload a processed (downscaled) PNG/JPEG for an image element. In local
 // mock mode the data URL itself becomes the "path" so previews still work.
 export async function uploadAsset({ dataBase64, contentType }) {
