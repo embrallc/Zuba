@@ -322,8 +322,8 @@ export default function CalendarSettingsScreen() {
               <View style={rowStyles.text}>
                 <Text style={rowStyles.label}>Pull #zanbi events</Text>
                 <Text style={rowStyles.description}>
-                  Turn calendar events tagged #zanbi into inspections (e.g. ones
-                  your assistant adds)
+                  Turn calendar events tagged #zanbi into inspections. Allows
+                  team scheduling to flow in to your app.
                 </Text>
               </View>
               <Switch

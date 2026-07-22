@@ -1,0 +1,5 @@
+User-agent: *
+Allow: /
+Disallow: /confirmed
+
+Sitemap: https://getzanbi.com/sitemap.xml
