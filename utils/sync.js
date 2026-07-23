@@ -194,7 +194,10 @@ async function pushInspections(userId) {
           latitude: r.Latitude ?? null,
           status: r.Status ?? "OPEN",
           has_appt_reminder: !!r.HasApptReminder,
-          appt_reminder_status: r.ApptReminderStatus ?? "PENDING",
+          // appt_reminder_status is server-owned (flipped PENDING->SENT by the
+          // reminder EF, re-armed by a DB trigger) — OMITTED from the push, like
+          // payment_state/report_state/paid, so a device upsert can't revert a
+          // SENT back to PENDING and cause a duplicate day-before text.
           report_recipients: JSON.parse(r.ReportRecipients || "[]"),
           calendar_event_id: r.CalendarEventId ?? null,
           calendar_owner_device_id: r.CalendarOwnerDeviceId ?? null,
@@ -230,7 +233,8 @@ async function pushInspections(userId) {
 // complete or requesting payment, so the server's state is current without waiting
 // for the next syncAll. Mirrors pushInspections' upsert payload + RLS-denied
 // handling; like pushInspections it deliberately OMITS the server-owned
-// payment_state / report_state / paid columns so the device can't clobber them.
+// payment_state / report_state / paid / appt_reminder_status columns so the
+// device can't clobber them.
 export async function pushInspection(sk) {
   try {
     const {
@@ -392,7 +396,7 @@ async function pullInspections(userId) {
   for (const r of data) {
     try {
       const local = db.getFirstSync(
-        `SELECT _version, PaymentState, ReportState, Paid FROM Inspections WHERE InspectionSk = ?`,
+        `SELECT _version, PaymentState, ReportState, Paid, ApptReminderStatus FROM Inspections WHERE InspectionSk = ?`,
         [r.inspection_sk],
       );
       if (!local) {
@@ -452,14 +456,20 @@ async function pullInspections(userId) {
         const cloudPay = r.payment_state ?? "none";
         const cloudRep = r.report_state ?? "pending";
         const cloudPaid = r.paid ? 1 : 0;
+        // appt_reminder_status is likewise server-owned (the reminder EF flips
+        // PENDING->SENT; a DB trigger re-arms it) and the device no longer pushes
+        // it, so recover it on every pull too — otherwise a _version collision
+        // could strand a stale PENDING locally and mask that the send happened.
+        const cloudApptStatus = r.appt_reminder_status ?? "PENDING";
         if (
           cloudPay !== local.PaymentState ||
           cloudRep !== local.ReportState ||
-          cloudPaid !== (local.Paid ?? 0)
+          cloudPaid !== (local.Paid ?? 0) ||
+          cloudApptStatus !== local.ApptReminderStatus
         ) {
           await db.runAsync(
-            `UPDATE Inspections SET PaymentState=?, ReportState=?, Paid=? WHERE InspectionSk=?`,
-            [cloudPay, cloudRep, cloudPaid, r.inspection_sk],
+            `UPDATE Inspections SET PaymentState=?, ReportState=?, Paid=?, ApptReminderStatus=? WHERE InspectionSk=?`,
+            [cloudPay, cloudRep, cloudPaid, cloudApptStatus, r.inspection_sk],
           );
           const curr = useInspectionStore.getState().getById(r.inspection_sk);
           if (curr) {
@@ -468,6 +478,7 @@ async function pullInspections(userId) {
               PaymentState: cloudPay,
               ReportState: cloudRep,
               Paid: cloudPaid,
+              ApptReminderStatus: cloudApptStatus,
             });
           }
         }
