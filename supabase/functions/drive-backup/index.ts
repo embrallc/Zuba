@@ -18,6 +18,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient, SupabaseClient } from "npm:@supabase/supabase-js@2";
 import { logCloudEvent } from "../_shared/logToCloud.ts";
+import { renderReportHtml } from "../_shared/renderReportHtml.js";
 import {
   createFolder,
   DriveError,
@@ -47,6 +48,15 @@ const TIME_BUDGET_MS = 45_000;
 const MAX_DEPTH = 20;
 const UPLOAD_CONCURRENCY = 3;
 const MAX_ATTEMPTS = 5;
+
+// The archived interactive report embeds its photos as data: URIs so the file
+// still renders years from now with no signed URLs, no network, and no
+// dependence on its sibling files. That means holding the base64 in memory, so
+// it's capped: past this many ORIGINAL photo bytes the remaining images fall
+// back to relative Raw_Photos/ links and the page says so. ~20 MB covers a
+// typical inspection outright while leaving plenty of headroom under the
+// function's memory ceiling.
+const HTML_EMBED_BUDGET_BYTES = 20 * 1024 * 1024;
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -115,12 +125,34 @@ function folderLabel(insp: Record<string, unknown>, tz: string | null): string {
   return sanitizeName(`${head}${tail} (${monthDay})`);
 }
 
-function reportFileName(insp: Record<string, unknown>): string {
+function reportSlug(insp: Record<string, unknown>): string {
   const addr = (insp?.address_line1 as string) ?? "";
   const slug = sanitizeName(addr || (insp?.full_name as string) || "Inspection", 60)
     .replace(/[^A-Za-z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "");
-  return `Final_Report_${slug || "Inspection"}.pdf`;
+  return slug || "Inspection";
+}
+
+function reportFileName(insp: Record<string, unknown>): string {
+  return `Final_Report_${reportSlug(insp)}.pdf`;
+}
+
+// Report Types means an org (or one inspection) can produce a PDF, the
+// interactive online report, or both. Whichever the CLIENT got, the archive gets
+// — so an online-only org still ends up with a readable report in their Drive,
+// not just photos and a JSON file.
+function reportHtmlFileName(insp: Record<string, unknown>): string {
+  return `Interactive_Report_${reportSlug(insp)}.html`;
+}
+
+// Chunked so a large photo can't blow the argument limit of String.fromCharCode.
+function toBase64(bytes: Uint8Array): string {
+  let bin = "";
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    bin += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(bin);
 }
 
 // ── Photo enumeration ────────────────────────────────────────────────────────
@@ -475,6 +507,10 @@ serve(async (req) => {
       bucket: string;
       sourcePath: string | null;
       inlineBody?: Uint8Array;
+      // Lazy body. Only called when this artifact is actually being written, so
+      // an expensive build (the interactive report downloads + embeds photos)
+      // never runs on an invocation that isn't going to use it.
+      build?: () => Promise<Uint8Array>;
       alwaysWrite: boolean;
     };
 
@@ -529,7 +565,10 @@ serve(async (req) => {
           generatedAt: report.generated_at ?? null,
           pageCount: report.page_count ?? null,
           sizeBytes: report.size_bytes ?? null,
-          fileName: report.storage_path ? reportFileName(insp) : null,
+          // Which artifacts this inspection actually produced — an org can have
+          // PDF, the interactive online report, or both.
+          pdfFileName: report.storage_path ? reportFileName(insp) : null,
+          htmlFileName: report.model_path ? reportHtmlFileName(insp) : null,
         }
         : null,
       walkthrough: {
@@ -565,6 +604,103 @@ serve(async (req) => {
         bucket: PHOTO_BUCKET,
         sourcePath: p.path,
         alwaysWrite: false,
+      });
+    }
+
+    // The interactive report, archived as ONE self-contained HTML file. Pushed
+    // last so it's written after Raw_Photos exists (its overflow images link
+    // there). Only produced when this inspection actually made an online report
+    // — an org with Online turned off never gets a stray empty file, and an org
+    // with PDF turned off is no longer left without a readable report.
+    if (report?.model_path) {
+      const modelPath = report.model_path as string;
+      // Model photo paths are `burnedCloudUri ?? cloudUri`, the same values we
+      // archived — so this maps each one onto the name it has in Raw_Photos.
+      const nameBySourcePath = new Map(
+        photos.map((p, i) => [p.path, photoFileName(i, p)]),
+      );
+
+      tasks.push({
+        artifact: "report_html",
+        name: reportHtmlFileName(insp),
+        parentId: inspId,
+        mimeType: "text/html",
+        bucket: "",
+        sourcePath: modelPath,
+        alwaysWrite: true,
+        build: async () => {
+          const { data: blob, error } = await admin.storage
+            .from(REPORT_BUCKET)
+            .download(modelPath);
+          if (error || !blob) throw error ?? new Error("model.json missing");
+          const model = JSON.parse(await blob.text());
+
+          // Inline each photo as a data: URI, within the memory budget. The
+          // live viewers mint short-lived signed URLs here — right for a viewer,
+          // wrong for an archive, since the file would render broken the moment
+          // they expired.
+          const dataUris = new Map<string, string>();
+          let embedded = 0;
+          let overflow = 0;
+          const modelPaths = new Set<string>();
+          for (const sec of model?.sections ?? []) {
+            for (const inst of sec?.instances ?? []) {
+              for (const ph of inst?.photos ?? []) {
+                if (ph?.path) modelPaths.add(ph.path as string);
+              }
+            }
+          }
+          for (const path of modelPaths) {
+            if (embedded >= HTML_EMBED_BUDGET_BYTES) {
+              overflow++;
+              continue;
+            }
+            try {
+              const { data: img, error: imgErr } = await admin.storage
+                .from(PHOTO_BUCKET)
+                .download(path);
+              if (imgErr || !img) throw imgErr ?? new Error("empty download");
+              const buf = new Uint8Array(await img.arrayBuffer());
+              embedded += buf.length;
+              dataUris.set(path, `data:image/jpeg;base64,${toBase64(buf)}`);
+            } catch (e) {
+              // One unreadable photo degrades to a placeholder tile; the report
+              // still archives.
+              overflow++;
+              logError("html_photo_embed_failed", e, { inspectionSk, path });
+            }
+          }
+
+          let html: string = renderReportHtml(model, {
+            photosPerRow: "auto",
+            photoSrc: (p: { path?: string }) => {
+              if (!p?.path) return null;
+              const inline = dataUris.get(p.path);
+              if (inline) return inline;
+              const fileName = nameBySourcePath.get(p.path);
+              // Not embedded: point at the sibling copy, which works whenever
+              // the folder is downloaded intact.
+              return fileName ? `Raw_Photos/${encodeURIComponent(fileName)}` : null;
+            },
+          });
+
+          if (overflow > 0) {
+            const note =
+              `<div style="font:600 13px/1.5 system-ui,sans-serif;background:#FEF3C7;` +
+              `color:#7C2D12;padding:12px 16px;border-bottom:1px solid #FDE68A">` +
+              `${overflow} photo${overflow === 1 ? "" : "s"} in this report ` +
+              `${overflow === 1 ? "is" : "are"} not embedded in this file. ` +
+              `Keep it in the same folder as <strong>Raw_Photos</strong> to see ` +
+              `${overflow === 1 ? "it" : "them"}.</div>`;
+            html = html.replace("<body>", `<body>${note}`);
+          }
+          logInfo("html_built", {
+            inspectionSk,
+            embeddedBytes: embedded,
+            overflow,
+          });
+          return new TextEncoder().encode(html);
+        },
       });
     }
 
@@ -643,6 +779,7 @@ serve(async (req) => {
         // Bytes: either built here (the JSON record) or pulled from Storage with
         // the service role — no signed URLs needed server-side.
         let bytes = task.inlineBody ?? null;
+        if (!bytes && task.build) bytes = await task.build();
         if (!bytes && task.sourcePath) {
           const { data: blob, error: dlErr } = await admin.storage
             .from(task.bucket)
