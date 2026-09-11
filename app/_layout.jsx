@@ -496,6 +496,10 @@ function RootLayout() {
           options={{ headerShown: false, animation: "slide_from_bottom" }}
         />
         <Stack.Screen
+          name="scan"
+          options={{ headerShown: false, animation: "slide_from_bottom" }}
+        />
+        <Stack.Screen
           name="smstemplates"
           options={{ headerShown: false, animation: "slide_from_right" }}
         />

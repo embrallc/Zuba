@@ -18,6 +18,8 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import AiRewriteSheet from "../components/walkthrough/AiRewriteSheet";
+import ScanField from "../components/walkthrough/ScanField";
+import SectionToolbelt from "../components/walkthrough/SectionToolbelt";
 import WalkField, { PhotoModal } from "../components/walkthrough/WalkField";
 import { logError } from "../db/logs";
 import { SEVERITY_LEVELS } from "../shared/walkthroughSchema";
@@ -31,7 +33,11 @@ import {
   saveAnswers,
 } from "../db/walkthroughForms";
 import { useInspectionStore } from "../stores/useInspectionStore";
-import { usePhotoCaptureStore, usePhotoMarkupStore } from "../stores/usePhotoWorkflow";
+import {
+  usePhotoCaptureStore,
+  usePhotoMarkupStore,
+  useToolScanStore,
+} from "../stores/usePhotoWorkflow";
 import { useSettingsStore } from "../stores/useSettingsStore";
 import {
   deleteBurnedPhotoLocal,
@@ -215,6 +221,10 @@ export default function InspectionFormScreen() {
           }
         }
       }
+      // Scan tag photos hang off inst.scans, not fields — clean them too.
+      for (const sc of inst.scans ?? []) {
+        if (sc?.photo?.id) photoRefs.push(sc.photo);
+      }
     }
     mutateAnswers((a) => {
       const sec = a.sections?.[secId];
@@ -392,6 +402,124 @@ export default function InspectionFormScreen() {
         target: ref.id,
       },
     });
+  }
+
+  // ── Section toolbelt (scans) ─────────────────────────────────────────────
+  // A tool is scoped to one section instance. Kicking off a scan drops the
+  // target in the store and opens the scan screen; the result is picked up on
+  // return (useFocusEffect below) and appended to that instance's `scans`.
+  function startScan(sectionId, instanceId, toolId) {
+    useToolScanStore.getState().begin({
+      inspectionSk,
+      sectionId,
+      instanceId,
+      toolId,
+    });
+    router.push("/scan");
+  }
+
+  // Land a scan session's items on the instance. TEXT consolidates into ONE
+  // multiline box per instance (each snap appends new lines); CODES (barcode/QR)
+  // stay as individual records. One tag photo per session; a text box keeps the
+  // newest snap's photo, and the replaced one is cleaned up if unreferenced.
+  function mergeScans(secId, instId, items, photo) {
+    const texts = (items ?? [])
+      .filter((sc) => (sc?.kind ?? "text") === "text")
+      .map((sc) => (sc?.value ?? "").trim())
+      .filter(Boolean);
+    const codes = (items ?? []).filter(
+      (sc) => sc && (sc.kind ?? "text") !== "text" && (sc.value ?? "").trim(),
+    );
+    if (texts.length === 0 && codes.length === 0) return;
+
+    const now = new Date().toISOString();
+    let replacedPhoto = null;
+
+    mutateAnswers((a) => {
+      const inst = findInstance(a, secId, instId);
+      if (!inst) return;
+      if (!Array.isArray(inst.scans)) inst.scans = [];
+
+      if (texts.length) {
+        const joined = texts.join("\n");
+        const existing = inst.scans.find((sc) => (sc.kind ?? "text") === "text");
+        if (existing) {
+          existing.value = existing.value
+            ? `${existing.value}\n${joined}`
+            : joined;
+          if (photo && existing.photo?.id !== photo.id) {
+            if (existing.photo?.id) replacedPhoto = existing.photo;
+            existing.photo = photo;
+          }
+        } else {
+          inst.scans.push({
+            id: newId("scan"),
+            tool: "scanner",
+            kind: "text",
+            label: "Text",
+            value: joined,
+            photo: photo ?? null,
+            capturedAt: now,
+          });
+        }
+      }
+
+      for (const c of codes) {
+        inst.scans.push({
+          id: newId("scan"),
+          tool: "scanner",
+          kind: c.kind,
+          label: c.label ?? (c.kind === "qr" ? "QR" : "Barcode"),
+          value: c.value,
+          photo: photo ?? null,
+          capturedAt: now,
+        });
+      }
+    });
+
+    // A text box's old tag photo was replaced — clean it up if nothing else uses it.
+    if (replacedPhoto?.id) {
+      const stillUsed = (
+        findInstance(answersRef.current, secId, instId)?.scans ?? []
+      ).some((sc) => sc.photo?.id === replacedPhoto.id);
+      if (!stillUsed) {
+        deleteCachedPhoto(replacedPhoto.id);
+        if (replacedPhoto.cloudUri) deleteInspectionPhoto(replacedPhoto.cloudUri);
+      }
+    }
+  }
+
+  // rerender=false: ScanField holds its own input state (like text fields), so
+  // skip the parent re-render per keystroke and let the debounced save persist.
+  function updateScan(secId, instId, scanId, value) {
+    mutateAnswers((a) => {
+      const inst = findInstance(a, secId, instId);
+      const arr = inst?.scans;
+      if (!Array.isArray(arr)) return;
+      inst.scans = arr.map((sc) => (sc.id === scanId ? { ...sc, value } : sc));
+    }, false);
+  }
+
+  function removeScan(secId, instId, scanId) {
+    const inst = findInstance(answersRef.current, secId, instId);
+    const photo = inst?.scans?.find((sc) => sc.id === scanId)?.photo;
+    mutateAnswers((a) => {
+      const i2 = findInstance(a, secId, instId);
+      if (i2 && Array.isArray(i2.scans)) {
+        i2.scans = i2.scans.filter((sc) => sc.id !== scanId);
+      }
+    });
+    // Drop the tag photo only if no remaining scan in this instance uses it
+    // (one photo can be shared across several tapped items).
+    if (photo?.id) {
+      const stillUsed = (
+        findInstance(answersRef.current, secId, instId)?.scans ?? []
+      ).some((sc) => sc.photo?.id === photo.id);
+      if (!stillUsed) {
+        deleteCachedPhoto(photo.id);
+        if (photo.cloudUri) deleteInspectionPhoto(photo.cloudUri);
+      }
+    }
   }
 
   // ── AI Rewrite ───────────────────────────────────────────────────────────
@@ -591,6 +719,17 @@ export default function InspectionFormScreen() {
         applyMarkup(photoId, markup, burnedLocalUri, removed);
         if (removed) deleteBurnedPhotoLocal(photoId);
       }
+
+      const scan = useToolScanStore.getState();
+      if (
+        scan.target?.inspectionSk === inspectionSk &&
+        scan.result?.scans?.length
+      ) {
+        const { sectionId, instanceId } = scan.target;
+        const { scans: items, photo } = scan.result;
+        useToolScanStore.getState().clear();
+        mergeScans(sectionId, instanceId, items ?? [], photo ?? null);
+      }
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [inspectionSk]),
   );
@@ -633,6 +772,21 @@ export default function InspectionFormScreen() {
     });
   }
 
+  // Scans captured via the toolbelt for one instance — rendered at the BOTTOM
+  // of the card, after the schema fields. Nothing renders when there are none.
+  function renderScans(secId, instance) {
+    const scans = Array.isArray(instance?.scans) ? instance.scans : [];
+    if (scans.length === 0) return null;
+    return scans.map((sc) => (
+      <ScanField
+        key={sc.id}
+        scan={sc}
+        onChange={(v) => updateScan(secId, instance.instanceId, sc.id, v)}
+        onDelete={() => removeScan(secId, instance.instanceId, sc.id)}
+      />
+    ));
+  }
+
   function renderSection(section) {
     const secAns = answers?.sections?.[section.id] ?? { instances: [] };
 
@@ -642,6 +796,14 @@ export default function InspectionFormScreen() {
         <View key={section.id} style={styles.card}>
           <Text style={styles.sectionTitle}>{section.title}</Text>
           {inst && renderFields(section, inst)}
+          {inst && renderScans(section.id, inst)}
+          {inst && (
+            <SectionToolbelt
+              onSelect={(toolId) =>
+                startScan(section.id, inst.instanceId, toolId)
+              }
+            />
+          )}
         </View>
       );
     }
@@ -679,6 +841,12 @@ export default function InspectionFormScreen() {
               </TouchableOpacity>
             </View>
             {renderFields(section, inst)}
+            {renderScans(section.id, inst)}
+            <SectionToolbelt
+              onSelect={(toolId) =>
+                startScan(section.id, inst.instanceId, toolId)
+              }
+            />
           </View>
         ))}
         <TouchableOpacity

@@ -112,6 +112,14 @@
           "organization": "embra-llc",
           "project": "react-native"
         }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "deploymentTarget": "16.1"
+          }
+        }
       ]
     ],
     "experiments": {
