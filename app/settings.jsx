@@ -667,6 +667,13 @@ export default function SettingsScreen() {
           description="Two-way sync your inspections with your Apple or Google calendar"
           onPress={() => router.push("/calendarsettings")}
         />
+        <Guard guard={userProfile === "owner"}>
+          <NavRow
+            label="Google Drive Backup"
+            description="Automatically save every completed inspection — report, photos, and record — to your own Google Drive"
+            onPress={() => router.push("/drivebackup")}
+          />
+        </Guard>
 
         <Text style={styles.sectionLabel}>REPORTS & PAYMENTS</Text>
         <Guard guard={userProfile === "owner"}>

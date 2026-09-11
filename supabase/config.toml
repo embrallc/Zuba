@@ -435,6 +435,27 @@ verify_jwt = true
 [functions.delete-user]
 verify_jwt = true
 
+[functions.drive-backup]
+# The Google Drive mirror runner. Called server-to-server ONLY (the
+# inspection_reports trigger, the pg_cron sweep, drive-manage, and its own
+# continuation) with a service-role bearer the gateway validates, and the
+# function itself rejects any bearer that isn't the service-role key.
+verify_jwt = true
+
+[functions.drive-connect-start]
+verify_jwt = true
+
+[functions.drive-manage]
+verify_jwt = true
+
+[functions.drive-oauth-callback]
+# Google redirects the browser here with a plain GET (no JWT). Authorized by the
+# single-use, 10-minute `state` we minted in drive-connect-start.
+verify_jwt = false
+
+[functions.drive-status]
+verify_jwt = true
+
 [functions.form-editor]
 # Browser hits this with no Supabase JWT; it authenticates via its own token.
 verify_jwt = false

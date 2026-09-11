@@ -162,10 +162,29 @@ SERVER-SIDE secrets — set per Supabase project via `supabase secrets set` (clo
 
 `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `RESEND_API_KEY`, `REPORT_FROM_EMAIL`,
 `GOOGLE_ROUTES_API_KEY`, `GEMINI_API_KEY`, `REVENUECAT_SECRET_API_KEY`,
-`RC_WEBHOOK_SECRET`, `EDITOR_APP_URL`, `DEV_BYPASS_EMAILS`. (`SUPABASE_URL` /
+`RC_WEBHOOK_SECRET`, `EDITOR_APP_URL`, `DEV_BYPASS_EMAILS`,
+`GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`. (`SUPABASE_URL` /
 `SUPABASE_ANON_KEY` / `SUPABASE_SERVICE_ROLE_KEY` are auto-injected in the cloud.)
 
-Vault (per project, for pg_cron reconcile sweep): `project_url`, `service_role_key`.
+Vault (per project): `project_url`, `service_role_key` (pg_cron sweeps), plus one
+`drive_refresh_<org>` secret per connected org — written/read ONLY by the
+service-role `drive_secret_*` RPCs, never by hand.
+
+### Google Drive Backup (per environment, one-time)
+The Drive connector needs a Google Cloud OAuth client. **The consent screen must be
+published ("In production"), not left in "Testing"** — Testing-mode refresh tokens
+expire after 7 days and every org's backup would silently stop weekly. The only
+scope requested is `drive.file`, which is non-sensitive, so publishing needs no
+Google security assessment.
+
+1. Google Cloud → enable the **Drive API**; configure the OAuth consent screen
+   (name, logo, support email) and publish it.
+2. Create a **Web application** OAuth client with one authorized redirect URI per
+   Supabase project: `https://<REF>.supabase.co/functions/v1/drive-oauth-callback`.
+3. `supabase secrets set --project-ref <REF> GOOGLE_OAUTH_CLIENT_ID=… GOOGLE_OAUTH_CLIENT_SECRET=…`
+
+The `drive-backup-sweep` pg_cron job (every 5 min) reuses the same `project_url` /
+`service_role_key` Vault secrets as the reconcile sweep — nothing extra to seed.
 
 Worker (Railway env, per service): `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `REPORT_BUCKET`, `SIGNED_URL_TTL`.
 
