@@ -524,8 +524,11 @@ serve(async (req) => {
         mimeType: "application/pdf",
         bucket: REPORT_BUCKET,
         sourcePath: report.storage_path as string,
-        // Derived from the whole record, so always assumed stale.
-        alwaysWrite: true,
+        // A generated report is an immutable snapshot at a timestamped path, so
+        // an unchanged path proves the Drive copy already matches. Syncs now
+        // fire on any post-completion edit, and most of those don't regenerate
+        // the report — this keeps them from re-uploading identical bytes.
+        alwaysWrite: false,
       });
     }
 
@@ -627,7 +630,10 @@ serve(async (req) => {
         mimeType: "text/html",
         bucket: "",
         sourcePath: modelPath,
-        alwaysWrite: true,
+        // Keyed on the model snapshot's path for the same reason as the PDF —
+        // and it matters more here, because rebuilding this file re-downloads
+        // and re-encodes every embedded photo.
+        alwaysWrite: false,
         build: async () => {
           const { data: blob, error } = await admin.storage
             .from(REPORT_BUCKET)
@@ -720,9 +726,12 @@ serve(async (req) => {
       if (row.status === "failed" && (row.attempts ?? 0) >= MAX_ATTEMPTS) return false;
       if (row.status !== "done") return true;
       if (t.alwaysWrite) return true;
-      // A stored photo object is immutable (markup writes a NEW path), so an
-      // unchanged source_path proves the Drive copy already matches. This is what
-      // stops a re-Generate from re-pushing every photo for nothing.
+      // Everything else is content-addressed by its Storage path: photos are
+      // immutable (markup writes a NEW path) and a generated report is a
+      // snapshot at a timestamped path. So an unchanged source_path proves the
+      // Drive copy already matches, and a sync fired by an unrelated edit
+      // re-uploads nothing. Only inspection_data.json, built live from the DB
+      // with no source path, is alwaysWrite.
       return row.source_path !== t.sourcePath;
     });
 
