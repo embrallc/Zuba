@@ -10,6 +10,24 @@ report-worker; Resend email; EAS builds/updates.
 
 ---
 
+## 🛡️ Standing engineering principles (apply to EVERY feature, always)
+
+These are non-negotiable defaults for all planning and code — not per-request opt-ins.
+
+1. **Prioritize security in planning new features.** Before writing code, think through
+   the security surface: who can call it, what data it exposes, and how it's abused.
+   Default to least privilege (RLS + explicit grants, never `anon`; validate/authorize
+   server-side, never trust the client; secrets stay server-side and out of git;
+   BYO-keys/tokens encrypted at rest, never synced to the device). Call out the security
+   implications in the plan itself.
+2. **Prioritize robust function writing — error handling + proper logging.** Write
+   functions that fail safely and observably: handle the error paths (network, auth,
+   null/empty, provider/API failures, offline), never swallow errors silently, and log
+   with enough context to diagnose in prod (via the existing logError / app_logs and EF
+   logging patterns). Prefer graceful degradation over crashes; make failures traceable.
+
+---
+
 ## ⭐ Main process — Dev → Prod (the canonical loop)
 
 **Iterate & test on the Dev build; release with a Production build. Skip the

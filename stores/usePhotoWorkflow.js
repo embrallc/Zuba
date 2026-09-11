@@ -23,3 +23,17 @@ export const usePhotoMarkupStore = create((set) => ({
   setResult: (result) => set({ result }),
   clear: () => set({ result: null }),
 }));
+
+// Section toolbelt scan: the walkthrough form drops a `target` (which section
+// instance the scan belongs to) and opens the scan screen, which recognizes text
+// / barcodes / QR on-device and hands back the confirmed item(s) in `result`.
+// One-shot, like the camera handoff above — the form appends the scans to that
+// instance's answers and clears. `result.scans` is an array so a single session
+// can return several tapped items (e.g. model + serial).
+export const useToolScanStore = create((set) => ({
+  target: null, // { inspectionSk, sectionId, instanceId, toolId }
+  result: null, // { scans: [{ kind, label, value }], photo: {id,localUri,cloudUri}|null }
+  begin: (target) => set({ target, result: null }),
+  setResult: (result) => set({ result }),
+  clear: () => set({ target: null, result: null }),
+}));

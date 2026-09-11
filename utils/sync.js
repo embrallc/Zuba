@@ -700,6 +700,34 @@ async function uploadAnswerPhotos(answers, { orgSk, userId }) {
   if (!sections || typeof sections !== "object") return { changed, pending };
   for (const sec of Object.values(sections)) {
     for (const inst of sec?.instances ?? []) {
+      // Scan tag photos (inst.scans[].photo) — upload once, BEFORE the fields
+      // guard below can `continue` past this instance. Fixed object name so a
+      // photo shared across tapped items upserts a single object.
+      for (const scan of inst?.scans ?? []) {
+        const ref = scan?.photo;
+        if (!ref || typeof ref !== "object") continue;
+        if (ref.localUri && !ref.cloudUri) {
+          if (!orgSk) {
+            pending = true;
+          } else {
+            const uploaded = await uploadInspectionPhoto({
+              localUri: ref.localUri,
+              orgSk,
+              userId,
+              detailSk: ref.id,
+              objectName: "scan.jpg",
+            });
+            if (uploaded) {
+              ref.cloudUri = uploaded;
+              changed = true;
+              uploadedCount++;
+            } else {
+              pending = true;
+            }
+          }
+        }
+      }
+
       const fields = inst?.fields;
       if (!fields || typeof fields !== "object") continue;
       for (const value of Object.values(fields)) {
