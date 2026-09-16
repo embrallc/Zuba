@@ -516,6 +516,10 @@ function RootLayout() {
           options={{ headerShown: false, animation: "slide_from_right" }}
         />
         <Stack.Screen
+          name="drivebackup"
+          options={{ headerShown: false, animation: "slide_from_right" }}
+        />
+        <Stack.Screen
           name="manageusers"
           options={{ headerShown: false, animation: "slide_from_right" }}
         />
