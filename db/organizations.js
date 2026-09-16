@@ -154,6 +154,38 @@ export async function getOrgReportTypes(orgSk) {
   }
 }
 
+// Google Drive backup is FORWARD-ONLY — nothing completed before the owner
+// connects is archived — so a new owner gets one prompt telling them to set it
+// up now. Org-level + one-way, exactly like the walkthrough intro above: shown
+// at most once per org, never again once dismissed or already connected. Reads
+// fail CLOSED (report "seen") so a transient hiccup can never nag them.
+export async function getDrivePromptSeen(orgSk) {
+  if (!orgSk) return true;
+  try {
+    const { data, error } = await supabase
+      .from("organizations")
+      .select("has_seen_drive_prompt")
+      .eq("org_sk", orgSk)
+      .maybeSingle();
+    if (error) throw error;
+    return data?.has_seen_drive_prompt ?? false;
+  } catch (e) {
+    logError(e, `db/organizations.getDrivePromptSeen orgSk=${orgSk}`);
+    return true;
+  }
+}
+
+// Owner-only (RLS auth_uid_owns_org). One-way flip to true.
+export async function markDrivePromptSeen(orgSk) {
+  if (!orgSk) return false;
+  const { error } = await supabase
+    .from("organizations")
+    .update({ has_seen_drive_prompt: true })
+    .eq("org_sk", orgSk);
+  if (error) throw error;
+  return true;
+}
+
 // Owner-only (RLS auth_uid_owns_org). Updates one or more Report Types columns.
 // Throws on failure (incl. RLS reject) so the caller can revert its optimistic UI.
 export async function setOrgReportTypes(orgSk, patch) {

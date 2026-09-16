@@ -15,6 +15,7 @@ import {
   View,
 } from "react-native";
 import Animated, { FadeInDown } from "react-native-reanimated";
+import DriveBackupPrompt from "../../components/DriveBackupPrompt";
 import { Guard } from "../../components/Guard";
 import InspectionCard from "../../components/InspectionCard";
 import MyDayDashboard from "../../components/MyDayDashboard";
@@ -27,6 +28,7 @@ import {
 } from "../../db/inspections";
 import { logError } from "../../db/logs";
 import { useDebouncedPress } from "../../hooks/useDebouncedPress";
+import { useDriveBackupPrompt } from "../../hooks/useDriveBackupPrompt";
 import { useMyDayRoute } from "../../hooks/useMyDayRoute";
 import { useOwnerSetup } from "../../hooks/useOwnerSetup";
 import { useSettingsBadgeTotal } from "../../hooks/useSettingsBadges";
@@ -89,6 +91,11 @@ export default function MyDayScreen() {
   // First-run guidance for a brand-new owner: until they've set up (or dismissed
   // it), the dashboard slot shows a setup checklist instead of an empty route.
   const { showSetup, hasForm, markDone } = useOwnerSetup();
+
+  // One-time "connect Google Drive" nudge for an owner. Deferred while the setup
+  // checklist is up, so a brand-new owner gets one ask at a time.
+  const { showPrompt: showDrivePrompt, dismiss: dismissDrivePrompt } =
+    useDriveBackupPrompt({ defer: showSetup });
 
   // My Day dashboard data. Fetches on mount; the hook handles location
   // permission, error banners, and inflight de-dupe.
@@ -341,6 +348,17 @@ export default function MyDayScreen() {
           <OwnerSetupCard hasForm={hasForm} onDismiss={markDone} />
         </Guard>
       </View>
+
+      {/* One-time Google Drive backup nudge (owner, once per org). Dismissing is
+          one-way — the entry point lives in Settings → Integrations after this. */}
+      <DriveBackupPrompt
+        visible={showDrivePrompt}
+        onSetUp={() => {
+          dismissDrivePrompt();
+          router.push("/drivebackup");
+        }}
+        onDismiss={dismissDrivePrompt}
+      />
 
       {/* Today's inspections — bottom 2/5 */}
       <View style={styles.listSection}>
