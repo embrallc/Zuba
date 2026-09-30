@@ -194,6 +194,65 @@ export function buildCompleteNoticeEmail(opts: {
   return { subject, html, text };
 }
 
+// Keep whatever verified address REPORT_FROM_EMAIL holds, but show a specific
+// display name — e.g. "Zanbi Inspections <reports@…>" for the welcome email.
+export function fromWithName(name: string): string {
+  const base = defaultFrom();
+  const addr = base.match(/<([^>]+)>/)?.[1] ?? base.trim();
+  return `${name} <${addr}>`;
+}
+
+// One-time welcome for a new owner, sent at signup.
+export const SUPPORT_EMAIL = "support@embrallc.com";
+
+// `unverified`: the user hasn't confirmed their email yet (the normal case at
+// signup). They can't log in to reach Settings, so they get one extra paragraph
+// pointing at the confirmation email and at support if it isn't working.
+export function buildWelcomeEmail(
+  opts: { unverified?: boolean } = {},
+): { subject: string; html: string; text: string } {
+  const subject = "Welcome to Property Inspection Reporting by Zanbi";
+  const verifyText = opts.unverified
+    ? `Before you sign in, please confirm your email using the confirmation email we just sent ` +
+      `(check your spam or junk folder if you don't see it). If it didn't arrive or the link isn't ` +
+      `working, email us at ${SUPPORT_EMAIL} and we'll get you in.\n\n`
+    : "";
+  const verifyHtml = opts.unverified
+    ? `<p style="background:#F3F4FF;border-radius:10px;padding:12px 14px">Before you sign in, please ` +
+      `confirm your email using the confirmation email we just sent (check your spam or junk folder ` +
+      `if you don't see it). If it didn't arrive or the link isn't working, email us at ` +
+      `<a href="mailto:${SUPPORT_EMAIL}" style="color:#5C5CE8">${SUPPORT_EMAIL}</a> and we'll get you in.</p>`
+    : "";
+  const text =
+    `Welcome!\n\n` +
+    `We are excited you are giving Property Inspection Reporting by Zanbi a try for 30 days.\n\n` +
+    verifyText +
+    `If you need any assistance with setup or settings configuration, or have any new ideas you ` +
+    `think would help us get better, please put your request for help or comment in Settings ` +
+    `(top right hamburger menu) → Ideas, Feedback, & Issues (bottom of the settings options).\n\n` +
+    `Someone will be happy to get back with you if you need any assistance getting to know the ` +
+    `app. The settings options are designed to tell you what they do right up front, but don't ` +
+    `hesitate to reach out for more help. You can also email us at ${SUPPORT_EMAIL} with any ` +
+    `questions.\n\n` +
+    `Thank you for giving us a try!`;
+  const html =
+    `<div style="font-family:-apple-system,system-ui,Segoe UI,sans-serif;color:#1c1c1e;line-height:1.5;max-width:560px">` +
+    `<p style="font-size:18px;font-weight:600;margin:0 0 12px">Welcome!</p>` +
+    `<p>We are excited you are giving <strong>Property Inspection Reporting by Zanbi</strong> a try for 30 days.</p>` +
+    verifyHtml +
+    `<p>If you need any assistance with setup or settings configuration, or have any new ideas you ` +
+    `think would help us get better, please put your request for help or comment in ` +
+    `<strong>Settings</strong> (top right hamburger menu) → <strong>Ideas, Feedback, &amp; Issues</strong> ` +
+    `(bottom of the settings options).</p>` +
+    `<p>Someone will be happy to get back with you if you need any assistance getting to know the ` +
+    `app. The settings options are designed to tell you what they do right up front, but don't ` +
+    `hesitate to reach out for more help. You can also email us at ` +
+    `<a href="mailto:${SUPPORT_EMAIL}" style="color:#5C5CE8">${SUPPORT_EMAIL}</a> with any questions.</p>` +
+    `<p>Thank you for giving us a try!</p>` +
+    `</div>`;
+  return { subject, html, text };
+}
+
 export async function sendEmail({
   to,
   subject,

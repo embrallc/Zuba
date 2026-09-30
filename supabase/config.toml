@@ -518,6 +518,12 @@ verify_jwt = true
 [functions.send-report-to-client]
 verify_jwt = true
 
+[functions.send-welcome-email]
+# Fired server-to-server by the welcome_email_on_signup trigger on auth.users
+# (pg_net) with a service-role bearer; the function also rejects any bearer that
+# isn't the service-role key, so an app user's JWT can't trigger a send.
+verify_jwt = true
+
 [functions.stripe-account-status]
 verify_jwt = true
 
