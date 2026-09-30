@@ -214,13 +214,13 @@ export function buildWelcomeEmail(
   const subject = "Welcome to Property Inspection Reporting by Zanbi";
   const verifyText = opts.unverified
     ? `Before you sign in, please confirm your email using the confirmation email we just sent ` +
-      `(check your spam or junk folder if you don't see it). If it didn't arrive or the link isn't ` +
-      `working, email us at ${SUPPORT_EMAIL} and we'll get you in.\n\n`
+      `(check your spam or junk folder if you don't see it). If it didn't arrive or you have trouble ` +
+      `confirming, email us at ${SUPPORT_EMAIL} and we'll get you in.\n\n`
     : "";
   const verifyHtml = opts.unverified
     ? `<p style="background:#F3F4FF;border-radius:10px;padding:12px 14px">Before you sign in, please ` +
       `confirm your email using the confirmation email we just sent (check your spam or junk folder ` +
-      `if you don't see it). If it didn't arrive or the link isn't working, email us at ` +
+      `if you don't see it). If it didn't arrive or you have trouble confirming, email us at ` +
       `<a href="mailto:${SUPPORT_EMAIL}" style="color:#5C5CE8">${SUPPORT_EMAIL}</a> and we'll get you in.</p>`
     : "";
   const text =
