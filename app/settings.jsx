@@ -674,6 +674,11 @@ export default function SettingsScreen() {
             onPress={() => router.push("/drivebackup")}
           />
         </Guard>
+        <NavRow
+          label="Integrate your favorite AI"
+          description="Let Muse, ChatGPT, Claude or another AI assistant answer questions about your inspections"
+          onPress={() => router.push("/aiconnection")}
+        />
 
         <Text style={styles.sectionLabel}>REPORTS & PAYMENTS</Text>
         <Guard guard={userProfile === "owner"}>
