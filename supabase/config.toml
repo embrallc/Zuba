@@ -422,6 +422,9 @@ enabled = true
 # hold no Supabase JWT (browser form editor, third-party webhooks, Stripe GET
 # redirect). Everything else requires a valid user JWT at the gateway.
 
+[functions.ai-connection]
+verify_jwt = true
+
 [functions.ai-rewrite]
 verify_jwt = true
 
@@ -462,6 +465,12 @@ verify_jwt = false
 
 [functions.generate-report]
 verify_jwt = true
+
+[functions.mcp]
+# MCP endpoint for AI agents/skills. They hold no Supabase JWT — they send the
+# user's Zanbi AI connection key (Bearer zanbi_ai_…), which the gateway would
+# reject as a JWT. The function checks the key itself before doing anything.
+verify_jwt = false
 
 [functions.my-day-route]
 verify_jwt = true
