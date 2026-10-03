@@ -12,13 +12,14 @@
 
 import { McpServer } from "npm:@modelcontextprotocol/sdk@1.31.0/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "npm:@modelcontextprotocol/sdk@1.31.0/server/webStandardStreamableHttp.js";
-import { createClient } from "npm:@supabase/supabase-js@2";
+import { createClient, SupabaseClient } from "npm:@supabase/supabase-js@2";
 import { z } from "npm:zod@4.6.5";
 import dayjs from "npm:dayjs@1.11.23";
 import customParseFormat from "npm:dayjs@1.11.23/plugin/customParseFormat.js";
 import utc from "npm:dayjs@1.11.23/plugin/utc.js";
 import timezone from "npm:dayjs@1.11.23/plugin/timezone.js";
 import { hashKey, KEY_PREFIX } from "../_shared/aiKey.ts";
+import { logCloudEvent } from "../_shared/logToCloud.ts";
 
 // Day.js plugins: strict format parsing, and timezone-aware dates (timezone
 // needs utc). Same for every request, so they're set up once here.
@@ -36,6 +37,50 @@ function unauthorized() {
   return Response.json(
     { error: "invalid_key", message: "Missing or invalid Zanbi AI connection key." },
     { status: 401 },
+  );
+}
+
+// Per-key limits, so an AI agent stuck in a loop (or a leaked key) can't hammer
+// the database. Tune them here. For scale: an AI app connecting makes about 3
+// calls (initialize, initialized, tools/list) before its first tool call.
+const MAX_CALLS_PER_MINUTE = 30;
+const MAX_CALLS_PER_DAY = 1000;
+
+type KeyHit = { user_id: string; minute_calls: number; day_calls: number };
+
+// Over a limit: answer 429 and say how long to wait. Only the FIRST call over
+// a limit is logged, so a runaway agent doesn't flood the logs as well.
+async function rateLimited(supabase: SupabaseClient, hit: KeyHit) {
+  const overDay = hit.day_calls > MAX_CALLS_PER_DAY;
+  const now = new Date();
+  // The counts reset at the next minute / next UTC midnight.
+  const retryAfterSeconds = overDay
+    ? Math.ceil(
+      (Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1) -
+        now.getTime()) / 1000,
+    )
+    : 60 - now.getUTCSeconds();
+
+  const firstCallOver = overDay
+    ? hit.day_calls === MAX_CALLS_PER_DAY + 1
+    : hit.minute_calls === MAX_CALLS_PER_MINUTE + 1;
+  if (firstCallOver) {
+    const limit = overDay ? "day" : "minute";
+    console.warn("[mcp] rate limited", JSON.stringify({ userId: hit.user_id, limit }));
+    await logCloudEvent(supabase, "ef:mcp", "ai.rate_limited", {
+      userId: hit.user_id,
+      data: { limit, minuteCalls: hit.minute_calls, dayCalls: hit.day_calls },
+    });
+  }
+
+  return Response.json(
+    {
+      error: "rate_limited",
+      message: overDay
+        ? "This AI connection has reached its daily limit. Try again tomorrow."
+        : "Too many requests from this AI connection. Wait a minute, then try again.",
+    },
+    { status: 429, headers: { "Retry-After": String(retryAfterSeconds) } },
   );
 }
 
@@ -62,29 +107,23 @@ Deno.serve(async (req) => {
     return unauthorized();
   }
 
-  const { data: conn, error: keyErr } = await supabase
-    .from("ai_connection_keys")
-    .select("user_id")
-    .eq("key_hash", await hashKey(key))
-    .maybeSingle();
+  // Find the key's user AND count this call, in one database step (see the
+  // ai_key_hit function in the migrations). It also stamps last_used_at.
+  const { data: hit, error: keyErr } = await supabase
+    .rpc("ai_key_hit", { p_key_hash: await hashKey(key) })
+    .maybeSingle<KeyHit>();
   if (keyErr) {
     console.error("[mcp] key lookup failed", keyErr.message);
     return Response.json({ error: "server_error" }, { status: 500 });
   }
-  if (!conn) {
+  if (!hit) {
     console.warn("[mcp] rejected: invalid key");
     return unauthorized();
   }
-  const userId: string = conn.user_id;
-
-  // Settings shows "last used". A failure here shouldn't block the request.
-  const { error: touchErr } = await supabase
-    .from("ai_connection_keys")
-    .update({ last_used_at: new Date().toISOString() })
-    .eq("user_id", userId);
-  if (touchErr) {
-    console.error("[mcp] last_used_at update failed", touchErr.message);
+  if (hit.minute_calls > MAX_CALLS_PER_MINUTE || hit.day_calls > MAX_CALLS_PER_DAY) {
+    return rateLimited(supabase, hit);
   }
+  const userId: string = hit.user_id;
 
   let msg;
   try {
