@@ -43,7 +43,9 @@ export default function AiConnectionScreen() {
   const [busy, setBusy] = useState(false);
   // Only set right after creating a key; never persisted.
   const [instructions, setInstructions] = useState(null);
-  const [copied, setCopied] = useState(false);
+  const [newKey, setNewKey] = useState(null);
+  // What's on the clipboard from us: "instructions" | "key" | null.
+  const [copiedWhat, setCopiedWhat] = useState(null);
 
   const reload = useCallback(async () => {
     // Connection state lives only in the cloud; offline we can't know it.
@@ -70,14 +72,18 @@ export default function AiConnectionScreen() {
     reload();
   }, [reload]);
 
-  function copy(text) {
+  function copy(text, what) {
     try {
       Clipboard.setString(text);
-      setCopied(true);
+      setCopiedWhat(what);
       return true;
     } catch (e) {
       logError(e, "AiConnection.copy");
-      setCopied(false);
+      setCopiedWhat(null);
+      Alert.alert(
+        "Couldn't copy",
+        "Select the instructions on this screen and copy them by hand.",
+      );
       return false;
     }
   }
@@ -88,13 +94,9 @@ export default function AiConnectionScreen() {
     try {
       const key = await createAiConnection();
       const text = buildConnectionInstructions(key);
+      setNewKey(key);
       setInstructions(text);
-      if (!copy(text)) {
-        Alert.alert(
-          "Couldn't copy",
-          "Select the instructions on this screen and copy them by hand.",
-        );
-      }
+      copy(text, "instructions");
       await reload();
     } catch (e) {
       logError(e, "AiConnection.handleCreate");
@@ -120,7 +122,8 @@ export default function AiConnectionScreen() {
             try {
               await disableAiConnection();
               setInstructions(null);
-              setCopied(false);
+              setNewKey(null);
+              setCopiedWhat(null);
               await reload();
             } catch (e) {
               logError(e, "AiConnection.handleDisable");
@@ -195,33 +198,43 @@ export default function AiConnectionScreen() {
                     color={theme?.colors?.success}
                   />
                   <Text style={styles.cardTitle}>
-                    {copied ? "Copied, now add it to your AI app" : "Add this to your AI app"}
+                    {copiedWhat === "key"
+                      ? "Key copied, now paste it into your AI app"
+                      : copiedWhat === "instructions"
+                        ? "Copied, now add it to your AI app"
+                        : "Add this to your AI app"}
                   </Text>
                 </View>
                 <Text style={styles.cardBody}>
                   Add this in your AI app's connector or MCP server settings, or give it
-                  to the skill that calls Zanbi. Treat the key like a password. It's shown
-                  only once; if you lose it, disable the connection and create a new one.
+                  to the skill that calls Zanbi. Some assistants (like Muse) ask for just
+                  the key to keep in secure storage. Use "Copy key only" for those. Treat
+                  the key like a password. It's shown only once; if you lose it, disable
+                  the connection and create a new one.
                 </Text>
                 <View style={styles.codeBox}>
                   <Text selectable style={styles.code}>
                     {instructions}
                   </Text>
                 </View>
-                <TouchableOpacity
-                  style={[styles.btn, styles.btnSecondary]}
-                  onPress={() => {
-                    if (!copy(instructions)) {
-                      Alert.alert(
-                        "Couldn't copy",
-                        "Select the instructions above and copy them by hand.",
-                      );
-                    }
-                  }}
-                  activeOpacity={0.85}
-                >
-                  <Text style={styles.btnSecondaryTxt}>Copy again</Text>
-                </TouchableOpacity>
+                <View style={styles.btnRow}>
+                  <TouchableOpacity
+                    style={[styles.btn, styles.btnSecondary, styles.btnHalf]}
+                    onPress={() => copy(instructions, "instructions")}
+                    activeOpacity={0.85}
+                  >
+                    <Text style={styles.btnSecondaryTxt}>Copy instructions</Text>
+                  </TouchableOpacity>
+                  {newKey ? (
+                    <TouchableOpacity
+                      style={[styles.btn, styles.btnSecondary, styles.btnHalf]}
+                      onPress={() => copy(newKey, "key")}
+                      activeOpacity={0.85}
+                    >
+                      <Text style={styles.btnSecondaryTxt}>Copy key only</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
               </View>
             ) : null}
 
@@ -413,6 +426,8 @@ const styles = StyleSheet.create({
     borderColor: theme?.colors?.primary,
   },
   btnSecondaryTxt: { ...theme?.typography?.bodyBold, color: theme?.colors?.primary },
+  btnRow: { flexDirection: "row", gap: theme?.spacing?.s },
+  btnHalf: { flex: 1 },
   btnDisabled: { opacity: theme?.layout?.opacity?.disabled },
   dangerLink: { alignItems: "center", paddingVertical: theme?.spacing?.m },
   dangerTxt: {
