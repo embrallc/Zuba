@@ -8,24 +8,14 @@
 // Callers authenticate with the user's AI connection key, created in the app
 // (Settings → Integrate your favorite AI) and sent as
 // `Authorization: Bearer zanbi_ai_…`. The key decides WHO is calling — nothing
-// in the request body does — and it only opens the tools registered below.
+// in the request body does — and it only opens the tools registered in
+// zanbiMcp.ts.
 
-import { McpServer } from "npm:@modelcontextprotocol/sdk@1.31.0/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "npm:@modelcontextprotocol/sdk@1.31.0/server/webStandardStreamableHttp.js";
 import { createClient } from "npm:@supabase/supabase-js@2";
-import { z } from "npm:zod@4.6.5";
-import dayjs from "npm:dayjs@1.11.23";
-import customParseFormat from "npm:dayjs@1.11.23/plugin/customParseFormat.js";
-import utc from "npm:dayjs@1.11.23/plugin/utc.js";
-import timezone from "npm:dayjs@1.11.23/plugin/timezone.js";
 import { hashKey, KEY_PREFIX } from "../_shared/aiKey.ts";
 import { RateLimiter } from "../_shared/rateLimiter.ts";
-
-// Day.js plugins: strict format parsing, and timezone-aware dates (timezone
-// needs utc). Same for every request, so they're set up once here.
-dayjs.extend(customParseFormat);
-dayjs.extend(utc);
-dayjs.extend(timezone);
+import { ZanbiMcp } from "./zanbiMcp.ts";
 
 function replyError(id: unknown, code: number, message: string) {
   return Response.json({ jsonrpc: "2.0", id, error: { code, message } });
@@ -94,101 +84,15 @@ Deno.serve(async (req) => {
     return replyError(null, -32700, "Parse error");
   }
 
-  // A new server on every request — this runs inside the handler, so nothing
-  // carries over between calls.
-  const server = new McpServer({
-    name: "zanbi",
-    version: "1.0.0",
-  });
-
-  server.registerTool(
-    "getTodaysInspections",
-    {
-      description:
-        "List the inspections the user has scheduled on a given date.",
-      inputSchema: {
-        // The AI turns "today" / "tomorrow" into a real date; the description
-        // tells it which format to send. zod only checks it's a string — the
-        // format is checked with Day.js inside the tool.
-        date: z
-          .string()
-          .describe(
-            "The day to look up, as YYYY-MM-DD in the user's local time.",
-          ),
-      },
-    },
-    // The SDK's zod typing doesn't come through under Deno, so the type is
-    // spelled out here for the editor. zod still validates the real input.
-    async ({ date }: { date: string }) => {
-      // Strict parse (the `true`): the string must be exactly YYYY-MM-DD and a
-      // real day, so "2026-02-30" and "tomorrow" both fail.
-      if (!dayjs(date, "YYYY-MM-DD", true).isValid()) {
-        return {
-          isError: true,
-          content: [
-            { type: "text", text: "Wrong date format, must be YYYY-MM-DD." },
-          ],
-        };
-      }
-
-      const { data: user, error: userErr } = await supabase
-        .from("users")
-        .select("org_sk")
-        .eq("id", userId)
-        .maybeSingle();
-      if (userErr) {
-        console.error("[mcp] user lookup failed", userErr.message);
-        return {
-          isError: true,
-          content: [{ type: "text", text: "Couldn't look up that user." }],
-        };
-      }
-      if (!user) {
-        return {
-          isError: true,
-          content: [{ type: "text", text: "Unknown user." }],
-        };
-      }
-
-      const { data: org } = await supabase
-        .from("organizations")
-        .select("timezone")
-        .eq("org_sk", user.org_sk)
-        .maybeSingle();
-      const timeZone = org?.timezone ?? "America/Chicago";
-
-      // scheduled_at is a timestamp, so it can't equal a date directly — match
-      // everything from local midnight to the next local midnight. "Local"
-      // means the org's timezone, not UTC (8pm in Chicago is already tomorrow
-      // in UTC). Day.js handles the 23h/25h daylight-saving days.
-      const dayStart = dayjs.tz(date, timeZone);
-      const dayEnd = dayStart.add(1, "day");
-      const { data, error } = await supabase
-        .from("inspections")
-        .select("full_name, address_line1, city, zip_code, scheduled_at")
-        .eq("user_id", userId)
-        .not("_deleted", "is", true)
-        .gte("scheduled_at", dayStart.toISOString())
-        .lt("scheduled_at", dayEnd.toISOString())
-        .order("scheduled_at");
-      if (error) {
-        console.error("[mcp] getTodaysInspections failed", error.message);
-        return {
-          isError: true,
-          content: [
-            { type: "text", text: "Couldn't load inspections for that date." },
-          ],
-        };
-      }
-
-      // MCP tool results are a list of content blocks, so the array goes back
-      // as JSON text.
-      return { content: [{ type: "text", text: JSON.stringify(data) }] };
-    },
-  );
+  // A new server with every tool registered, built for this request's user.
+  // If it couldn't be built, send its error straight back.
+  const server = await ZanbiMcp.buildServer(supabase, userId);
+  if ("error" in server) {
+    return Response.json(server, { status: server.code });
+  }
 
   // Hand the message to the SDK. It answers initialize, tools/list and
-  // tools/call from the tools registered above.
+  // tools/call from the tools registered on the server.
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: undefined, // stateless: nothing is kept between calls
     enableJsonResponse: true, // plain JSON replies instead of an event stream

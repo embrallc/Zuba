@@ -120,7 +120,7 @@ Authorization header. No setup call is needed. First list the tools:
   curl -X POST ${url} -H "Authorization: Bearer ${key}" -H "Content-Type: application/json" \\
     -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 Then call one by name with its arguments:
-  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"getTodaysInspections","arguments":{"date":"${todayYmd()}"}}}'
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"getInspectionsByDate","arguments":{"startDate":"${todayYmd()}","endDate":"${todayYmd()}"}}}'
 
 Once connected, call tools/list to see what Zanbi can do, then use those tools to answer my questions about my inspections.
 
